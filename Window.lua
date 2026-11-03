@@ -72,7 +72,8 @@ local function OrderItems()
             if o.hunters then
                 for _ in pairs(o.hunters) do hunting = hunting + 1 end
             end
-            local bits = { GK.Describe(o.l, o.c, o.r), "by " .. GK.Show(o.by) }
+            local bits = { GK.Describe(o.l, o.c, o.r),
+                o.auto and ("by %s's death"):format(GK.Show(o.by)) or ("by " .. GK.Show(o.by)) }
             if backers > 0 then bits[#bits + 1] = Plural(backers, "backer") end
             if hunting > 0 then bits[#bits + 1] = hunting .. " hunting" end
             if o.seen then bits[#bits + 1] = ("seen in %s %s"):format(o.seen.z or "?", GK.Ago(o.seen.t)) end
@@ -199,6 +200,9 @@ local function NewsItems()
         elseif e.kind == "F" then
             line = ("%s fulfilled the order on %s"):format(who, target)
             right = (e.p or 0) > 0 and GK.MoneyText(e.p) or nil
+        elseif e.kind == "C" and e.au then
+            line = ("%s's death put a price on %s"):format(who, target)
+            right = "for honour"
         elseif e.kind == "C" then
             line = ("%s put a price on %s"):format(who, target)
             right = (e.p or 0) > 0 and GK.MoneyText(e.p) or "for honour"

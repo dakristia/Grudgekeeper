@@ -113,12 +113,20 @@ function GK.PosterCard(t)
         if backers > 0 then extra[#extra + 1] = Plural(backers, "backer") end
         if hunting > 0 then extra[#extra + 1] = hunting .. " hunting them" end
         local tail = #extra > 0 and (" - " .. table.concat(extra, ", ")) or ""
+        -- An order their own killing posted (GK.AutoOrder) says why, in the Grudgekeeper's words, and
+        -- was posted by a death rather than by a guildie's hand.
+        local by = Who(o.by)
+        if o.auto then
+            by = (by == "you" and "your" or (by .. "'s")) .. " death"
+            local why = o.note and (o.note:gsub("^%u", string.lower)) or nil
+            lines[#lines + 1] = why and ("The guild wants them dead: %s"):format(why) or "The guild wants them dead."
+        end
         if pot > 0 then
-            lines[#lines + 1] = ("Bounty %s, posted by %s%s."):format(GK.MoneyText(pot), Who(o.by), tail)
+            lines[#lines + 1] = ("Bounty %s, posted by %s%s."):format(GK.MoneyText(pot), by, tail)
             d.big = pot >= 10000 and (math.floor(pot / 10000) .. "g") or GK.MoneyText(pot)
             d.caption = "bounty"
         else
-            lines[#lines + 1] = ("A kill order for the guild's honour, posted by %s%s."):format(Who(o.by), tail)
+            lines[#lines + 1] = ("A kill order for the guild's honour, posted by %s%s."):format(by, tail)
         end
         if o.by ~= me then
             local mine = GK.char.accepted[o.key]

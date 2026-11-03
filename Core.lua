@@ -25,6 +25,7 @@ local defaults = {
     shotFulfil = true,       -- a screenshot when you fulfil an order (the user asked for this one)
     shotEveryKill = false,   -- a screenshot at every kill
     share = true,            -- tell the guild your kills, deaths and score, and where targets are seen
+    autoOrders = true,       -- your death to someone on a rampage or camping you posts a kill order (Guild.lua)
     sound = true,
     tooltip = true,          -- one line on an enemy player's tooltip: your history with them
     guildButton = true,      -- a small Grudgekeeper badge beside the guild window

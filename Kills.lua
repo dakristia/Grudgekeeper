@@ -145,7 +145,9 @@ function GK.RecordDeath(v)
     GK.AddLog({ k = "D", t = time(), n = v.key, c = v.c, r = v.r, l = v.l, z = zone, s = v.spell })
     GK.SendDeath(v, zone, f.d)
     GK.SendBoard()
-    if GK.db.myLetters then GK.SlainLetter(v, f.d, zone) end
+    -- the third of us in two hours, or the third time for you in half an hour: an order goes out
+    local auto = GK.AutoOrder(v)
+    if GK.db.myLetters then GK.SlainLetter(v, f.d, zone, auto ~= nil) end
     GK.Changed()
 end
 

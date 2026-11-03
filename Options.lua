@@ -55,6 +55,10 @@ local HELP = {
       .. "into their pot instead, so there is one order and one pot. Whoever fulfils it is owed every share, "
       .. "and at a mailbox a Pay bounty button fills in the letter for each one you owe - you press Send. "
       .. "Payment is on your honour: the game doesn't let an addon move gold." },
+    { "Orders that post themselves",
+      "An enemy who kills three of the guild in two hours, or the same guildie three times in half an hour, "
+      .. "gets a kill order without anyone writing one: the death that makes it three posts it, for the "
+      .. "guild's honour, for three days. Anyone can take it or put gold in its pot like any other order." },
     { "Profiles",
       "Right-click a player, or click a name in the Grudgekeeper window. An enemy gets a wanted poster: how "
       .. "often they killed the guild and whom, how often the guild got them, your own score with them, where "
@@ -63,7 +67,7 @@ local HELP = {
       .. "guildies send their numbers as they play." },
 }
 
-local PAGE_HEIGHT = 1160
+local PAGE_HEIGHT = 1260
 
 -- Builds the page's contents on `panel` and returns its Refresh. Called the first time the page is
 -- shown, not at login: some twenty boxes with their closures, and the help text, are not worth
@@ -175,7 +179,12 @@ local function Build(panel)
         .. "the hunters where you saw a wanted player - the zone, and your own spot on the map at that moment. "
         .. "Orders you post, take or fulfil are always shared - "
         .. "that is what they are for.")
-    local sound = Check(share, "Sounds", "sound", "On by default: a page turning when a letter comes (not for "
+    local auto = Check(share, "Post a kill order when an enemy keeps killing us", "autoOrders",
+        "On by default. When one enemy has killed three of the guild in two hours, or you three times in half "
+        .. "an hour, your death posts a kill order on them in your name: no gold, for three days. Not when "
+        .. "someone already has an order on them, at most one a day per enemy, and only while you share with "
+        .. "the guild. You can withdraw it on the hitlist.")
+    local sound = Check(auto, "Sounds", "sound", "On by default: a page turning when a letter comes (not for "
         .. "your own kills), the stamp, the soft chime of a target nearby.")
 
     local h5 = Section(sound, "Around the game")

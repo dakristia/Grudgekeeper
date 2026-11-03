@@ -10,8 +10,9 @@
 --   K;1;name;class;race;level;zone;points;avenged;times        I killed someone (avenging a guildie;
 --                                                              times: how often I have, in all)
 --   D;1;name;class;race;level;zone;times                       someone killed me (times in all)
---   C;1;id;name;class;race;level;guid;reward;created;expires;state;doneBy;note
---                                                              an order of mine, as it stands
+--   C;1;id;name;class;race;level;guid;reward;created;expires;state;doneBy;note;auto
+--                                                              an order of mine, as it stands (auto:
+--                                                              r or c when my death posted it, below)
 --   A;1;poster;id;on                                           I took (1) or dropped (0) an order
 --   F;1;poster;id;zone                                         I fulfilled an order
 --   S;1;poster;id;zone;level;map;x;y                           I saw an order's target, standing here
@@ -42,6 +43,15 @@ local MAX_HUNTERS = 50
 local MAX_BACKERS = 20
 local MAX_REWARD = 1000 * 10000          -- 1000 gold, in copper
 local ORDER_DAYS = 7
+-- Orders that post themselves (the user, 2026-11-04: on by default). When an enemy has killed three
+-- of us in two hours - a rampage - or one of us three times in half an hour - camping a corpse - the
+-- death that makes it three posts a kill order from the victim's own client, in their name: no gold,
+-- for three days, and only when nobody has an order on them and they had no automatic one today.
+-- The victim's client, because every client hears the deaths and only one must act on them.
+local AUTO_DAYS = 3
+local RAMPAGE_FOR, RAMPAGE_VICTIMS = 2 * 3600, 3
+local CAMP_FOR, CAMP_DEATHS = 30 * 60, 3
+local RECENT_PAIRS = 10                  -- deaths kept per enemy for the rules above, at most
 local KEEP_CLOSED = 14 * GK.DAY          -- withdrawn, expired and paid orders, then gone
 local KEEP_OWED = 30 * GK.DAY            -- a fulfilled order still owed stays this long
 local BOARD_STALE = 60 * GK.DAY          -- a guildie not heard from in this long leaves the board
@@ -316,7 +326,7 @@ function GK.Contribute(o, copper)
 end
 
 local function SendOrder(o)
-    Send(Msg("C", PROTO, o.id, o.n, o.c, o.r, o.l, o.guid, o.reward, o.t, o.exp, o.state, o.doneBy, o.note))
+    Send(Msg("C", PROTO, o.id, o.n, o.c, o.r, o.l, o.guid, o.reward, o.t, o.exp, o.state, o.doneBy, o.note, o.auto))
 end
 
 -- Too many orders: drop the closed ones that closed longest ago.
@@ -333,8 +343,9 @@ local function Trim(store)
 end
 
 --- Write a kill order. t = { key, guid, c, r, l }, reward in copper. Posting again on the same target
---- changes the order you already have on them. Returns the order, or nil and why not.
-function GK.PostOrder(t, reward, note)
+--- changes the order you already have on them. auto: "r" or "c" for an order your death posted
+--- (GK.AutoOrder) - it runs three days, not seven. Returns the order, or nil and why not.
+function GK.PostOrder(t, reward, note, auto)
     local s, me, now = GK.Store(), LIB.Me(), time()
     if not me then return nil, "The game hasn't said who you are yet - try again in a moment." end
     reward = math.max(0, math.min(math.floor(tonumber(reward) or 0), MAX_REWARD))
@@ -360,14 +371,31 @@ function GK.PostOrder(t, reward, note)
     local id = math.max(now, s.nextId or 1)
     s.nextId = id + 1
     local o = { key = me .. "#" .. id, id = id, by = me, n = t.key, guid = t.guid, c = t.c, r = t.r, l = t.l,
-        reward = reward, note = note, t = now, exp = now + ORDER_DAYS * GK.DAY, state = "o", hunters = {} }
+        reward = reward, note = note, t = now, exp = now + (auto and AUTO_DAYS or ORDER_DAYS) * GK.DAY,
+        state = "o", hunters = {}, auto = auto }
     s.orders[o.key] = o
     Touched()
     Trim(s)
     SendOrder(o)
-    AddFeed({ t = now, who = me, kind = "C", n = t.key, c = t.c, l = t.l, p = reward })
+    AddFeed({ t = now, who = me, kind = "C", n = t.key, c = t.c, l = t.l, p = reward, au = auto and true or nil })
     GK.Changed()
     return o
+end
+
+--- My death to v: does it make an order that posts itself (see AUTO_DAYS)? Posts it and returns the
+--- order, or nil. Only with sharing on - a client that keeps your deaths to itself doesn't announce
+--- them this way either.
+function GK.AutoOrder(v)
+    if not (GK.db.autoOrders and GK.db.share) or not (v and v.key) then return nil end
+    local me, now = LIB.Me(), time()
+    if not me or GK.OrderOn(v.key, v.guid) then return nil end
+    -- one automatic order per enemy a day, whoever's death posted it
+    for _, o in pairs(GK.Store().orders) do
+        if o.auto and now - (o.t or 0) < GK.DAY and GK.SameName(o.n, v.key) then return nil end
+    end
+    local note, kind = GK.AutoReason(v.key, me, now)
+    if not note then return nil end
+    return GK.PostOrder({ key = v.key, guid = v.guid, c = v.c, r = v.r, l = v.l }, 0, note, kind)
 end
 
 function GK.Withdraw(o)
@@ -507,8 +535,64 @@ function GK.NoteWanted(victim, key, c, r, l, times)
         wanted[key] = w
     end
     w.c, w.r, w.l = c or w.c, r or w.r, l or w.l
-    w.last = time()
+    local now = time()
+    w.last = now
     if w.victims[victim] or Count(w.victims) < MAX_HUNTERS then w.victims[victim] = times end
+    -- Each death heard is one more: when, and whom. Flat pairs, victim then time, oldest first; only
+    -- the last two hours are ever asked about, so nothing older is kept.
+    local recent = w.recent or {}
+    recent[#recent + 1] = victim
+    recent[#recent + 1] = now
+    w.recent = recent
+    GK.PruneRecent(w, now)
+end
+
+--- Drop the deaths older than the longest rule, and the oldest beyond the cap. In place: no table made.
+function GK.PruneRecent(w, now)
+    local recent = w.recent
+    if not recent then return end
+    local n, j = #recent, 1
+    local skip = math.max(0, n / 2 - RECENT_PAIRS)      -- pairs over the cap, dropped from the front
+    for i = 1, n, 2 do
+        local t = recent[i + 1]
+        if (i + 1) / 2 > skip and type(t) == "number" and now - t <= RAMPAGE_FOR then
+            recent[j], recent[j + 1] = recent[i], recent[i + 1]
+            j = j + 2
+        end
+    end
+    for i = j, n do recent[i] = nil end
+    if #recent == 0 then w.recent = nil end
+end
+
+--- Has this enemy just earned an order that posts itself, by the deaths the guild has heard of, as
+--- seen from `victim`'s latest death? The sentence that says why, and "r" (rampage) or "c" (camping);
+--- nil when neither rule holds.
+function GK.AutoReason(key, victim, now)
+    local w = GK.Store().wanted[key]
+    local recent = w and w.recent
+    if not recent then return nil end
+    local theirs, seen, names = 0, {}, {}
+    for i = 1, #recent, 2 do
+        local who, t = recent[i], tonumber(recent[i + 1]) or 0
+        if now - t <= RAMPAGE_FOR and not seen[who] then
+            seen[who] = true
+            names[#names + 1] = GK.Show(who)
+        end
+        if who == victim and now - t <= CAMP_FOR then theirs = theirs + 1 end
+    end
+    if #names >= RAMPAGE_VICTIMS then
+        local list
+        if #names == 3 then
+            list = ("%s, %s and %s"):format(names[1], names[2], names[3])
+        else
+            list = ("%s, %s, %s and %d more"):format(names[1], names[2], names[3], #names - 3)
+        end
+        return ("Killed %s in two hours."):format(list), "r"
+    end
+    if theirs >= CAMP_DEATHS then
+        return ("Killed %s %d times in half an hour."):format(GK.Show(victim), theirs), "c"
+    end
+    return nil
 end
 
 --- Most wanted, the most kills on the guild first: { { key, total, w } }.
@@ -597,6 +681,7 @@ local function OnOrder(sender, f)
     o.t = math.min(Int(f[10], 0, 2 ^ 31) or now, now)
     o.exp = math.max(math.min(Int(f[11], 0, 2 ^ 31) or (now + ORDER_DAYS * GK.DAY), now + 14 * GK.DAY), o.t)
     o.note = GK.Clean(f[14], 80)
+    if f[15] == "r" or f[15] == "c" then o.auto = f[15] end      -- the poster's death posted it
     local was = o.state
     -- Never backwards: an "open" from a poster who hasn't heard of the kill yet doesn't reopen it.
     if STATES[state] >= STATES[was] then o.state = state end
@@ -606,7 +691,7 @@ local function OnOrder(sender, f)
     Touched()
     Trim(s)
     if fresh and o.state == "o" then
-        AddFeed({ t = now, who = sender, kind = "C", n = o.n, c = o.c, l = o.l, p = o.reward })
+        AddFeed({ t = now, who = sender, kind = "C", n = o.n, c = o.c, l = o.l, p = o.reward, au = o.auto and true or nil })
         if GK.db.letters then GK.OrderLetter(o) end
     elseif was ~= o.state and o.state == "p" and o.doneBy == LIB.Me() and (o.reward or 0) > 0 then
         GK.PaidLetter(o)
@@ -752,6 +837,8 @@ function GK.Sweep()
     for who, r in pairs(s.board) do
         if now - (r.t or 0) > BOARD_STALE then s.board[who] = nil end
     end
+    -- the deaths kept for the automatic orders: two hours at most, then nothing
+    for _, w in pairs(s.wanted) do GK.PruneRecent(w, now) end
     GK.PruneSeen()
     GK.Changed()
 end

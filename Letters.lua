@@ -109,7 +109,7 @@ end
 function GK.OrderLetter(o)
     local w = GK.Store().wanted[o.n]
     Add("order", { n = o.n, c = o.c, r = o.r, l = o.l, by = o.by, reward = o.reward, note = o.note, o = o.key,
-        times = w and w.victims[o.by] or nil })
+        times = w and w.victims[o.by] or nil, auto = o.auto })
 end
 
 function GK.CompleteLetter(o)
@@ -154,8 +154,10 @@ function GK.KillLetter(v, points, con, today, zone, extra)
     GK.Changed()
 end
 
-function GK.SlainLetter(v, times, zone)
-    Add("slain", { n = v.key, guid = v.guid, c = v.c, r = v.r, l = v.l, times = times, z = zone, spell = v.spell })
+--- autoOrder: this death posted a kill order on them (GK.AutoOrder), and the letter says so.
+function GK.SlainLetter(v, times, zone, autoOrder)
+    Add("slain", { n = v.key, guid = v.guid, c = v.c, r = v.r, l = v.l, times = times, z = zone, spell = v.spell,
+        autoOrder = autoOrder or nil })
 end
 
 --- /grudge test: one of each, so the look can be judged without a fight. Marked as samples: their
@@ -228,7 +230,8 @@ local function ScrollContent(L)
     local o = Order(L)
     local function Hitlist() GK.OpenWindow(1) end
     if L.kind == "order" then
-        if L.note then body[#body + 1] = '"' .. L.note .. '"' end
+        -- An order that posted itself carries the Grudgekeeper's reason, not the poster's words.
+        if L.note then body[#body + 1] = L.auto and L.note or ('"' .. L.note .. '"') end
         if L.times then
             body[#body + 1] = ("Has killed %s %s."):format(show(L.by), L.times == 1 and "once" or (L.times .. " times"))
         end
@@ -266,7 +269,9 @@ local function ScrollContent(L)
         else
             buttons[#buttons + 1] = { "Hitlist", Hitlist }
         end
-        return "KILL ORDER", show(L.n), info, body, "Posted by " .. show(L.by), "seal_red", nil, buttons
+        -- short: the foot shares its line with the seal on a 300-wide sheet
+        local foot = L.auto and ("Posted by %s's death"):format(show(L.by)) or ("Posted by " .. show(L.by))
+        return "KILL ORDER", show(L.n), info, body, foot, "seal_red", nil, buttons
     end
     -- complete
     local doneBy = L.doneBy and show(L.doneBy) or "Someone"
@@ -350,7 +355,12 @@ local function NoteContent(L)
             p[#p + 1] = L.times == 1 and "The first time. Remember the name."
                 or ("That's the %s time."):format(Ordinal(L.times))
         end
-        if GK.OrderOn(L.n, L.guid) then
+        if L.autoOrder then
+            -- posted in your name by this very death: say so, and where to withdraw it
+            p[#p + 1] = "That was one death too many: a kill order on them went out to the guild, in your name. "
+                .. "You can withdraw it on the hitlist."
+            action = { "Hitlist", function() GK.OpenWindow(1) end }
+        elseif GK.OrderOn(L.n, L.guid) then
             p[#p + 1] = "There's a price on their head already."
             action = { "Hitlist", function() GK.OpenWindow(1) end }
         else
