@@ -1,0 +1,19 @@
+package-as: Grudgekeeper
+
+enable-nolib-creation: no
+
+externals:
+  Libs/LibForever-1.0:
+    url: https://github.com/vBaustad/LibForever-1.0
+    tag: v1.1.0
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
+
+ignore:
+  - ".github"
+  - ".gitignore"
+  - ".pkgmeta"
+  - "README.md"
+  - "*.png"

@@ -1,0 +1,44 @@
+## Interface: 16001
+## Title: Grudgekeeper
+## Notes: Keep score of your world PvP: who you killed, who killed you and how often. A guild leaderboard, and kill orders with a bounty that arrive as sealed scrolls - take one and you're warned when the target is near.
+## Author: vebjorn
+## Version: 0.1.0
+## IconTexture: Interface\AddOns\Grudgekeeper\Media\icon
+## SavedVariables: GrudgekeeperDB
+## SavedVariablesPerCharacter: GrudgekeeperCharDB
+## AddonCompartmentFunc: Grudgekeeper_OnAddonCompartmentClick
+## AddonCompartmentFuncOnEnter: Grudgekeeper_OnAddonCompartmentEnter
+## AddonCompartmentFuncOnLeave: Grudgekeeper_OnAddonCompartmentLeave
+## X-Category: PvP
+## X-Website: https://github.com/vBaustad/Grudgekeeper
+## X-License: MIT
+
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
+Libs\LibDBIcon-1.0\lib.xml
+Libs\AceComm-3.0\ChatThrottleLib.lua
+Libs\AceComm-3.0\AceComm-3.0.lua
+Libs\LibForever-1.0\LibForever-1.0.lua
+Libs\LibForever-1.0\Maps.lua
+Libs\LibForever-1.0\Launcher.lua
+Libs\LibForever-1.0\Windows.lua
+Libs\LibForever-1.0\Minimap.lua
+Libs\LibForever-1.0\Welcome.lua
+Libs\LibForever-1.0\Settings.lua
+Libs\LibForever-1.0\SelfTest.lua
+
+Core.lua
+Sightings.lua
+Kills.lua
+Guild.lua
+Letters.lua
+Notice.lua
+Window.lua
+Post.lua
+Mail.lua
+Social.lua
+Profile.lua
+MapPins.lua
+MapPins.xml
+Options.lua

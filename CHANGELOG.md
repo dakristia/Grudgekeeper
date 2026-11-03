@@ -1,0 +1,20 @@
+# Changelog
+
+## Unreleased
+
+The first version.
+
+- **Your world PvP, counted.** Every enemy player you (or your pet) kill in the open world, with their level, class and race, and everyone who kills you - how often, and with what. The Grudges page lists everyone you have a history with, and your nemesis: the one who has killed you most.
+- **Points.** A kill is worth what their level is to you: green 1, yellow 2, orange 3, red 4, grey nothing. Revenge - killing someone who killed you since you last got them - is worth 1 more, and so is avenging a guildie they killed in the last 15 minutes. The same player is worth points twice a day; after that, nothing, bonuses included.
+- **Titles**, from Unblooded through Cutthroat, Bloodhound, Headhunter, Slayer, Executioner and Grudgebearer to Dread Reaper at 800 points. Your kill streak - kills without dying - and your best one are kept too.
+- **The guild's leaderboard**, this week or all time; the week starts over at the weekly reset. **Most wanted**: the enemy players who have killed your guild most, and whom.
+- **Kill orders.** Put a price on an enemy player's head - a bounty in gold, or for honour. Your guild gets the order as a letter, and the target carries a red skull seal over their nameplate. Take the order, and you are also warned when they are near. Kill them and the order is yours: worth 3 points more, a screenshot is taken, and everyone who put gold on it is told what they owe you.
+- **A pot per target.** Anyone can chip in: Add to the pot on an order, or post on someone who already has an order on them, and your share goes into that order instead of making a second one. The order shows who put in what. Each backer owes their own share to whoever fulfils it.
+- **Paying a bounty.** No gold is taken when you post. At a mailbox, Pay bounty fills in the letter for each share you owe; you press Send, and that share is marked paid. The hunter gets a letter for every payment.
+- **Letters, never popups.** News arrives as a small sealed letter, the way the game shows new mail - but wherever you put it, not on the minimap: drag it anywhere, or place it with /grudge notice. It fades in and blinks when something lands, then rests with a faint glow until you read it. Your own kills make no sound, and letters landing together - the orders you missed, arriving as you log in - sound once. A kill order or a fulfilled one unrolls as a scroll; the rest - your points after a kill, who killed you, a bounty paid - is a short letter from the Grudgekeeper. The only thing that speaks up is a target you took coming near: the scroll glows red, a soft chime, one line.
+- **Profiles.** Right-click a player - the target frame, party and raid frames, a name in chat, the guild roster - and pick Grudgekeeper profile, or click a name in the window. An enemy gets a wanted poster: how often they killed the guild and whom, how often the guild got them, your own score with them, where they were last seen and the bounty on them, with a button to take the order or post one. A guildie gets their record: title and points, this week and all time, kill streak, kill orders fulfilled and the bounties they carried, nemesis. Anyone else's menu is left alone, and the line can be switched off.
+- **Last seen, on the map.** When a guildie sees the target of an open order, the same red seal goes on the world map where they stood, for 15 minutes; click it for the wanted poster. Your own spot is sent with what you see only while you share with the guild.
+- **News**, a page of what the guild has been up to: kills, deaths, orders posted, backed and fulfilled. On an ORDER COMPLETE letter, Tell the guild puts one line in guild chat, for guildies without Grudgekeeper - only when you click it.
+- **Quiet extras**: one line on the tooltip of an enemy you have a history with, and a small badge beside the guild window that opens the leaderboard. Both can be switched off.
+- **Horde and Alliance alike**, and any guild: each guild has its own board and orders.
+- **/grudge test** puts four sample letters in your pile, to see what they look like.

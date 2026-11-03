@@ -1,0 +1,13 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/">
+    <!-- Where the target of an open kill order was last seen: the red seal from their nameplate, on
+         the world map and the zone map. The map's own pin pool builds these from the template; the
+         mixin lives in MapPins.lua. The same size at every zoom, nothing that pulses. -->
+    <Frame name="GrudgekeeperMapPinTemplate" mixin="GrudgekeeperMapPinMixin" enableMouse="true" virtual="true">
+        <Size x="20" y="20"/>
+        <Layers>
+            <Layer level="OVERLAY">
+                <Texture parentKey="Mark" file="Interface\AddOns\Grudgekeeper\Media\mark" setAllPoints="true"/>
+            </Layer>
+        </Layers>
+    </Frame>
+</Ui>
