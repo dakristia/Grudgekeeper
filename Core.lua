@@ -473,7 +473,7 @@ SlashCmdList.GRUDGEKEEPER = function(msg)
     elseif cmd == "options" or cmd == "settings" then
         GK.OpenOptions()
     elseif cmd == "debug" then
-        GK.Debug()
+        if GK.OpenDebug then GK.OpenDebug() else GK.Debug() end
     else
         Help()
     end

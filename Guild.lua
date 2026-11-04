@@ -92,7 +92,8 @@ local function Msg(...)
 end
 
 local function Send(text)
-    if not IsInGuild() then return false end
+    -- The test panel (Debug.lua) is open: what its buttons do stays on this client.
+    if GK.testMode or not IsInGuild() then return false end
     return LIB.Send(PREFIX, text, "GUILD")
 end
 
@@ -355,6 +356,7 @@ function GK.PostOrder(t, reward, note, auto)
         if o.by == me and o.state == "o" then
             if (t.guid and o.guid == t.guid) or o.n == t.key then
                 o.reward, o.note, o.exp = reward, note, now + ORDER_DAYS * GK.DAY
+                o.auto = nil            -- written by your hand now: no longer one a death posted
                 o.guid, o.c, o.r, o.l = t.guid or o.guid, t.c or o.c, t.r or o.r, t.l or o.l
                 Touched()
                 SendOrder(o)
@@ -443,6 +445,10 @@ end
 --- only ever from the player's own click on a letter (ORDER COMPLETE's "Tell the guild"), once per
 --- letter, and not while the game holds chat back. Returns true when it went.
 function GK.TellGuild(text)
+    if GK.testMode then
+        print(GK.TAG .. " (test): this would go to guild chat: " .. tostring(text))
+        return false
+    end
     if not IsInGuild() or LIB.InChatLockdown() or type(text) ~= "string" then return false end
     local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
     if not send then return false end
@@ -681,7 +687,9 @@ local function OnOrder(sender, f)
     o.t = math.min(Int(f[10], 0, 2 ^ 31) or now, now)
     o.exp = math.max(math.min(Int(f[11], 0, 2 ^ 31) or (now + ORDER_DAYS * GK.DAY), now + 14 * GK.DAY), o.t)
     o.note = GK.Clean(f[14], 80)
-    if f[15] == "r" or f[15] == "c" then o.auto = f[15] end      -- the poster's death posted it
+    -- r or c: the poster's death posted it. Read every time, not only the first: an order its poster
+    -- has since edited by hand arrives without it, and is an ordinary order from then on.
+    o.auto = (f[15] == "r" or f[15] == "c") and f[15] or nil
     local was = o.state
     -- Never backwards: an "open" from a poster who hasn't heard of the kill yet doesn't reopen it.
     if STATES[state] >= STATES[was] then o.state = state end
@@ -811,6 +819,10 @@ local function OnMessage(_, text, dist, sender)
     fn(sender, f)
     GK.Changed()
 end
+-- The test panel's pretend guildies (Debug.lua): their messages go through the same reader as real ones.
+GK.ReceiveForTest = OnMessage
+--- The test panel put the orders back as they were: the index must not keep the ones it removed.
+function GK.InvalidateOrders() Touched() end
 
 -- ---------------------------------------------------------------------------
 -- Housekeeping: orders run out, closed ones go, silent guildies leave the board
