@@ -255,7 +255,7 @@ end
 -- The card
 -- ---------------------------------------------------------------------------
 local card            -- the frame, made on first use
-local showing         -- { poster = t } or { record = key, unit = unit }
+local showing         -- { poster = t } or { record = key, unit = unit } or { make = fn }
 
 local function Ink(fs, colour, font, size)
     fs:SetFont(font, size, "")
@@ -369,7 +369,9 @@ end
 Refill = function()
     if not (card and card:IsShown() and showing) then return end
     local d
-    if showing.poster then d = GK.PosterCard(showing.poster) else d = GK.RecordCard(showing.record, showing.unit) end
+    if showing.make then d = showing.make()
+    elseif showing.poster then d = GK.PosterCard(showing.poster)
+    else d = GK.RecordCard(showing.record, showing.unit) end
     if d then Fill(d) else card:Hide() end
 end
 
@@ -393,6 +395,15 @@ function GK.ShowRecord(key, unit)
     local d = GK.RecordCard(key, unit)
     if not d then return end
     showing = { record = d.key, unit = unit }
+    Open(d)
+end
+
+--- Any other card, for a file that builds its own: make() returns a card table (see above) and is called
+--- again whenever the card refills. Nothing opens if make() has nothing to show.
+function GK.ShowCard(make)
+    local d = make()
+    if not d then return end
+    showing = { make = make }
     Open(d)
 end
 
