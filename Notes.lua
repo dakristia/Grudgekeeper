@@ -799,15 +799,20 @@ local function Drip(list, i)
     if list[i] then C_Timer.After(1, function() Drip(list, i) end) end
 end
 
+--- Send all my own records now, paced like the answer to a Q. For after the import, which makes
+--- records the rest of the guild has not heard. false when nothing can be sent.
+function GK.NotesBroadcast()
+    if GK.testMode or not IsInGuild() then return false end
+    Drip(OwnRecords(), 1)
+    return true
+end
+
 local replyAfter = 0
 local function OnAsk()
     -- Everyone logging in at once asks at once: answer once, a few seconds later.
     if GetTime() < replyAfter then return false end
     replyAfter = GetTime() + 30
-    C_Timer.After(2 + math.random() * 4, function()
-        if GK.testMode or not IsInGuild() then return end
-        Drip(OwnRecords(), 1)
-    end)
+    C_Timer.After(2 + math.random() * 4, GK.NotesBroadcast)
     return false
 end
 
