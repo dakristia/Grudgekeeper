@@ -45,4 +45,10 @@ Inspect.lua
 MapPins.lua
 MapPins.xml
 Options.lua
+Classic\Classic.lua
+Classic\Cards.lua
+Classic\Window.lua
+Classic\Letters.lua
+Classic\Notice.lua
+Classic\Sheets.lua
 Debug.lua

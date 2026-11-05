@@ -983,5 +983,293 @@ test("kill order sheet: sealing posts a new order, or adds to the pot it was ope
     assert(W.printed[1] and W.printed[1]:find("Too many orders.", 1, true), "said why")
 end)
 
+-- ---------------------------------------------------------------------------
+-- The Classic look, built against stand-in frames (tests/frames_mock.lua): the frames are built, filled
+-- from the same data the ledger uses, and clicked. What they look like is for the game to say.
+-- ---------------------------------------------------------------------------
+local F = require("frames_mock")
+
+local CARD = { title = "WANTED", name = "Gank Master", info = "Level 60 Orc", c = "MAGE", lines = { "Bounty 5g." },
+    big = "5g", caption = "bounty", buttons = { { "Take the order", function() end } } }
+
+local function bootClassic(look)
+    local GK = bootSheets({ me = ME })
+    F.install()
+    GK.db.look = look
+    for _, file in ipairs({ "Window.lua", "Profile.lua", "Notice.lua", "Inspect.lua", "Options.lua",
+            "Classic/Classic.lua", "Classic/Cards.lua", "Classic/Window.lua", "Classic/Letters.lua",
+            "Classic/Notice.lua", "Classic/Sheets.lua" }) do
+        assert(loadfile(W.dir .. file))("Grudgekeeper", GK)
+    end
+    GK.called = {}
+    for _, name in ipairs({ "OpenWindow", "ToggleWindow", "ShowPoster", "ShowRecord", "ShowCard", "OpenLetters",
+            "ShowLetter", "CloseLetters", "NoticeUpdate", "PlaceNotice", "Warn", "OpenPost", "OpenNoteSheet" }) do
+        GK[name] = function(...) GK.called[#GK.called + 1] = name end   -- the ledger's, stood in for
+    end
+    GK.built, GK.filled = 0, 0
+    GK.BuildCardPage = function() GK.built = GK.built + 1 end     -- the ledger's page for the Inspect tab
+    GK.FillCardPage = function() GK.filled = GK.filled + 1 end
+    GK.PosterCard = function() return CARD end
+    GK.RecordCard = function() return CARD end
+    GK.Sound = function() end
+    local sorted = 0
+    GK.LedgerPages = {}
+    for i = 1, 6 do
+        local page = { name = "Page" .. i, sortable = i == 1 }
+        page.items = function()
+            local items = { { header = true, name = "Group" } }
+            for n = 1, 3 do
+                items[#items + 1] = { key = "k" .. n, name = (n == 2 and "Beta" or "Alpha") .. n, sub = "sub" .. n,
+                    face = { c = "MAGE" }, right = "5g", ts = n, select = { kind = "card", make = function() return CARD end } }
+            end
+            return items, "Nothing here."
+        end
+        if i == 2 then
+            page.links = function()
+                return { { text = "This week", on = true, click = function() end },
+                         { text = "All time", on = false, click = function() sorted = sorted + 1 end } }
+            end
+        end
+        GK.LedgerPages[i] = page
+    end
+    GK.Classic.Apply()
+    return GK
+end
+
+local function visible(name) return _G[name] and _G[name].shown end
+
+test("classic: every wrapped function calls the ledger's own while the look is the ledger", function()
+    local GK = bootClassic("ledger")
+    GK.OpenWindow(1)
+    GK.ShowCard(function() return CARD end)
+    GK.OpenPost({ key = GANK })
+    GK.NoticeUpdate(false)
+    eq(#GK.called, 4)
+    eq(GK.called[1], "OpenWindow")
+    eq(visible("GrudgekeeperClassicWindow"), nil)
+    eq(visible("GrudgekeeperClassicCard"), nil)
+    eq(GK.IsClassic(), false)
+end)
+
+test("classic: the window lists the rows, headers included, and shows the chosen row's card", function()
+    local GK = bootClassic("classic")
+    GK.OpenWindow(1)
+    local win = _G.GrudgekeeperClassicWindow
+    eq(win.shown, true)
+    eq(#win.box.provided, 4)
+    eq(win.box.rows[1].name.text, "Group")
+    eq(win.box.rows[2].name.text, "Alpha1")
+    eq(win.box.rows[2].sub.text, "sub1")
+    eq(win.box.rows[2].right.text, "5g")
+    eq(win.detail.view.title.text, "WANTED")
+    eq(win.detail.view.name.text, "Gank Master")
+    eq(win.detail.view.buttons[1].text, "Take the order")
+    eq(win.sort.shown, true)
+    eq(win.mine.shown, true)
+    eq(win.numTabs, 6)
+    eq(win.selectedTab, 1)
+    eq(#GK.called, 0)
+end)
+
+test("classic: the search box filters by name and sub, and a click on a row chooses it", function()
+    local GK = bootClassic("classic")
+    GK.OpenWindow(1)
+    local win = _G.GrudgekeeperClassicWindow
+    win.search.text = "beta"
+    win.search.hooks.OnTextChanged()
+    eq(#win.box.provided, 1)
+    eq(win.box.rows[1].name.text, "Beta2")
+    win.search.text = "sub3"
+    win.search.hooks.OnTextChanged()
+    eq(win.box.rows[1].name.text, "Alpha3")
+    win.search.text = "nobody"
+    win.search.hooks.OnTextChanged()
+    eq(win.empty.text, "No matches.")
+    win.search.text = ""
+    win.search.hooks.OnTextChanged()
+    F.click(win.box.rows[3])
+    eq(win.box.rows[3].locked, true, "the clicked row is the highlighted one")
+end)
+
+test("classic: sort and Mine only act on the sortable page and sit out the others", function()
+    local GK = bootClassic("classic")
+    GK.OpenWindow(1)
+    local win = _G.GrudgekeeperClassicWindow
+    GK.db.sortMode = "newest"
+    GK.OpenWindow(1)
+    eq(win.box.rows[1].name.text, "Alpha3", "newest first, headers dropped")
+    eq(#win.box.provided, 3)
+    GK.db.mineOnly = true
+    GK.OpenWindow(1)
+    eq(#win.box.provided, 0, "none of the rows is mine")
+    eq(win.empty.text, "Nothing of yours here.")
+    GK.OpenWindow(2)
+    eq(win.sort.shown, false)
+    eq(win.mine.shown, false)
+    eq(#win.box.provided, 4, "other pages keep their own order")
+    eq(win.links[1].text, "This week")
+    eq(win.links[1].enabled, false, "the chosen link is the one that does nothing")
+    eq(win.links[2].enabled, true)
+end)
+
+test("classic: the tabs are the pages, the first four on the left and the rest on the right", function()
+    local GK = bootClassic("classic")
+    GK.OpenWindow(5)
+    local win = _G.GrudgekeeperClassicWindow
+    eq(#win.tabs, 6)
+    eq(win.tabs[5].text, "Page5")
+    eq(win.selectedTab, 5)
+    F.click(win.tabs[3])
+    eq(win.selectedTab, 3)
+end)
+
+test("classic: a card opens in its own frame and a ledger one is hidden when the look changes", function()
+    local GK = bootClassic("ledger")
+    local ledger = CreateFrame("Frame", "GrudgekeeperFrame")
+    ledger:Show()
+    GK.ShowCard(function() return CARD end)
+    GK.Classic.SetLook("classic")
+    eq(ledger.shown, false, "the ledger's window is hidden")
+    GK.ShowCard(function() return CARD end)
+    local card = _G.GrudgekeeperClassicCard
+    eq(card.shown, true)
+    GK.Classic.SetLook("ledger")
+    eq(card.shown, false, "the classic card is hidden")
+    eq(GK.db.look, "ledger")
+end)
+
+test("classic: a letter shows its content, buttons and place in the pile", function()
+    local GK = bootClassic("classic")
+    table.insert(GK.char.letters, { id = 1, kind = "kill", n = GANK, p = 2, of = 1, total = 5, t = W.base, read = false })
+    table.insert(GK.char.letters, { id = 2, kind = "expired", n = GANK, t = W.base, read = false })
+    eq((GK.Unread()), 2)
+    GK.OpenLetters()
+    local f = _G.GrudgekeeperClassicLetter
+    eq(f.shown, true)
+    eq(f.title.text, "Blood drawn")
+    eq(f.page.text, "1 of 2")
+    eq(f.buttons[1].text, "Leaderboard")
+    eq(f.buttons[2].shown, false)
+    eq(GK.char.letters[1].read, true)
+    F.click(f.next)
+    eq(f.title.text, "Order expired")
+    eq(f.page.text, "2 of 2")
+    eq(f.buttons[1].text, "Post it again")
+    GK.CloseLetters()
+    eq(f.shown, false)
+end)
+
+test("classic: the letter icon shows the unread count, in place of the parchment one", function()
+    local GK = bootClassic("classic")
+    local old = CreateFrame("Button", "GrudgekeeperNotice")
+    old:Show()
+    GK.NoticeUpdate(false)
+    eq(visible("GrudgekeeperClassicNotice"), false, "nothing to read")
+    table.insert(GK.char.letters, { id = 1, kind = "slain", n = GANK, t = W.base, read = false })
+    GK.NoticeUpdate(true)
+    local btn = _G.GrudgekeeperClassicNotice
+    eq(btn.shown, true)
+    eq(btn.count.text, 1)
+    eq(old.shown, false)
+    F.click(btn)
+    eq(GK.char.letters[1].read, true, "a click reads the pile")
+    GK.PlaceNotice()
+    eq(btn.line.text, "Drag me - click when done")
+end)
+
+test("classic: a warning is a chat line and a glow, or the original's when the style is the raid warning", function()
+    local GK = bootClassic("classic")
+    W.printed = {}
+    GK.Warn("Gank is near!", true)
+    assert(W.printed[1] and W.printed[1]:find("Gank is near!", 1, true), "said it in chat")
+    eq(_G.GrudgekeeperClassicNotice.shown, true)
+    eq(#GK.called, 0, "the ledger's warning stayed out of it")
+    GK.db.alertStyle = "raid"
+    GK.Warn("Again", true)
+    eq(GK.called[#GK.called], "Warn")
+end)
+
+test("classic: the kill order sheet is filled from the plan and seals through PostSubmit", function()
+    local GK = bootClassic("classic")
+    local posted
+    function GK.PostOrder(t, copper, note) posted = { t, copper, note } return { key = "o" } end
+    GK.OpenPost({ key = GANK, c = "MAGE", l = 60 })
+    local f = _G.GrudgekeeperClassicPost
+    eq(f.shown, true)
+    eq(f.small.text, "No gold is taken now. Whoever fulfils the order is owed the bounty, and you pay them by mail. "
+        .. "The order runs for a week.")
+    eq(f.seal.text, "Seal it")
+    f.gold.text = "5"
+    f.silver.text = "20"
+    f.note.text = "camper"
+    F.click(f.seal)
+    eq(posted[2], 52000)
+    eq(posted[3], "camper")
+    eq(f.shown, false)
+    eq(_G.GrudgekeeperClassicWindow.shown, true, "sealing opens the hitlist, in this look")
+end)
+
+test("classic: the note sheet saves through AddNote with the list and the tag", function()
+    local GK = bootClassic("classic")
+    local added
+    GK.AddNote = function(key, text, tag, list, info) added = { key, text, tag, list, info } return {} end
+    GK.KnownTags = function() return { "Toxic" } end
+    GK.OpenNoteSheet({ key = GANK, c = "MAGE", r = "Orc", l = 60 }, "watch")
+    local f = _G.GrudgekeeperClassicNote
+    eq(f.shown, true)
+    eq(f.list.text, "Watch")
+    f.tag.text = "Toxic"
+    f.text.text = "rude in chat"
+    F.click(f.save)
+    eq(added[1], GANK)
+    eq(added[2], "rude in chat")
+    eq(added[3], "Toxic")
+    eq(added[4], "watch")
+    eq(added[5].c, "MAGE")
+    eq(f.shown, false)
+    GK.AddNote = function() return nil, "Write something first." end
+    GK.OpenNoteSheet({ key = GANK }, "kos")
+    f.text.text = ""
+    W.printed = {}
+    F.click(f.save)
+    eq(f.shown, true, "it stays open when the note was refused")
+    assert(W.printed[1]:find("Write something first.", 1, true), "said why")
+end)
+
+test("classic: the setting and /grudge classic switch the look", function()
+    local GK = bootClassic("ledger")
+    local section = GK.OptionSections[#GK.OptionSections]
+    local clicked
+    local box = CreateFrame("CheckButton")
+    local helpers = { Section = function() return {} end, Box = function(_, _, _, onClick) clicked = onClick return box end }
+    eq(section({}, {}, helpers), box)
+    eq(box.checked, false)
+    clicked(true)
+    eq(GK.db.look, "classic")
+    clicked(false)
+    eq(GK.db.look, "ledger")
+    SlashCmdList.GRUDGEKEEPER("classic")
+    eq(GK.db.look, "classic")
+    SlashCmdList.GRUDGEKEEPER("classic")
+    eq(GK.db.look, "ledger")
+    SlashCmdList.GRUDGEKEEPER("letters")
+    eq(GK.called[#GK.called], "OpenLetters", "anything else goes to the original")
+end)
+
+test("classic: the Inspect page gets a card of ours over the ledger's while the look is classic", function()
+    local GK = bootClassic("classic")
+    local page = CreateFrame("Frame")
+    GK.BuildCardPage(page, {}, function() end)
+    eq(GK.built, 1)
+    GK.FillCardPage(page, CARD)
+    eq(GK.filled, 0, "the ledger's page is not filled")
+    eq(page.classic.shown, true)
+    eq(page.classic.view.title.text, "WANTED")
+    GK.db.look = "ledger"
+    GK.FillCardPage(page, CARD)
+    eq(GK.filled, 1)
+    eq(page.classic.shown, false)
+end)
+
 say(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)
