@@ -120,14 +120,67 @@ Every hook is small and named here, so a merge conflict is easy to resolve by re
   before the Commands section, passing its own `Section`, `Check` and `Box` helpers and the anchor to
   build under.
 - **H6. Letters.lua and Post.lua: content apart from drawing**, so the Classic look can show the same
-  letter and the same sheet: `GK.LetterContent(L)` and the sheet's decision of which case it is in, as
-  functions the drawing code calls.
+  letter and the same sheet. As built:
+  - `Letters.lua`: `GK.LetterContent(L)` sits right after `NoteContent` and returns `{ note (a small letter,
+    else the scroll), title, name, info, lines, foot, seal, stamp, blood, buttons = { { text, fn } }, c,
+    rf, sx, key, sample }`. It calls the existing `ScrollContent` and `NoteContent`, which are untouched, and
+    takes over from `FillNote` the closing line (after a blank line, only on a letter of four paragraphs or
+    fewer). `FillScroll` and `FillNote` now draw from it; the text they set is the same, character for
+    character.
+  - `Post.lua`: `GK.PostPlan(t)` returns `{ case = "new" | "change" | "pot", pot, mine, title, bounty,
+    small, button, amount, note, asksWhy }`, and `GK.PostSubmit(t, copper, note, plan)` adds to the pot or
+    posts the order, plays the sound and answers true (false, with the reason in chat, when the order was
+    refused). `GK.OpenPost` fills the parchment sheet from the plan, and `Seal` calls `GK.PostSubmit` with the
+    plan the sheet was opened with, so an order that appeared after the sheet opened changes nothing, as
+    before. The module-local `pot` became `plan.pot`.
+  - `Window.lua`: one line, `GK.LedgerCard = DetailCard`, so the Classic window shows the same card the book
+    does for a row (record, poster or card).
 - **H7. Wrapped functions.** Some features wrap a `GK.*` function at load time rather than editing it:
   `GK.PosterCard` and `GK.RecordCard` (notes on the card), `GK.TooltipLine` (notes on an enemy's tooltip),
-  `GK.Warn` (alert style, D13), `SlashCmdList.GRUDGEKEEPER` (the new subcommands), and in the Classic look
-  `GK.OpenWindow`, `GK.ToggleWindow`, `GK.ShowPoster`, `GK.ShowRecord`, `GK.ShowCard`, `GK.OpenLetters`,
-  `GK.ShowLetter`, `GK.NoticeUpdate`, `GK.OpenPost`. Each wrapper calls the original unless its setting says
-  otherwise.
+  `GK.Warn` (alert style, D13), `SlashCmdList.GRUDGEKEEPER` (the new subcommands). The Classic look wraps, at
+  `PLAYER_LOGIN` so that its wrappers are the outermost: `GK.OpenWindow`, `GK.ToggleWindow`, `GK.ShowPoster`,
+  `GK.ShowRecord`, `GK.ShowCard`, `GK.OpenLetters`, `GK.ShowLetter`, `GK.CloseLetters`, `GK.NoticeUpdate`,
+  `GK.PlaceNotice`, `GK.Warn`, `GK.OpenPost`, `GK.OpenNoteSheet` (only if it exists then), and
+  `SlashCmdList.GRUDGEKEEPER` (for `/grudge classic`). `GK.BuildCardPage` and `GK.FillCardPage` (the Inspect
+  tab's page) are wrapped to serve both looks. Each wrapper calls the original whenever `GK.db.look` is
+  `"ledger"`; with `GK.db.alertStyle == "raid"` the classic `GK.Warn` leaves the warning to the original chain.
+
+## The Classic look (D12, Q4)
+
+`GK.db.look` is `"ledger"` (default) or `"classic"`; Options has a "Look" section with the checkbox, and
+`/grudge classic` toggles it. Changing it hides every open frame of the look that goes. The only edits
+outside `Classic/` are H6 above, `look = "ledger"` in the defaults in `Core.lua`, and the six TOC lines
+after `Options.lua`.
+
+| File | What |
+|---|---|
+| `Classic/Classic.lua` | The setting, `GK.IsClassic()`, the wrapping (`C.Wraps`, `C.Always`), `/grudge classic`, and the shared pieces: `C.Frame` (a `ButtonFrameTemplate` frame), `C.Face` (a round portrait with a class badge), `C.Button`, `C.Tip`, `C.FormatLines`. |
+| `Classic/Cards.lua` | `C.CardView`, which draws any card table (title, name, info, big and caption, lines, up to two buttons); the small card that `GK.ShowPoster`, `GK.ShowRecord` and `GK.ShowCard` open; the Inspect tab's page. |
+| `Classic/Window.lua` | The window as Guild Grudge's is made: tabs from `GK.LedgerPages` (the first four on the left, any added after them on the right), search box (name and sub line), a sort menu and Mine only on the sortable pages (`GK.db.sortMode`, `GK.db.mineOnly`), the page's links and sub line in a strip under the toolbar, a scrolling list and the chosen row's card in a panel. It reads each page's `items()`, passes them through `GK.SortItems`, and gets the card from `GK.LedgerCard`, with the ledger's rule for which row is chosen (`page.default`). |
+| `Classic/Letters.lua` | The pile in one standard frame, drawn from `GK.LetterContent`, with a pager. |
+| `Classic/Notice.lua` | The letter icon: an envelope button with the unread count, draggable (`GK.db.classicNotice`), blinking when a letter lands. A warning is a red glow and a line of chat. The parchment notice stays hidden. |
+| `Classic/Sheets.lua` | The kill order sheet (from `GK.PostPlan`, sealing through `GK.PostSubmit`) and the note sheet (`GK.OpenNoteSheet(t, list)`: a tag box with a menu of `GK.KnownTags(list)`, a note, saved with `GK.AddNote`). |
+
+Known gaps:
+
+- **What it looks like has not been seen in the game.** The code is written against Blizzard's templates as
+  they are in retail (`ButtonFrameTemplate`, `PanelTabButtonTemplate`, `SearchBoxTemplate`,
+  `WowStyle1DropdownTemplate`, `WowScrollBoxList`) and built in the tests against stand-in frames. Sizes and
+  spacing will want a pass in the game.
+- **No vote arrows on the Classic cards.** Guild Grudge's vote control (arrows and score) is not drawn: a
+  card table is plain lines of text and has no field for a vote, so notes show as text on the card. Votes
+  still work wherever the notes page offers them; a field on the card for a vote would let `C.CardView` draw the arrows.
+- **The ledger's own frames are named from a list**, `C.LedgerFrames` in `Classic/Classic.lua`, to hide them
+  when the look changes. The note sheet of the ledger is listed as `GrudgekeeperNoteSheet`; a ledger frame
+  with another name is not hidden until it is added there.
+- **A letter read through the Classic pager does not clear its minute's hold** (the ledger's `ShowLetter`
+  does `holding[L] = nil`, which is local to Letters.lua). When the minute ends, the icon blinks once for a
+  letter that is already read; nothing else is affected.
+- **Position and size of the Classic frames are not remembered**, apart from the letter icon. The ledger
+  uses `LIB.RegisterWindow` for that; the Classic frames open at the middle of the screen.
+- **The Inspect page is covered, not rebuilt.** The ledger's page is built as ever and hidden under a
+  Classic card with its own background while the look is classic; switching the look with the Inspect window
+  open takes effect at its next update.
 
 ## Data
 
@@ -176,6 +229,9 @@ Q;1                                     tell me yours (at login)
 ## Testing
 
 - `tests/run.lua` runs with Lua 5.1: `lua5.1 tests/run.lua` from the repo root. It loads `Notes.lua` and
-  `Import.lua` against a small mock of the WoW API and LibForever (`tests/wow_mock.lua`).
+  `Import.lua` against a small mock of the WoW API and LibForever (`tests/wow_mock.lua`). It also loads
+  `Letters.lua` and `Post.lua` to test `GK.LetterContent`, `GK.PostPlan` and `GK.PostSubmit`, and the
+  `Classic/` files against permissive stand-in frames (`tests/frames_mock.lua`), which build and click
+  through the window, cards, letters, icon and sheets.
 - In game, the PR was tried as a renamed copy (own saved variables, own prefixes, own slash command) so
   nothing reached the guild's real clients.

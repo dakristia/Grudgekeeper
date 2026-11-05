@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **A Classic look, if you want it.** Tick Classic look in the settings (or type /grudge classic) and every Grudgekeeper surface is drawn in the game's own frames instead of the ledger: the window with tabs along the bottom, a search box, a sort menu and Mine only, and the chosen row's card in a panel; the cards; the letters in one plain frame with arrows; the letter icon as a small envelope with the number of unread letters; and the sheets for kill orders and notes. It shows the same data and does the same things. The ledger stays the default and is not touched while the setting is off.
 - **The window is a ledger now.** An open book of two pages: the table on the left - kill orders, the leaderboard, your grudges, the news - and on the right the row you clicked: an enemy's wanted poster with Take the order and Add to the pot, a guildie's record. The bookmark on its edge folds it to one page; a click on a row then turns the page, and Back turns it back. A long list turns a page at a time, or scrolls with the wheel.
 - **Faces in the ledger.** A guildie shows their race's portrait with their class on its shoulder - it comes with their score, so they need this version too; an enemy shows their class, and on their poster their face once you have seen them this session. The top three of the week wear wax seals of gold, silver and copper.
 - **A close button of Grudgekeeper's own**, an iron cross, on the ledger, the kill order scroll, the profile cards and the letters.
