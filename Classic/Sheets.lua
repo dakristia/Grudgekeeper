@@ -148,7 +148,7 @@ local function BuildNote()
     if f.tags.SetupMenu then
         f.tags:SetupMenu(function(_, root)
             for _, tag in ipairs(noteList and GK.KnownTags(noteList) or {}) do
-                root:CreateButton(tag, function() f.tag:SetText(tag) end)
+                root:CreateButton(GK.TagText(tag), function() f.tag:SetText(tag) end)
             end
             root:CreateButton("No tag", function() f.tag:SetText("") end)
         end)

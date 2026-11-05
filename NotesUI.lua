@@ -134,7 +134,7 @@ end
 --- A note as a card line: "text" - Author, 3 days ago (+2). A colon-and-space in the text would make the
 --- ledger read the start of the line as a label, so the space after it is a no-break one.
 local function NoteLine(n)
-    local text = n.text and ('"' .. n.text:gsub(": ", ":\194\160") .. '"') or ("[" .. (n.tag or "?") .. "]")
+    local text = n.text and ('"' .. n.text:gsub(": ", ":\194\160") .. '"') or ("[" .. (n.tag and GK.TagText(n.tag, 12) or "?") .. "]")
     return ("%s - %s, %s%s"):format(text, Who(n.author), GK.Ago(n.ts), n.score ~= 0 and (" (" .. ScoreText(n.score) .. ")") or "")
 end
 
@@ -154,7 +154,8 @@ function GK.NoteCard(key, page)
     local lines = d.lines
     if s then
         for _, list in ipairs(s.on) do
-            local tags = s.taglist[list]
+            local tags = {}
+            for i, tag in ipairs(s.taglist[list]) do tags[i] = GK.TagText(tag, 12) end
             lines[#lines + 1] = ("%s: %s%s"):format(WORD[list], NameList(s.lists[list]),
                 #tags > 0 and (" - " .. table.concat(tags, ", ")) or "")
         end
@@ -193,7 +194,7 @@ function GK.NoteMenu(root, key)
         local into = n.mine and mine or theirs
         if #into < MENU_NOTES then into[#into + 1] = n end
     end
-    local function Label(n) return Short(n.text or ("[" .. (n.tag or "?") .. "]"), 36) end
+    local function Label(n) return n.text and Short(n.text, 36) or ("[" .. (n.tag and GK.TagText(n.tag, 12) or "?") .. "]") end
     if #theirs > 0 then
         local vote = root:CreateButton("Vote on a note")
         for _, n in ipairs(theirs) do
@@ -293,7 +294,11 @@ function GK.NotesItems(list)
     for _, e in ipairs(GK.PeopleOn(list)) do
         local p, s = e.person, Summary(e.key)
         local bits = {}
-        if #e.tags > 0 then bits[1] = table.concat(e.tags, ", ") end
+        if #e.tags > 0 then
+            local shown = {}
+            for i, tag in ipairs(e.tags) do shown[i] = GK.TagText(tag, 12) end
+            bits[1] = table.concat(shown, ", ")
+        end
         local newest = s and s.notes[1]
         if newest then bits[#bits + 1] = newest.text and ('"' .. newest.text .. '"') or nil end
         local key = e.key
@@ -338,7 +343,7 @@ function GK.NoteLines(key)
     if not s then return nil end
     local where = {}
     for _, list in ipairs(s.on) do
-        where[#where + 1] = WORD[list] .. ((list == s.primary and s.tags[list]) and (" (" .. s.tags[list] .. ")") or "")
+        where[#where + 1] = WORD[list] .. ((list == s.primary and s.tags[list]) and (" (" .. GK.TagText(s.tags[list], 12) .. ")") or "")
     end
     local lines = { ("Notes: %s, on %s"):format(s.count == 0 and "none" or tostring(s.count),
         table.concat(where, " and ")) }
@@ -434,7 +439,7 @@ local function LayoutSheet()
         b.tag = tag
         b:SetShown(tag ~= nil)
         if tag then
-            b:Set(tag, draft.tag == tag)
+            b:Set(GK.TagText(tag, 12), draft.tag == tag)
             if x > 0 and x + b:GetWidth() > SHEET_W - 68 then x, y = 0, y + TAG_GAP end
             if y >= TAG_ROWS * TAG_GAP then
                 b:Hide()
@@ -627,7 +632,7 @@ local function OnNotesMenu(_, root, ctx)
     for _, list in ipairs({ "watch", "kudos" }) do
         local lists = sub:CreateButton(WORD[list] .. (list == "watch" and " list" or ""))
         for _, tag in ipairs(GK.TAGS[list]) do
-            lists:CreateButton(tag, function() GK.WriteNote(t, list, "", tag) end)
+            lists:CreateButton(GK.TagText(tag), function() GK.WriteNote(t, list, "", tag) end)
         end
         lists:CreateButton("No tag", function() GK.WriteNote(t, list, "", "") end)
     end
@@ -653,7 +658,7 @@ function GK.NoteTipLine(key)
     local s = key and Summary(key)
     if not s then return nil end
     local bits = {}
-    if s.tags[s.primary] then bits[#bits + 1] = s.tags[s.primary] end
+    if s.tags[s.primary] then bits[#bits + 1] = GK.TagText(s.tags[s.primary], 12) end
     if s.count > 0 then bits[#bits + 1] = Plural(s.count, "note") end
     local head = ("|cff%s%s|r"):format(COLOUR[s.primary], WORD[s.primary])
     return #bits > 0 and (head .. "  " .. table.concat(bits, " - ")) or head
@@ -741,7 +746,7 @@ local function Mark(unit, list)
     marked[unit] = plate
 end
 
-local function TagText(tag) return tag and (" [" .. tag .. "]") or "" end
+local function TagSuffix(tag) return tag and (" [" .. GK.TagText(tag) .. "]") or "" end
 
 local function PruneNear(now)
     for key, at in pairs(nearAt) do
@@ -762,9 +767,9 @@ local function Nearby(key, s)
     nearAt[key] = now
     local name = GK.Show(key)
     if warn then
-        GK.Warn(("Kill on sight: %s is near!%s"):format(name, TagText(s.tags.kos)), true)
+        GK.Warn(("Kill on sight: %s is near!%s"):format(name, TagSuffix(s.tags.kos)), true)
     else
-        print(("%s: %s from your Watch list is near%s"):format(GK.TAG, name, TagText(s.tags.watch)))
+        print(("%s: %s from your Watch list is near%s"):format(GK.TAG, name, TagSuffix(s.tags.watch)))
     end
 end
 
@@ -806,10 +811,10 @@ function GK.CheckNotesGroup()
         GK.LearnPerson(key, ReadPlayer(unit))
         local name = GK.Show(key)
         if #s.lists.watch > 0 and GK.db.watchGroup then
-            GK.Warn(("Watch list: %s joined your group%s"):format(name, TagText(s.tags.watch)), true)
+            GK.Warn(("Watch list: %s joined your group%s"):format(name, TagSuffix(s.tags.watch)), true)
         end
         if #s.lists.kudos > 0 and GK.db.kudosGroup then
-            print(("%s: |cff4dff66Kudos:|r %s joined your group%s"):format(GK.TAG, name, TagText(s.tags.kudos)))
+            print(("%s: |cff4dff66Kudos:|r %s joined your group%s"):format(GK.TAG, name, TagSuffix(s.tags.kudos)))
         end
     end
     if IsInRaid() then

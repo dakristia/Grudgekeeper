@@ -44,6 +44,30 @@ GK.TAGS = {
     kudos = { "Helpful", "Kind", "Skilled", "Great healer", "Great tank", "Fair looter", "Fun to group with" },
 }
 
+-- One icon per preset tag, so a tag can be told apart at a glance; a tag a player typed gets the note.
+local TAG_ICON = {
+    ["Ninja looter"] = "Ability_Stealth", ["Scammer"] = "INV_Misc_Coin_01", ["Toxic"] = "Spell_Nature_NullifyPoison",
+    ["Griefer"] = "Spell_Shadow_Possession", ["Leaver"] = "Ability_Rogue_Sprint",
+    ["Helpful"] = "Spell_Holy_Renew", ["Kind"] = "INV_Misc_Gift_01", ["Skilled"] = "Ability_DualWield",
+    ["Great healer"] = "Spell_Holy_FlashHeal", ["Great tank"] = "Ability_Warrior_DefensiveStance",
+    ["Fair looter"] = "INV_Misc_Bag_08", ["Fun to group with"] = "INV_Drink_04",
+}
+local CUSTOM_ICON = "INV_Misc_Note_01"
+
+--- The texture path of a tag's icon: the preset's own, or the note for any other tag. nil for no tag.
+function GK.TagIcon(tag)
+    if type(tag) ~= "string" or tag == "" then return nil end
+    return "Interface\\Icons\\" .. (TAG_ICON[tag] or CUSTOM_ICON)
+end
+
+--- A tag as shown to a player: its icon, then the words. size is the icon's side in pixels (14). "" for no tag.
+function GK.TagText(tag, size)
+    local icon = GK.TagIcon(tag)
+    if not icon then return "" end
+    size = size or 14
+    return ("|T%s:%d:%d|t %s"):format(icon, size, size, tag)
+end
+
 -- ---------------------------------------------------------------------------
 -- Small helpers
 -- ---------------------------------------------------------------------------
