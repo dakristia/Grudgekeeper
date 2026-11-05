@@ -1,5 +1,6 @@
 -- Grudgekeeper - the notes, as the ledger shows them (the data is Notes.lua). What you see of them:
---   the Notes page      a fifth tab in the ledger: Kill on sight, Watch, Kudos and Names, one ink link each
+--   the list pages      four tabs in the ledger: Kill on sight (with the owner's four), then Watch, Kudos and
+--                       Names over the right page
 --   cards               the small card for a noted player or a nice name, and a line or two on the
 --                       wanted poster and the record when there are notes on that player
 --   the note sheet      a small parchment like the kill order's: the list, a tag, a few words, Write it
@@ -138,14 +139,15 @@ local function NoteLine(n)
 end
 
 --- The player's card: who put them on which list, the newest notes, the votes. Nil for nobody we keep a
---- record of. key -> the card table of Profile.lua.
-function GK.NoteCard(key)
+--- record of. page is the list whose page the card was opened from, if any. key, page -> the card table
+--- of Profile.lua.
+function GK.NoteCard(key, page)
     local p = GK.Person(key, false)
     if not p then return nil end
     local s = Summary(key)
     -- the list the card is about: where I put them, else the page's list if they are on it, else the first
-    local mark, page = GK.MyMark(key), GK.db and GK.db.notesList
-    local shown = s and ((mark and OnList(s, mark) and mark) or (OnList(s, page) and page) or s.primary)
+    local mark = GK.MyMark(key)
+    local shown = s and ((mark and OnList(s, mark) and mark) or (page and OnList(s, page) and page) or s.primary)
     local t = { key = key, c = p.c, r = p.r, rf = p.rf, sx = p.sx, l = p.l }
     local d = { key = key, c = p.c, rf = p.rf, sx = p.sx, title = shown and CARD_TITLE[shown] or "NOTES",
         name = GK.Show(key), info = GK.Describe(p.l, p.c, p.r), lines = {}, buttons = {} }
@@ -257,13 +259,14 @@ function GK.NameCard(key)
 end
 
 -- ---------------------------------------------------------------------------
--- The Notes page
+-- The four list pages
 -- ---------------------------------------------------------------------------
-local PAGE_LISTS = { "kos", "watch", "kudos", "names" }
+-- A page each, because the list is the tab: Kill on sight is the enemy's page, on the left with the
+-- owner's four; Watch, Kudos and Names are the friendly ones, over the right page (side = "right").
 local PAGE_WORD = { kos = "Kill on sight", watch = "Watch", kudos = "Kudos", names = "Names" }
 local EMPTY = {
-    kos = "Nobody is on Kill on sight. Right-click a player and pick Grudgekeeper notes, or write /grudge note "
-        .. "<first> <surname> <what they did>.",
+    kos = "Nobody is on Kill on sight. It is for an enemy you want to mark without a bounty or a history. "
+        .. "Right-click a player and pick Grudgekeeper notes, or write /grudge note <first> <surname> <what they did>.",
     watch = "Nobody is on your Watch list. It is for players to be careful with - a ninja looter, a scammer. "
         .. "Right-click one and pick Grudgekeeper notes, or write /grudge watch <first> <surname>.",
     kudos = "Nobody has kudos yet. Right-click a good player and pick Grudgekeeper notes, or write "
@@ -271,15 +274,7 @@ local EMPTY = {
     names = "No nice names yet. Right-click a player with a funny character name and pick Add to nice names.",
 }
 
-local function CurrentList()
-    local list = GK.db and GK.db.notesList
-    for _, l in ipairs(PAGE_LISTS) do
-        if l == list then return l end
-    end
-    return "kos"
-end
-
---- The rows of one list of the page, and the text for when there are none. list: kos, watch, kudos or names.
+--- The rows of one list, and the text for when there are none. list: kos, watch, kudos or names.
 function GK.NotesItems(list)
     local items = {}
     if list == "names" then
@@ -305,7 +300,7 @@ function GK.NotesItems(list)
         items[#items + 1] = { key = "p:" .. key, name = GK.Show(key), face = { c = p.c, rf = p.rf, sx = p.sx },
             sub = table.concat(bits, " - "), right = e.score ~= 0 and ScoreText(e.score) or "", ts = e.ts,
             votes = e.score, own = e.mine or nil,
-            select = { kind = "card", make = function() return GK.NoteCard(key) end } }
+            select = { kind = "card", make = function() return GK.NoteCard(key, list) end } }
     end
     -- the page's own order: the newest news first
     table.sort(items, function(a, b)
@@ -315,26 +310,24 @@ function GK.NotesItems(list)
     return items, EMPTY[list]
 end
 
-local NOTES_PAGE = {
-    name = "Notes", sortable = true,
-    items = function() return GK.NotesItems(CurrentList()) end,
-    headings = { { "Name", 48 }, { "Votes", COL_RIGHT, "RIGHT" } },
-    links = function()
-        local links = {}
-        for i, list in ipairs(PAGE_LISTS) do
-            links[i] = { text = PAGE_WORD[list], on = CurrentList() == list,
-                click = function() GK.db.notesList = list end }
-        end
-        return links
-    end,
-    sub = function(items)
-        local list = CurrentList()
-        if list == "names" then return Plural(#items, "nice name") .. " in the guild's list" end
-        return ("%s on %s"):format(Plural(#items, "player"), PAGE_WORD[list])
-    end,
-}
-GK.AddLedgerPage(NOTES_PAGE)
-local NOTES_TAB = #GK.LedgerPages
+local TAB_OF = {}                          -- [list] = its index in GK.LedgerPages
+for _, list in ipairs({ "kos", "watch", "kudos", "names" }) do
+    GK.AddLedgerPage({
+        name = PAGE_WORD[list], sortable = true, side = list ~= "kos" and "right" or nil,
+        items = function() return GK.NotesItems(list) end,
+        headings = { { list == "names" and "Nice name" or "Player", 48 }, { "Votes", COL_RIGHT, "RIGHT" } },
+        sub = function(items)
+            if list == "names" then return Plural(#items, "nice name") .. " in the guild's list" end
+            return ("%s on %s"):format(Plural(#items, "player"), PAGE_WORD[list])
+        end,
+    })
+    TAB_OF[list] = #GK.LedgerPages
+end
+
+--- Open the ledger at the page of a list: "kos", "watch", "kudos" or "names" (Kill on sight for anything else).
+function GK.OpenNotes(list)
+    GK.OpenWindow(TAB_OF[list] or TAB_OF.kos)
+end
 
 -- ---------------------------------------------------------------------------
 -- Notes on the poster and the record
@@ -347,7 +340,7 @@ function GK.NoteLines(key)
     for _, list in ipairs(s.on) do
         where[#where + 1] = WORD[list] .. ((list == s.primary and s.tags[list]) and (" (" .. s.tags[list] .. ")") or "")
     end
-    local lines = { ("Notes: %s, on %s - see the Notes page"):format(s.count == 0 and "none" or tostring(s.count),
+    local lines = { ("Notes: %s, on %s"):format(s.count == 0 and "none" or tostring(s.count),
         table.concat(where, " and ")) }
     if s.count > 0 then lines[2] = "Newest: " .. NoteLine(s.notes[1]) end
     return lines
@@ -896,7 +889,8 @@ GK.OptionSections[#GK.OptionSections + 1] = function(f, anchor, h)
     local note = h.Note(f, "|cffffd100/grudge note|r [first surname] <text> writes a note (no name: your target).  "
         .. "|cffffd100/grudge watch|r and |cffffd100/grudge kudos|r <first> <surname> [text] put a player on a list.\n"
         .. "|cffffd100/grudge nice|r <first> <surname> adds a funny name.  |cffffd100/grudge move|r <first> "
-        .. "<surname> kos|watch|kudos|none moves your mark.\n|cffffd100/grudge notes|r opens the Notes page.  "
+        .. "<surname> kos|watch|kudos|none moves your mark.\n|cffffd100/grudge notes|r, |cffffd100watch|r, "
+        .. "|cffffd100kudos|r and |cffffd100names|r with no name open their pages.  "
         .. "|cffffd100/grudge import|r takes over Guild Grudge's notes (import force: again).")
     note:SetPoint("TOPLEFT", style, "BOTTOMLEFT", 4, -10)
     return note
@@ -972,7 +966,10 @@ end
 --- Run one of our subcommands. true when cmd was one of ours.
 function GK.RunNotesCommand(cmd, rest)
     if cmd == "notes" then
-        GK.OpenWindow(NOTES_TAB)
+        GK.OpenNotes("kos")
+        return true
+    elseif cmd == "names" or ((cmd == "watch" or cmd == "kudos") and strtrim(rest or "") == "") then
+        GK.OpenNotes(cmd)                   -- with a name they keep adding (below)
         return true
     elseif cmd == "import" then
         local counts, why = GK.ImportGuildGrudge(strtrim(rest or ""):lower() == "force")
@@ -1007,7 +1004,8 @@ function GK.RunNotesCommand(cmd, rest)
     return true
 end
 
-local OURS = { note = true, watch = true, kudos = true, nice = true, move = true, notes = true, import = true }
+local OURS = { note = true, watch = true, kudos = true, nice = true, move = true, notes = true, names = true,
+    import = true }
 -- what Core.lua's /grudge answers itself; anything else it meets it answers with its help
 local CORE = { orders = true, hitlist = true, board = true, leaderboard = true, post = true, letters = true,
     read = true, test = true, notice = true, options = true, settings = true, debug = true }
@@ -1018,7 +1016,7 @@ local function PrintHelp()
     print("  /grudge kudos <first> <surname> [text]  - put a player on your Kudos list")
     print("  /grudge nice <first> <surname>  - add a funny character name to the guild's list")
     print("  /grudge move <first> <surname> kos|watch|kudos|none  - move your mark on a player")
-    print("  /grudge notes  - open the Notes page")
+    print("  /grudge notes  - open the Kill on sight page (/grudge watch, kudos and names open theirs)")
     print("  /grudge import  - take over Guild Grudge's notes (import force: again)")
 end
 

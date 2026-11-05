@@ -1015,7 +1015,7 @@ local function bootClassic(look)
     local sorted = 0
     GK.LedgerPages = {}
     for i = 1, 6 do
-        local page = { name = "Page" .. i, sortable = i == 1 }
+        local page = { name = "Page" .. i, sortable = i == 1, side = i > 4 and "right" or nil }
         page.items = function()
             local items = { { header = true, name = "Group" } }
             for n = 1, 3 do
@@ -1112,7 +1112,7 @@ test("classic: sort and Mine only act on the sortable page and sit out the other
     eq(win.links[2].enabled, true)
 end)
 
-test("classic: the tabs are the pages, the first four on the left and the rest on the right", function()
+test("classic: the tabs are the pages, the ones with side = right in the right group", function()
     local GK = bootClassic("classic")
     GK.OpenWindow(5)
     local win = _G.GrudgekeeperClassicWindow
@@ -1121,6 +1121,8 @@ test("classic: the tabs are the pages, the first four on the left and the rest o
     eq(win.selectedTab, 5)
     F.click(win.tabs[3])
     eq(win.selectedTab, 3)
+    eq(win.tabs[4].side, nil)
+    eq(win.tabs[5].side, "right")
 end)
 
 test("classic: a card opens in its own frame and a ledger one is hidden when the look changes", function()
@@ -1330,22 +1332,37 @@ local function labels(node)
     return table.concat(out, "|")
 end
 
-test("the Notes page is the fifth tab, with a link per list", function()
+test("the four list pages: Kill on sight with the owner's, the rest on the right, none with links", function()
     local GK = bootUI()
-    eq(#GK.LedgerPages, 5)
-    local page = GK.LedgerPages[5]
-    eq(page.name, "Notes")
-    eq(page.sortable, true)
-    local links = page.links()
-    eq(#links, 4)
-    eq(links[1].text, "Kill on sight")
-    eq(links[1].on, true, "kos is the default")
-    links[2].click()
-    eq(GK.db.notesList, "watch")
-    eq(page.links()[2].on, true)
-    eq(page.links()[1].on, false)
-    GK.db.notesList = "somewhere"
-    eq(page.links()[1].on, true, "an unknown list is kos")
+    eq(#GK.LedgerPages, 8)
+    local want = { { "Kill on sight", nil }, { "Watch", "right" }, { "Kudos", "right" }, { "Names", "right" } }
+    for i, w in ipairs(want) do
+        local page = GK.LedgerPages[4 + i]
+        eq(page.name, w[1])
+        eq(page.side, w[2])
+        eq(page.sortable, true)
+        eq(page.links, nil, "the list is the tab")
+        eq(#page.headings, 2)
+    end
+    for i = 1, 4 do eq(GK.LedgerPages[i].side, nil) end
+    eq(GK.LedgerPages[5].headings[1][1], "Player")
+    eq(GK.LedgerPages[8].headings[1][1], "Nice name")
+    eq(GK.db.notesList, nil, "the list is not a setting any more")
+end)
+
+test("GK.OpenNotes opens the page of the list", function()
+    local GK = bootUI()
+    local W2 = require("wow_mock")
+    GK.OpenNotes("kos")
+    eq(W2.opened, 5)
+    GK.OpenNotes("watch")
+    eq(W2.opened, 6)
+    GK.OpenNotes("kudos")
+    eq(W2.opened, 7)
+    GK.OpenNotes("names")
+    eq(W2.opened, 8)
+    GK.OpenNotes("somewhere")
+    eq(W2.opened, 5, "an unknown list is kos")
 end)
 
 test("the page's rows: newest first, with tags, the newest note, the score and my own", function()
@@ -1354,7 +1371,6 @@ test("the page's rows: newest first, with tags, the newest note, the score and m
     W.receive(GK, KARI, msg("L", 1, GANK, "watch", B + 11))
     W.receive(GK, EDVARD, msg("V", 1, GANK, KARI, 1, 1, B + 12))
     W.receive(GK, KARI, msg("N", 1, "Older Foe-Realm", 1, B + 5, "", "", "", "", "", "ganked me"))
-    GK.db.notesList = "kos"
     local items, empty = GK.LedgerPages[5].items()
     eq(#items, 1, "Gank is on Watch, not on kos")
     eq(items[1].name, "Older Foe")
@@ -1384,8 +1400,8 @@ test("the page's rows: newest first, with tags, the newest note, the score and m
     eq(#rows, 2)
     eq(rows[1].name, "Older Foe", "the newest news first")
     eq(GK.LedgerPages[5].sub({ 1 }), "1 player on Kill on sight")
-    GK.db.notesList = "watch"
-    eq(GK.LedgerPages[5].sub(rows), "2 players on Watch")
+    eq(GK.LedgerPages[6].sub(rows), "2 players on Watch")
+    eq(#GK.LedgerPages[6].items(), 2)
 end)
 
 test("the Names list: hidden ones only for officers, and faded", function()
@@ -1409,9 +1425,8 @@ test("the Names list: hidden ones only for officers, and faded", function()
     eq(items[1].name, "Silly Two", "the newest first")
     eq(items[1].faded, true)
     eq(items[1].sub, "hidden - added by Kari")
-    GK.db.notesList = "names"
-    eq(GK.LedgerPages[5].sub(items), "2 nice names in the guild's list")
-    eq(#GK.LedgerPages[5].items(), 2)
+    eq(GK.LedgerPages[8].sub(items), "2 nice names in the guild's list")
+    eq(#GK.LedgerPages[8].items(), 2)
 end)
 
 test("a noted player's card: title, who put them where, the notes with their votes, the score", function()
@@ -1434,10 +1449,10 @@ test("a noted player's card: title, who put them where, the notes with their vot
     assert(d.lines[4]:find('^"took the chest:\194\160twice" %- Kari, 3 days ago %(%+1%)$'), d.lines[4])
     assert(not d.lines[4]:find("^[^:,]+: "), "the ledger would read that as a label")
     -- the page's list wins when they are on it; my own mark wins over that
-    GK.db.notesList = "watch"
-    eq(GK.NoteCard(GANK).title, "WATCH")
+    eq(GK.NoteCard(GANK, "watch").title, "WATCH")
+    eq(GK.NoteCard(GANK, "kudos").title, "KILL ON SIGHT", "not on that list")
     GK.SetMark(GANK, "kudos")
-    eq(GK.NoteCard(GANK).title, "KUDOS")
+    eq(GK.NoteCard(GANK, "watch").title, "KUDOS")
     eq(GK.NoteCard(GANK).lines[3], "Kudos: you")
     -- buttons
     local t
@@ -1548,12 +1563,12 @@ test("the poster and the record get at most two lines about notes, and never mor
     W.receive(GK, KARI, msg("L", 1, GANK, "watch", B + 12))
     local d = GK.PosterCard({ key = GANK })
     eq(#d.lines, 2)
-    eq(d.lines[1], "Notes: 2, on Watch (Ninja looter) - see the Notes page")
+    eq(d.lines[1], "Notes: 2, on Watch (Ninja looter)")
     eq(d.lines[2], 'Newest: "again" - Kari, 3 days ago')
     W2.posterLines = { 1, 2, 3, 4, 5, 6, 7, 8 }
     d = GK.PosterCard({ key = GANK })
     eq(#d.lines, 9, "one fits")
-    eq(d.lines[9], "Notes: 2, on Watch (Ninja looter) - see the Notes page")
+    eq(d.lines[9], "Notes: 2, on Watch (Ninja looter)")
     W2.posterLines = { 1, 2, 3, 4, 5, 6, 7, 8, 9 }
     eq(#GK.PosterCard({ key = GANK }).lines, 9)
     W2.recordLines = {}
@@ -1561,7 +1576,7 @@ test("the poster and the record get at most two lines about notes, and never mor
     eq(#GK.RecordCard("Stranger-Realm").lines, 0)
     -- a mark with no note
     GK.SetMark("Marked-Realm", "kudos")
-    eq(GK.RecordCard("Marked-Realm").lines[1], "Notes: none, on Kudos - see the Notes page")
+    eq(GK.RecordCard("Marked-Realm").lines[1], "Notes: none, on Kudos")
     eq(#GK.RecordCard("Marked-Realm").lines, 1)
     W2.posterLines, W2.recordLines = nil, nil
 end)
@@ -1663,7 +1678,16 @@ test("/grudge: our subcommands act, everything else is Core's, and the help grow
     slash("nice Funny Name")
     assert(W.printed[#W.printed]:find("already"), W.printed[#W.printed])
     slash("notes")
-    eq(W2.opened, 5, "the Notes tab")
+    eq(W2.opened, 5, "Kill on sight")
+    slash("watch")
+    eq(W2.opened, 6)
+    slash("kudos")
+    eq(W2.opened, 7)
+    slash("names")
+    eq(W2.opened, 8)
+    slash("watch Nina Nice")
+    eq(W2.opened, 8, "with a name, watch adds")
+    eq(GK.MyMark(NICE), "watch")
     slash("note")
     assert(W.printed[#W.printed]:find("Usage: /grudge note"), W.printed[#W.printed])
     -- Core's own, untouched
@@ -1898,7 +1922,6 @@ end)
 
 test("the settings: defaults for every new setting, and a section for them", function()
     local GK = bootUI()
-    eq(GK.db.notesList, "kos")
     eq(GK.db.noteAlerts, false)
     eq(GK.db.watchNearby, false)
     eq(GK.db.watchGroup, true)

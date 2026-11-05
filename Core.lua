@@ -36,7 +36,6 @@ local defaults = {
     sortMode = "default",    -- how the ledger's sortable pages order their rows: default, newest, oldest, name, votes
     mineOnly = false,        -- ...and whether they list only the rows that are yours
     look = "ledger",         -- "ledger" (the book) or "classic" (Guild Grudge's standard game frames, Classic/)
-    notesList = "kos",       -- the Notes page's list: kos, watch, kudos or names (NotesUI.lua)
     noteAlerts = false,      -- warn when a player on Kill on sight is near
     watchNearby = false,     -- one chat line when a player on your Watch list is near
     watchGroup = true,       -- warn when a Watch list player joins your group
