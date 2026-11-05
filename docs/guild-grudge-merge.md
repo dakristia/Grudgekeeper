@@ -242,8 +242,20 @@ store.nameVotes[key] = { [voter] = { v, ts } }
 - Every record is last-writer-wins by `ts` (the author's `time()`), per author and id. A delete is a
   record with `del = true`, kept 30 days so a late sync can't bring the note back, then pruned.
 - A player is on a list when any author's live mark puts them there. A note without a mark counts as
-  "kos" for its author.
-- Limits: 200 characters per note, 24 per tag, 20 live notes per author per player, 500 people, 300 names.
+  "kos" for its author. A removed mark is kept past its 30 days for as long as its author has a live note
+  on the player, so the player does not fall back onto Marked; it is pruned once no live note remains.
+- Limits: 200 characters per note, 24 per tag, 20 live notes per author per player, 40 note ids per author
+  per player (deleted ones count), 5000 note ids in the whole store, 500 people, 300 names. A new note id
+  that doesn't fit makes room by dropping the oldest deletion record older than 30 days; if there is none
+  it is refused. The same goes for a new person at 500: only someone whose every record (mark, note, vote)
+  is a deletion or vote older than 30 days is forgotten, otherwise the new person is refused.
+- A nice name belongs to whoever added it first. When two players added the same name before hearing of
+  each other, the earliest `ts` is the owner and, at the same second, the lower key; every client
+  settles on the same one whatever order the messages came in. A later `M` from the other player is
+  ignored, and only the owner's removal counts.
+- Hide and show are ordered by `ts`, then by the officer's key (the higher key wins a tie).
+- A vote that arrives before the player or the nice name it is about is held (at most 200, for 10
+  minutes, in memory only) and applied when that player or name arrives.
 
 ## Wire: the `GrudgeNotes` prefix
 
@@ -261,10 +273,18 @@ H;1;key;on;ts                           I hide (1) or show (0) a nice name - off
 Q;1                                     tell me yours (at login)
 ```
 
+- Note ids run from 1 to 2^40: a note written here uses the time, an imported one `ts * 100` plus a small
+  number (see Import.lua).
 - On Q, a client answers after 2-6 seconds, at most once per 30 seconds, with its own records only,
-  newest first, at most 150, paced to 2 messages a second so it stays inside LibForever's receive budget
-  (30 per sender per 10 seconds).
-- Live changes go out at once. Nothing is sent while `GK.testMode` is on, or outside a guild.
+  newest first, at most 150.
+- Everything sent on the prefix - live changes, the answer to a Q, the broadcast after an import - goes
+  through one outbound queue, at most 2 messages a second in total, so we stay inside LibForever's
+  receive budget (30 per sender per 10 seconds) however many things are going on. A broadcast asked for
+  while another is still waiting is merged into it. Each entry remembers `LIB.GuildKey()` from when it was
+  queued and is dropped at send time if the guild is another by then; the queue is also cleared on
+  `GUILD_ROSTER_UPDATE` / `PLAYER_GUILD_UPDATE` when the guild key changed. Nothing is sent while
+  `GK.testMode` is on, or outside a guild; both are checked again at send time.
+- A vote on an imported note is never sent, live or in a reply (that id is only ours).
 - After the import (D15) the same reply goes out unasked, once (`GK.NotesBroadcast`): the notes it made as
   mine are news to everyone else.
 

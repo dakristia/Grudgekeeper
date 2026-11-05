@@ -61,7 +61,12 @@ local function NewLib()
     function LIB.UnitKey(unit) return M.units[unit] end
     function LIB.IsMyStoredName(key) return key == M.me end
     function LIB.ShortName(full) return (full or "?"):gsub("%-[^%-]*$", "") end
-    function LIB.GuildKey() return M.inGuild and "Guild-Realm" or nil end
+    -- M.guildKey: what the client says the guild is (nil: it has not said yet, though IsInGuild is true)
+    function LIB.GuildKey()
+        if not M.inGuild then return nil end
+        if M.guildKey == false then return nil end
+        return M.guildKey or "Guild-Realm"
+    end
     function LIB.CommStats() return 0, 0, 0 end
     -- Same rule as the real one (LibForever-1.0.lua): no control characters, "|" becomes "/", capped.
     function LIB.Sanitize(s, maxLen)
@@ -106,6 +111,7 @@ function M.boot(opts)
     M.clock, M.timers, M.sent, M.printed, M.comm = 0, {}, {}, {}, {}
     M.me = opts.me or "Meyer-Realm"
     M.inGuild = opts.inGuild ~= false
+    M.guildKey = nil                -- tests set a name here, or false for "not known yet"
     M.units = { player = M.me }
     M.LIB = NewLib()
 

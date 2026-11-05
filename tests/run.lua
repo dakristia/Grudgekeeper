@@ -504,19 +504,23 @@ test("nothing is sent out of a guild or in test mode", function()
     eq(#GK2.NotesOf(GANK), 1, "still kept")
 end)
 
-test("live changes go out at once, and tell the windows", function()
+test("live changes go out through the queue, and tell the windows", function()
     local GK = boot()
     local before = W.changes
     local n = GK.AddNote(GANK, "took my gold", "Scammer", "watch", { c = "ROGUE", l = 60 })
+    eq(#W.sent, 1, "the first goes at once")
+    W.advance(1)
     local sent = W.takeSent()
     eq(#sent, 2)
     eq(sent[1].text, msg("N", 1, GANK, n.id, B, "", "Scammer", "ROGUE", "", 60, "took my gold"))
     eq(sent[2].text, msg("L", 1, GANK, "watch", B, "", "ROGUE", "", 60))
     assert(W.changes > before, "Changed was called")
     GK.DeleteNote(GANK, n.id)
+    W.advance(2)
     eq(W.takeSent()[1].text, msg("N", 1, GANK, n.id, B + 1, 1, "", "ROGUE", "", 60, ""))
     GK.SetMark(GANK, nil)
-    eq(W.takeSent()[1].text, msg("L", 1, GANK, "", B + 1, 1, "ROGUE", "", 60))
+    W.advance(2)
+    eq(W.takeSent()[1].text, msg("L", 1, GANK, "", B + 3, 1, "ROGUE", "", 60))
 end)
 
 test("a Q is answered with my own records only, after 2 to 6 seconds, once per 30 seconds", function()
@@ -531,6 +535,7 @@ test("a Q is answered with my own records only, after 2 to 6 seconds, once per 3
     W.receive(GK, EDVARD, msg("G", 1, NICE, 1, B))
     eq(GK.VoteNote(GANK, KARI, 1, 1), true)
     eq(GK.VoteName("Hers-Realm", 1), true)
+    W.advance(10)
     W.takeSent()
     W.receive(GK, KARI, "Q;1")
     W.advance(1.5)
@@ -604,7 +609,10 @@ test("every message type survives the trip from my client to another", function(
     local GK, LIB = boot()
     LIB.roster[ME] = { rankIndex = 0 }
     local sent = {}
-    local function flush() for _, m in ipairs(W.takeSent()) do sent[#sent + 1] = m.text end end
+    local function flush()
+        W.advance(30)                       -- the queue lets two a second out
+        for _, m in ipairs(W.takeSent()) do sent[#sent + 1] = m.text end
+    end
     local n1 = GK.AddNote(GANK, "took my gold", "Scammer", "watch", { c = "ROGUE", r = "Orc", l = 60 })
     local n2 = GK.AddNote(NICE, "great healer", "Great healer", "kudos")
     local n3 = GK.AddNote("Old Foe-Realm", "gone again")
@@ -1297,6 +1305,7 @@ test("NotesBroadcast sends my own records two a second, never someone else's, ne
     W.advance(11)
     for i = 1, 5 do GK.AddNote("Player" .. i .. "-Realm", "my note " .. i) end
     W.receive(GK, KARI, msg("N", 1, GANK, 1, B, "", "", "", "", "", "Kari's note"))
+    W.advance(10)
     W.takeSent()
     eq(GK.NotesBroadcast(), true)
     W.advance(10)
@@ -1314,6 +1323,249 @@ test("NotesBroadcast sends my own records two a second, never someone else's, ne
     eq(#W.sent, 0)
     local GK2 = boot({ inGuild = false })
     eq(GK2.NotesBroadcast(), false, "outside a guild")
+end)
+
+-- ---------------------------------------------------------------------------
+-- The outbound queue, the limits, ownership and ties
+-- ---------------------------------------------------------------------------
+test("sync: live changes, a Q reply and a broadcast share one queue of two a second", function()
+    local GK = boot()
+    W.advance(11)
+    for i = 1, 30 do GK.AddNote("Player" .. i .. "-Realm", "note " .. i) end
+    W.takeSent()
+    for i = 31, 70 do GK.AddNote("Player" .. i .. "-Realm", "note " .. i) end
+    W.receive(GK, KARI, "Q;1")
+    W.advance(3)
+    GK.AddNote("Late Player-Realm", "typed meanwhile")
+    GK.NotesBroadcast()
+    W.advance(200)
+    local sent = W.takeSent()
+    local per = {}
+    for _, m in ipairs(sent) do per[m.at] = (per[m.at] or 0) + 1 end
+    for at, n in pairs(per) do assert(n <= 2, "at most 2 in one second, got " .. n .. " at " .. at) end
+    local all = {}
+    for _, m in ipairs(sent) do all[#all + 1] = m.text end
+    assert(table.concat(all, "\n"):find("typed meanwhile", 1, true), "the live change got out as well")
+end)
+
+test("sync: a broadcast while one is waiting is the same stream", function()
+    local GK = boot()
+    W.advance(11)
+    for i = 1, 6 do GK.AddNote("Player" .. i .. "-Realm", "note " .. i) end
+    W.advance(10)
+    W.takeSent()
+    eq(GK.NotesBroadcast(), true)
+    W.advance(1)
+    eq(GK.NotesBroadcast(), true, "merged")
+    W.advance(30)
+    eq(#W.takeSent(), 6, "each record once")
+    eq(GK.NotesBroadcast(), true, "and a new one once the first is done")
+    W.advance(30)
+    eq(#W.takeSent(), 6)
+end)
+
+test("sync: what waits for the old guild is not sent to the new one", function()
+    local GK = boot()
+    W.advance(11)
+    for i = 1, 10 do GK.AddNote("Player" .. i .. "-Realm", "note " .. i) end
+    W.advance(1)
+    eq(#W.takeSent(), 4)
+    -- the guild changes without a roster event: the send itself checks
+    W.guildKey = "Other-Realm"
+    W.advance(10)
+    eq(#W.takeSent(), 0, "the rest was meant for the first guild")
+    GK.AddNote("New Player-Realm", "in the new guild")
+    eq(#W.takeSent(), 1, "a change made here goes out")
+end)
+
+test("sync: a guild update that changes the guild clears the queue", function()
+    local GK, LIB = boot()
+    W.advance(11)
+    for i = 1, 10 do GK.AddNote("Player" .. i .. "-Realm", "note " .. i) end
+    W.takeSent()
+    W.guildKey = "Other-Realm"
+    LIB.fire("GUILD_ROSTER_UPDATE")
+    -- back in the first guild before the timers run: the cleared entries stay gone
+    W.guildKey = nil
+    LIB.fire("GUILD_ROSTER_UPDATE")
+    W.advance(20)
+    eq(#W.takeSent(), 0)
+    -- the same guild again clears nothing
+    GK.AddNote("Player 11-Realm", "x")
+    LIB.fire("PLAYER_GUILD_UPDATE")
+    W.advance(5)
+    eq(#W.takeSent(), 1)
+end)
+
+test("sync: nothing is sent at send time in test mode, whatever was queued", function()
+    local GK = boot()
+    W.advance(11)
+    for i = 1, 6 do GK.AddNote("Player" .. i .. "-Realm", "note " .. i) end
+    W.takeSent()
+    GK.testMode = true
+    W.advance(20)
+    eq(#W.takeSent(), 0)
+end)
+
+test("limits: deletion records count against 40 ids per author per player, and expired ones make room", function()
+    local GK = boot()
+    for i = 1, 50 do W.receive(GK, KARI, msg("N", 1, GANK, i, B + i, 1)) end
+    eq(count(GK.Person(GANK).notes[KARI]), 40, "the rest was turned away")
+    eq(GK.Person(GANK).notes[KARI][41], nil)
+    W.advance(31 * 24 * 3600)
+    W.receive(GK, KARI, msg("N", 1, GANK, 99, B + 31 * 24 * 3600, "", "", "", "", "", "fresh"))
+    eq(count(GK.Person(GANK).notes[KARI]), 40, "still 40")
+    eq(GK.Person(GANK).notes[KARI][1], nil, "the oldest expired one went")
+    eq(#GK.NotesOf(GANK), 1)
+end)
+
+test("limits: 5000 note ids in all, and a new one needs an expired deletion record to go", function()
+    local GK = boot()
+    for p = 1, 126 do
+        for i = 1, 40 do
+            GK.NotesPut.Note("Player" .. p .. "-Realm", KARI, i, { ts = B + i, del = true })
+        end
+    end
+    local n = 0
+    for _, person in pairs(GK.Store().people) do n = n + count(person.notes[KARI]) end
+    eq(n, 5000)
+    eq(GK.Person("Player126-Realm"), nil, "the 126th player got nothing")
+    eq(GK.NotesPut.Note("Other-Realm", EDVARD, 1, { text = "x", ts = B + 1 }), false, "full of young deletions")
+    W.advance(31 * 24 * 3600)
+    eq(GK.NotesPut.Note("Other-Realm", EDVARD, 1, { text = "x", ts = B + 31 * 24 * 3600 }), true)
+    n = 0
+    for _, person in pairs(GK.Store().people) do
+        for _, byId in pairs(person.notes) do n = n + count(byId) end
+    end
+    eq(n, 5000, "one in, one out")
+end)
+
+test("limits: at 500 people only one whose every record has expired is forgotten", function()
+    local GK = boot()
+    for i = 1, 500 do
+        assert(GK.NotesPut.Note("Player" .. i .. "-Realm", KARI, 1, { text = "n", ts = B + 1 }))
+    end
+    GK.NotesPut.Note("Player1-Realm", KARI, 1, { ts = B + 2, del = true })
+    eq(GK.NotesPut.Note("Newcomer-Realm", KARI, 1, { text = "n", ts = B + 3 }), false, "Player1's deletion is young")
+    assert(GK.Person("Player1-Realm"), "and kept")
+    W.advance(31 * 24 * 3600)
+    eq(GK.NotesPut.Note("Newcomer-Realm", KARI, 1, { text = "n", ts = B + 31 * 24 * 3600 }), true)
+    eq(GK.Person("Player1-Realm"), nil)
+    assert(GK.Person("Player2-Realm"), "a live one is never forgotten")
+end)
+
+test("a removed mark outlives its 30 days while its author still has a live note", function()
+    local GK = boot()
+    local month = 31 * 24 * 3600
+    W.receive(GK, KARI, msg("N", 1, GANK, 1, B, "", "", "", "", "", "ninja"))
+    W.receive(GK, KARI, msg("L", 1, GANK, "kudos", B + 1))
+    W.receive(GK, KARI, msg("L", 1, GANK, "", B + 2, 1))
+    eq(#GK.ListsOf(GANK).kos, 0, "the removed mark keeps them off Marked")
+    W.advance(month)
+    GK.PruneNotes()
+    eq(#GK.ListsOf(GANK).kos, 0, "still off Marked a month on")
+    assert(GK.Person(GANK).marks[KARI], "the tombstone was kept")
+    W.receive(GK, KARI, msg("N", 1, GANK, 1, B + month, 1))
+    W.advance(month)
+    GK.PruneNotes()
+    eq(GK.Person(GANK), nil, "with no note left it goes, mark and all")
+end)
+
+test("nice names: the earliest addition owns the name, the same on every client", function()
+    local function owner(first, second)
+        local GK = boot()
+        for _, m in ipairs({ first, second }) do W.receive(GK, m[1], msg("M", 1, NICE, m[2])) end
+        return GK, GK.Store().names[NICE].by
+    end
+    local a = { KARI, B + 10 }
+    local b = { EDVARD, B + 5 }
+    eq(select(2, owner(a, b)), EDVARD)
+    eq(select(2, owner(b, a)), EDVARD)
+    -- the same second: the lower key
+    local c, d = { KARI, B + 7 }, { EDVARD, B + 7 }
+    eq(select(2, owner(c, d)), EDVARD)
+    eq(select(2, owner(d, c)), EDVARD)
+    -- a later message from the loser is ignored, and only the owner removes the name
+    local GK = owner(a, b)
+    W.receive(GK, KARI, msg("M", 1, NICE, B + 50))
+    eq(GK.Store().names[NICE].by, EDVARD)
+    W.receive(GK, KARI, msg("M", 1, NICE, B + 60, 1))
+    eq(GK.Store().names[NICE].del, nil, "not hers to remove")
+    W.receive(GK, EDVARD, msg("M", 1, NICE, B + 70, 1))
+    eq(GK.Store().names[NICE].del, true)
+end)
+
+test("nice names: a new owner's own vote on the name stops counting", function()
+    local GK = boot()
+    W.receive(GK, KARI, msg("M", 1, NICE, B + 10))
+    W.receive(GK, EDVARD, msg("G", 1, NICE, 1, B + 11))
+    eq(GK.NameScore(NICE), 1)
+    W.receive(GK, EDVARD, msg("M", 1, NICE, B + 5))
+    eq(GK.Store().names[NICE].by, EDVARD)
+    eq(GK.NameScore(NICE), 0)
+end)
+
+test("votes that beat their note or name wait for it, a few and for ten minutes", function()
+    local GK = boot()
+    W.receive(GK, EDVARD, msg("V", 1, GANK, KARI, 7, 1, B + 3))
+    eq(GK.Person(GANK), nil, "a vote makes no player")
+    W.receive(GK, KARI, msg("N", 1, GANK, 7, B + 1, "", "", "", "", "", "ninja"))
+    eq(GK.NoteScore(GANK, KARI, 7), 1, "applied when the note came")
+    W.receive(GK, EDVARD, msg("G", 1, NICE, -1, B + 3))
+    W.receive(GK, KARI, msg("M", 1, NICE, B + 1))
+    eq(GK.NameScore(NICE), -1)
+    -- too late
+    W.receive(GK, EDVARD, msg("V", 1, "Slow-Realm", KARI, 7, 1, B + 3))
+    W.advance(11 * 60)
+    W.receive(GK, KARI, msg("N", 1, "Slow-Realm", 7, B + 1, "", "", "", "", "", "ninja"))
+    eq(GK.NoteScore("Slow-Realm", KARI, 7), 0, "it had expired")
+    -- a bounded set: the newest 200 are kept
+    for i = 1, 250 do W.receive(GK, EDVARD, msg("V", 1, "Held" .. i .. "-Realm", KARI, 7, 1, B + 3)) end
+    local applied = 0
+    for i = 1, 250 do
+        W.receive(GK, KARI, msg("N", 1, "Held" .. i .. "-Realm", 7, B + 1, "", "", "", "", "", "x"))
+        applied = applied + GK.NoteScore("Held" .. i .. "-Realm", KARI, 7)
+    end
+    eq(applied, 200)
+end)
+
+test("a vote on an imported note is kept here and never sent", function()
+    local GK = boot()
+    W.advance(11)
+    GK.NotesPut.Note(GANK, KARI, 5, { text = "imported", ts = B, imp = true })
+    GK.NotesPut.Note(GANK, KARI, 6, { text = "heard", ts = B })
+    W.takeSent()
+    eq(GK.VoteNote(GANK, KARI, 5, 1), true)
+    eq(GK.NoteScore(GANK, KARI, 5), 1)
+    W.advance(5)
+    eq(#W.takeSent(), 0)
+    eq(GK.VoteNote(GANK, KARI, 6, 1), true)
+    W.advance(5)
+    eq(#W.takeSent(), 1, "an ordinary one is")
+end)
+
+test("hide and show at the same second settle the same way on every client", function()
+    local function run(first, second)
+        local GK, LIB = boot()
+        LIB.roster[KARI] = { rankIndex = 0 }
+        LIB.roster[EDVARD] = { rankIndex = 0 }
+        W.receive(GK, KARI, msg("M", 1, NICE, B))
+        W.receive(GK, first[1], msg("H", 1, NICE, first[2], B + 10))
+        W.receive(GK, second[1], msg("H", 1, NICE, second[2], B + 10))
+        return GK.Store().names[NICE].hidden
+    end
+    local a, b = { EDVARD, 1 }, { KARI, 0 }
+    local h1, h2 = run(a, b), run(b, a)
+    eq(h1.by, h2.by)
+    eq(h1.on, h2.on)
+    eq(h1.by, KARI, "the higher key")
+    -- a later time still beats a higher key
+    local GK, LIB = boot()
+    LIB.roster[KARI] = { rankIndex = 0 }
+    LIB.roster[EDVARD] = { rankIndex = 0 }
+    W.receive(GK, KARI, msg("H", 1, NICE, 1, B + 10))
+    W.receive(GK, EDVARD, msg("H", 1, NICE, 0, B + 11))
+    eq(GK.Store().names[NICE].hidden.by, EDVARD)
 end)
 
 -- ---------------------------------------------------------------------------
