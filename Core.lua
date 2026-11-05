@@ -35,6 +35,13 @@ local defaults = {
     inspectTab = true,       -- a tab of ours on the game's Inspect window: a guildie's record, an enemy's poster
     sortMode = "default",    -- how the ledger's sortable pages order their rows: default, newest, oldest, name, votes
     mineOnly = false,        -- ...and whether they list only the rows that are yours
+    notesList = "kos",       -- the Notes page's list: kos, watch, kudos or names (NotesUI.lua)
+    noteAlerts = false,      -- warn when a player on Kill on sight is near
+    watchNearby = false,     -- one chat line when a player on your Watch list is near
+    watchGroup = true,       -- warn when a Watch list player joins your group
+    kudosGroup = true,       -- one friendly chat line when a Kudos player joins your group
+    plateNotes = true,       -- a small dim mark on the nameplate of a player you have notes on
+    alertStyle = "scroll",   -- every warning: "scroll" (the notice's red glow) or "raid" (a raid warning)
     guilds = {},             -- [guild key] = { board, orders, wanted, slain, feed, nextId } (Guild.lua)
 }
 -- This character's own record.

@@ -41,6 +41,7 @@ Post.lua
 Mail.lua
 Social.lua
 Profile.lua
+NotesUI.lua
 Inspect.lua
 MapPins.lua
 MapPins.xml

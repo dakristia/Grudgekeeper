@@ -98,7 +98,8 @@ end
 -- A client
 -- ---------------------------------------------------------------------------
 -- opts: me (default "Meyer-Realm"), inGuild (default true), guildGrudge (a GuildGrudgeDB to have), loaded
--- (is the GuildGrudge addon on; default: whether a GuildGrudgeDB was given).
+-- (is the GuildGrudge addon on; default: whether a GuildGrudgeDB was given), ui (also load NotesUI.lua, with
+-- the stand-ins in tests/ui_mock.lua).
 -- Returns GK and the LibForever stand-in. M.sent collects what the addon sent, M.printed what it printed.
 function M.boot(opts)
     opts = opts or {}
@@ -154,6 +155,8 @@ function M.boot(opts)
         local chunk = assert(loadfile(M.dir .. file))
         chunk("Grudgekeeper", GK)
     end
+    -- opts.ui: the ledger's side of the notes (NotesUI.lua), with stand-ins for the files it builds on
+    if opts.ui then require("ui_mock").load(M, GK) end
     -- The login handler in Core.lua starts every other part of the addon; none of them is loaded here.
     for _, name in ipairs({ "StartGuild", "StartSightings", "StartKills", "StartLetters", "StartMail",
             "StartSocial", "StartProfiles", "StartInspect", "StartMapPins", "RegisterOptions" }) do
