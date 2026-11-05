@@ -33,7 +33,10 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
   both lists, each with who put them there. Moving a player only moves your own mark.
 - **D6. Tags.** A note can carry one tag. Watch has preset tags (Ninja looter, Scammer, Toxic, Griefer,
   Leaver), Kudos has its own (Helpful, Kind, Skilled, Great healer, Great tank, Fair looter, Fun to group
-  with), and a player can type a custom one (at most 24 characters).
+  with), and a player can type a custom one (at most 24 characters). Every preset has an icon (Ninja looter a
+  rogue's stealth, Scammer a coin, Helpful a renew, and so on) and a custom tag gets a note. The data is in
+  `Notes.lua`; `GK.TagIcon(tag)` gives the texture path and `GK.TagText(tag, size)` the `|T...|t Tag` text
+  that every place a tag is shown uses (rows, cards, tooltip, warnings, menus, the note sheet's tag links).
 - **D7. Nice names.** A guild-shared list of funny character names, with no notes, alerts or orders.
   Only the player who added a name can remove it (D2). The guild master and officers can **hide** a name
   for everyone, for cleanup; a hidden name is still in the data and can be shown again. See Q6.
@@ -120,10 +123,11 @@ Every hook is small and named here, so a merge conflict is easy to resolve by re
 - **H2. Window.lua: a generic card.** `DetailCard` also accepts `{ kind = "card", make = fn }`, where `make`
   returns a card table in Profile.lua's shape.
 - **H3. Window.lua: sort and mine only.** `Refresh` passes each page's items through `GK.SortItems(items,
-  page)`, which applies the sort mode and Mine only for pages with `sortable = true`. The two controls
-  are Blizzard's own, so they look clickable: a `WowStyle1DropdownTemplate` dropdown (radios for Default,
-  Newest, Oldest, A-Z and Votes, its text "Sort: Newest") and a `UICheckButtonTemplate` check box, on a
-  row under the sub line, right-aligned; both are hidden on pages that are not sortable. Item tables gain two
+  page)`, which applies the sort mode and Mine only for pages with `sortable = true`. The control is
+  Blizzard's own, so it looks clickable: one `WowStyle1DropdownTemplate` dropdown on the title row,
+  right-aligned with the column headings (radios for Default, Newest, Oldest, A-Z and Votes, then a divider
+  and a "Mine only" checkbox; its text "Sort: Newest", or "Sort: Newest, mine" while Mine only is on). It is
+  hidden on pages that are not sortable. Item tables gain two
   optional fields, `ts` (a time to sort by) and `votes` (a score), and `mine` is set on more rows.
 - **H4. Profile.lua: show any card.** `GK.ShowCard(make)` opens the small card for a card table that
   `make()` builds, and refills it the same way as the poster and the record.

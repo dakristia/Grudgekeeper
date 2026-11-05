@@ -591,24 +591,11 @@ local function BuildList(page)
     -- the page's own links (the leaderboard's this week and all time), laid out from its links()
     page.links = {}
     for i = 1, 4 do page.links[i] = Link(function(self) self.click() end) end
-    -- Sort and Mine only are the game's own widgets, so they look clickable (ink links read as text), on
-    -- a row of their own under the sub line, right-aligned and above the column headings.
-    page.mine = CreateFrame("CheckButton", nil, page, "UICheckButtonTemplate")
-    page.mine:SetSize(24, 24)
-    local label = page.mine.Text or page.mine:CreateFontString(nil, "OVERLAY")
-    Ink(label, INK, TEXT_FONT, 11)
-    label:SetText("Mine only")
-    if not page.mine.Text then label:SetPoint("LEFT", page.mine, "RIGHT", 2, 0) end
-    -- the check box sits left of its label, so it starts the label's width in from the right edge
-    page.mine:SetPoint("TOPRIGHT", -(40 + 24 + math.ceil(TextWidth(label))), -66)
-    page.mine:SetScript("OnClick", function(self)
-        GK.db.mineOnly = self:GetChecked() and true or false
-        offset = 0
-        Refresh()
-    end)
+    -- Sort is the game's own dropdown, so it looks clickable (ink links read as text). It sits on the title
+    -- row, right-aligned with the column headings, and Mine only is a checkbox at the foot of its menu.
     page.sort = CreateFrame("DropdownButton", nil, page, "WowStyle1DropdownTemplate")
-    page.sort:SetWidth(110)
-    page.sort:SetPoint("RIGHT", page.mine, "LEFT", -6, 0)
+    page.sort:SetWidth(120)
+    page.sort:SetPoint("RIGHT", page, "TOPRIGHT", -40, -33)
     if page.sort.SetupMenu then
         -- one radio per mode; the mode we pass is what the game hands back to both functions
         page.sort:SetupMenu(function(_, root)
@@ -620,6 +607,12 @@ local function BuildList(page)
                         Refresh()
                     end, s[1])
             end
+            root:CreateDivider()
+            root:CreateCheckbox("Mine only", function() return GK.db.mineOnly == true end, function()
+                GK.db.mineOnly = not (GK.db.mineOnly == true)
+                offset = 0
+                Refresh()
+            end)
         end)
     end
     page.reset = page:CreateFontString(nil, "ARTWORK")    -- the links' tail, anchored after the last one shown
@@ -1153,12 +1146,12 @@ Refresh = function()
     list.sub:SetText(def.sub and def.sub(items) or "")
     local sortable = def.sortable == true
     list.sort:SetShown(sortable)
-    list.mine:SetShown(sortable)
-    list.mine:SetChecked(GK.db.mineOnly == true)
     if sortable then
         if list.sort.GenerateMenu then list.sort:GenerateMenu() end
-        -- the chosen mode's own name, led by what it is for ("Sort: Newest")
-        if list.sort.OverrideText then list.sort:OverrideText("Sort: " .. SortWord(GK.db.sortMode)) end
+        -- the chosen mode's own name, led by what it is for ("Sort: Newest"); ", mine" while Mine only is on
+        if list.sort.OverrideText then
+            list.sort:OverrideText("Sort: " .. SortWord(GK.db.sortMode) .. (GK.db.mineOnly == true and ", mine" or ""))
+        end
     end
     for i, fs in ipairs(list.heads) do
         local h = def.headings[i]
