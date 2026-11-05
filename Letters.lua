@@ -426,6 +426,30 @@ local function NoteContent(L)
     return "Order expired", p, closing, "seal_black", false, action
 end
 
+--- What a letter says, apart from how it is drawn (the Classic look draws the same, Classic/Letters.lua):
+--- { note (a small letter, else the scroll), title, name, info, lines, foot, seal, stamp, blood, buttons =
+--- { { text, fn } }, c, rf, sx, key, sample }. name, info, foot and stamp are the scroll's only.
+function GK.LetterContent(L)
+    local d = { c = L.c, rf = L.rf, sx = L.sx, key = L.n, sample = L.sample }
+    if not NOTE[L.kind] then
+        local title, name, info, body, foot, seal, stamp, buttons = ScrollContent(L)
+        d.title, d.name, d.info, d.lines, d.foot, d.seal, d.stamp, d.buttons = title, name, info, body, foot, seal,
+            stamp, buttons
+        return d
+    end
+    local title, paragraphs, closing, seal, blood, action = NoteContent(L)
+    local lines = {}
+    for i, text in ipairs(paragraphs) do lines[i] = text end
+    -- The closing line only on a short letter: a long one (a kill with revenge, a streak and a new title)
+    -- would push it into the seal and the signature.
+    if closing and #paragraphs <= 4 then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = closing[(L.id or 1) % #closing + 1]
+    end
+    d.note, d.title, d.lines, d.seal, d.blood, d.buttons = true, title, lines, seal, blood, { action }
+    return d
+end
+
 -- ---------------------------------------------------------------------------
 -- Shared bits of both views
 -- ---------------------------------------------------------------------------
@@ -603,7 +627,9 @@ end
 
 local function FillScroll(L)
     local f = scroll
-    local title, name, info, body, foot, seal, stamp, buttons = ScrollContent(L)
+    local d = GK.LetterContent(L)
+    local title, name, info, body, foot, seal, stamp, buttons = d.title, d.name, d.info, d.lines, d.foot, d.seal,
+        d.stamp, d.buttons
     -- "ORDER COMPLETE" fills the sheet at the size "KILL ORDER" wants
     Ink(f.title, BLOOD, TITLE_FONT, #title > 11 and 22 or 26)
     f.title:SetText(title)
@@ -811,18 +837,11 @@ end
 
 local function FillNote(L)
     local f = note
-    local title, paragraphs, closing, seal, blood, action = NoteContent(L)
-    f.title:SetText(title)
-    local text = table.concat(paragraphs, "\n")
-    -- The closing line only on a short letter: a long one (a kill with revenge, a streak and a new title)
-    -- would push it into the seal and the signature.
-    if closing and #paragraphs <= 4 then
-        local lines = closing
-        text = text .. "\n\n" .. lines[(L.id or 1) % #lines + 1]
-    end
-    f.body:SetText(text)
-    f.seal:SetTexture(MEDIA .. seal)
-    f.blood:SetShown(blood)
+    local d = GK.LetterContent(L)
+    f.title:SetText(d.title)
+    f.body:SetText(table.concat(d.lines, "\n"))
+    f.seal:SetTexture(MEDIA .. d.seal)
+    f.blood:SetShown(d.blood)
     local coords = L.c and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[L.c]
     f.badge:SetShown(coords ~= nil)
     f.badgeRing:SetShown(coords ~= nil)
@@ -830,7 +849,7 @@ local function FillNote(L)
         f.badge:SetTexture(CLASS_ICONS)
         f.badge:SetTexCoord(unpack(coords))
     end
-    SetButton(f.action, action, L, FillNote)
+    SetButton(f.action, d.buttons[1], L, FillNote)
     UpdatePager(f)
 end
 

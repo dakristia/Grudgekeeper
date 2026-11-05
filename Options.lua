@@ -6,6 +6,10 @@ local LIB = LibStub("LibForever-1.0")
 
 local category
 
+-- Extra sections from other files, each fn(f, anchor, helpers) -> the new bottom anchor. Defined here, at
+-- the top, so a file loaded after this one can append to it; Build calls them before Commands.
+GK.OptionSections = GK.OptionSections or {}
+
 local function Heading(parent, text)
     local fs = parent:CreateFontString(nil, "ARTWORK", "GameFontNormal")
     fs:SetText(text)
@@ -69,6 +73,11 @@ local HELP = {
 }
 
 local PAGE_HEIGHT = 1260
+-- Room for the sections other files add (GK.OptionSections), whose size we can't know here: about
+-- sixteen rows. Only added when there are any, so the page is as long as before without them.
+local SECTION_ROOM = 500
+
+local function PageHeight() return PAGE_HEIGHT + (#GK.OptionSections > 0 and SECTION_ROOM or 0) end
 
 -- Builds the page's contents on `panel` and returns its Refresh. Called the first time the page is
 -- shown, not at login: some twenty boxes with their closures, and the help text, are not worth
@@ -208,7 +217,11 @@ local function Build(panel)
     local mini = Box(guildBadge, "Show the minimap button", "On by default. Left-click opens Grudgekeeper, "
         .. "right-click these settings. /grudge does the same.", GK.SetMinimapShown)
 
-    local h6 = Section(mini, "Commands")
+    local bottom = mini
+    local helpers = { Section = Section, Check = Check, Box = Box, Note = Note, Info = Info }
+    for _, fn in ipairs(GK.OptionSections) do bottom = fn(f, bottom, helpers) or bottom end
+
+    local h6 = Section(bottom, "Commands")
     local cmds = Note(f, "|cffffd100/grudge|r opens the window: kill orders, the leaderboard, your grudges.\n"
         .. "|cffffd100/grudge post|r writes a kill order on your target.  |cffffd100/grudge letters|r reads your letters.\n"
         .. "|cffffd100/grudge test|r puts four sample letters in your pile, to see what they look like.\n"
@@ -223,7 +236,7 @@ local function Build(panel)
         if LIB.AddHelp and panel:GetTop() and cmds:GetBottom() then
             local y = -(panel:GetTop() - cmds:GetBottom()) - 24
             local bottom = LIB.AddHelp(panel, HELP, y)
-            panel:SetHeight(math.max(PAGE_HEIGHT, -bottom + 40))
+            panel:SetHeight(math.max(PageHeight(), -bottom + 40))
         end
     end
     return Refresh
@@ -232,7 +245,7 @@ end
 function GK.RegisterOptions()
     if category then return end
     local panel = CreateFrame("Frame")
-    panel:SetSize(572, PAGE_HEIGHT)
+    panel:SetSize(572, PageHeight())
     local Refresh                       -- made with the page, the first time it is shown
     local function OnShow()
         if not Refresh then Refresh = Build(panel) end
@@ -241,7 +254,7 @@ function GK.RegisterOptions()
     panel:SetScript("OnShow", OnShow)
 
     -- Blizzard's own settings frame, in a category of our own; the page scrolls.
-    local shown = LIB.PanelScroller and LIB.PanelScroller(panel, PAGE_HEIGHT) or panel
+    local shown = LIB.PanelScroller and LIB.PanelScroller(panel, PageHeight()) or panel
     shown.OnRefresh = OnShow
     if Settings and Settings.RegisterCanvasLayoutCategory then
         category = Settings.RegisterCanvasLayoutCategory(shown, "Grudgekeeper")

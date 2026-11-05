@@ -33,6 +33,15 @@ local defaults = {
     mapPins = true,          -- where an order's target was last seen, on the world map
     unitMenu = true,         -- our lines in the game's right-click menu on a player: profile, and kill order on an enemy
     inspectTab = true,       -- a tab of ours on the game's Inspect window: a guildie's record, an enemy's poster
+    sortMode = "default",    -- how the ledger's sortable pages order their rows: default, newest, oldest, name, votes
+    mineOnly = false,        -- ...and whether they list only the rows that are yours
+    look = "ledger",         -- "ledger" (the book) or "classic" (Guild Grudge's standard game frames, Classic/)
+    noteAlerts = false,      -- warn when a player on your Marked list is near
+    watchNearby = false,     -- one chat line when a player on your Shame list is near
+    watchGroup = true,       -- warn when a Shame list player joins your group
+    kudosGroup = true,       -- one friendly chat line when a Kudos player joins your group
+    plateNotes = true,       -- a small dim mark on the nameplate of a player you have notes on
+    alertStyle = "scroll",   -- every warning: "scroll" (the notice's red glow) or "raid" (a raid warning)
     guilds = {},             -- [guild key] = { board, orders, wanted, slain, feed, nextId } (Guild.lua)
 }
 -- This character's own record.

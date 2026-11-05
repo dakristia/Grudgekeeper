@@ -33,22 +33,30 @@ local function Box(parent, width, digits)
     return e
 end
 
-local pot             -- set when the sheet adds to someone else's open order instead of writing a new one
+local plan            -- GK.PostPlan of the target: pot is set when the sheet adds to someone else's open order
+
+--- Sealing the sheet (for any look): adds to the plan's pot, or posts the order. plan: the one the sheet
+--- was opened with (default: worked out now). False, and a line in chat, when the order couldn't be posted.
+function GK.PostSubmit(t, copper, note, plan)
+    plan = plan or GK.PostPlan(t)
+    if plan.pot then
+        GK.Contribute(plan.pot, copper)
+    else
+        local o, why = GK.PostOrder(t, copper, note)
+        if not o then
+            print(GK.TAG .. ": " .. (why or "the order couldn't be posted."))
+            return false
+        end
+    end
+    GK.Sound("IG_QUEST_LIST_OPEN")
+    return true
+end
 
 local function Seal()
     local gold = tonumber(frame.gold:GetText()) or 0
     local silver = tonumber(frame.silver:GetText()) or 0
     local copper = gold * 10000 + silver * 100
-    if pot then
-        GK.Contribute(pot, copper)
-    else
-        local o, why = GK.PostOrder(target, copper, frame.note:GetText())
-        if not o then
-            print(GK.TAG .. ": " .. (why or "the order couldn't be posted."))
-            return
-        end
-    end
-    GK.Sound("IG_QUEST_LIST_OPEN")
+    if not GK.PostSubmit(target, copper, frame.note:GetText(), plan) then return end
     frame:Hide()
     GK.OpenWindow(1)
 end
@@ -155,42 +163,57 @@ function GK.PostLabel(t)
     return "Post a kill order"
 end
 
---- Open the sheet for a target: { key, guid, c, r, l }. Three ways it can go:
----   you have an open order on them   it is filled in, and sealing changes it
----   a guildie has one                the sheet adds your share to THEIR pot - one order, one pot,
+--- Which of the sheet's three ways it goes for a target { key, guid, c, r, l }, and what it says:
+---   you have an open order on them   "change": it is filled in, and sealing changes it
+---   a guildie has one                "pot": the sheet adds your share to THEIR pot - one order, one pot,
 ---                                    rather than two orders racing for the same kill
----   nobody has                       a new order
+---   nobody has                       "new": a new order
+--- Returns { case, pot (the order whose pot it is, for "pot"), mine, title, bounty (the label), small (the
+--- explanation), button, amount (copper, to start with), note (to start with), asksWhy (it takes a note) }.
+function GK.PostPlan(t)
+    local mine, theirs, me = Orders(t)
+    local pot = (not mine) and theirs or nil
+    local p = { pot = pot, mine = mine }
+    if pot then
+        local total, backers = GK.Pot(pot)
+        p.case = "pot"
+        p.title, p.bounty = "ADD TO THE POT", "Your share"
+        p.small = ("%s already has an order on them: %s%s. Your share goes on top, and you pay it "
+            .. "to whoever fulfils it."):format(GK.Show(pot.by), GK.MoneyText(total),
+            backers > 0 and (" from %d backer%s and them"):format(backers, backers == 1 and "" or "s") or "")
+        p.button = "Add it"
+        p.amount = pot.pot and pot.pot[me] or 0
+    else
+        p.case = mine and "change" or "new"
+        p.title, p.bounty = "KILL ORDER", "Bounty"
+        p.small = "No gold is taken now. Whoever fulfils the order is owed the bounty, and you pay them "
+            .. "by mail. The order runs for a week."
+        p.button = mine and "Change it" or "Seal it"
+        p.amount = mine and mine.reward or 0
+    end
+    p.asksWhy = not pot
+    p.note = mine and mine.note or ""
+    return p
+end
+
+--- Open the sheet for a target: { key, guid, c, r, l }. Three ways it can go (see GK.PostPlan).
 function GK.OpenPost(t)
     if not (t and t.key) then return end
     if not frame then Build() end
     target = t
-    local mine, theirs, me = Orders(t)
-    pot = (not mine) and theirs or nil
+    plan = GK.PostPlan(t)
     frame.name:SetText(GK.Show(t.key))
     frame.info:SetText(GK.Describe(t.l, t.c, t.r))
-    local amount
-    if pot then
-        local total, backers = GK.Pot(pot)
-        frame.title:SetText("ADD TO THE POT")
-        frame.bounty:SetText("Your share")
-        frame.small:SetText(("%s already has an order on them: %s%s. Your share goes on top, and you pay it "
-            .. "to whoever fulfils it."):format(GK.Show(pot.by), GK.MoneyText(total),
-            backers > 0 and (" from %d backer%s and them"):format(backers, backers == 1 and "" or "s") or ""))
-        frame.seal:SetText("Add it")
-        amount = pot.pot and pot.pot[me] or 0
-    else
-        frame.title:SetText("KILL ORDER")
-        frame.bounty:SetText("Bounty")
-        frame.small:SetText("No gold is taken now. Whoever fulfils the order is owed the bounty, and you pay them "
-            .. "by mail. The order runs for a week.")
-        frame.seal:SetText(mine and "Change it" or "Seal it")
-        amount = mine and mine.reward or 0
-    end
-    frame.why:SetShown(not pot)
-    frame.note:SetShown(not pot)
+    frame.title:SetText(plan.title)
+    frame.bounty:SetText(plan.bounty)
+    frame.small:SetText(plan.small)
+    frame.seal:SetText(plan.button)
+    local amount = plan.amount
+    frame.why:SetShown(plan.asksWhy)
+    frame.note:SetShown(plan.asksWhy)
     frame.gold:SetText(amount >= 10000 and tostring(math.floor(amount / 10000)) or "")
     frame.silver:SetText(amount % 10000 >= 100 and tostring(math.floor(amount / 100) % 100) or "")
-    frame.note:SetText(mine and mine.note or "")
+    frame.note:SetText(plan.note)
     frame:Show()
     frame:Raise()
 end
