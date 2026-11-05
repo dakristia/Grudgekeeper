@@ -1,7 +1,7 @@
 -- Grudgekeeper - the Classic look: the window, the way Guild Grudge's is made. The same pages as the
 -- ledger (GK.LedgerPages, so a page another file adds is here too), the same rows (the page's items()
 -- through GK.SortItems) and the same card for the chosen row (GK.LedgerCard); only the drawing differs:
--- tabs along the bottom (the first four on the left, the pages added after them on the right), a search
+-- tabs along the bottom (the pages with side = "right" in a group on the right, the rest on the left), a search
 -- box, a sort menu and Mine only for the pages that can be sorted, the rows in a scrolling list and the
 -- chosen row's card in a panel on the right.
 local ADDON, GK = ...
@@ -11,7 +11,6 @@ local C = GK.Classic
 local NAME = "GrudgekeeperClassicWindow"
 local ROW_H = 40
 local LIST_W = 340
-local LEFT_TABS = 4                       -- the owner's four; pages added after them go on the right
 local TOP = 82                            -- where the list and the detail start, down from the window's top
 local SORTS = { { "default", "Default" }, { "newest", "Newest" }, { "oldest", "Oldest" }, { "name", "A-Z" },
     { "votes", "Votes" } }
@@ -226,16 +225,19 @@ local function BuildButtons(f)
     f.settings:SetScript("OnClick", function() if GK.OpenOptions() then f:Hide() end end)
 end
 
--- PanelTemplates_SetNumTabs chains every tab to the one before it, so the pages added after the owner's four
--- would sit beside them. This pins that right group to the bottom right corner instead; the chained
--- anchors go first, or they would fight the new ones. Guild Grudge's window does the same.
+-- PanelTemplates_SetNumTabs chains every tab to the one before it, so the pages with side = "right" would
+-- sit beside the others. This pins that group to the bottom right corner instead; the chained anchors go
+-- first, or they would fight the new ones. Guild Grudge's window does the same.
 local function AnchorRightTabs(tabs)
-    local n = #tabs
-    if n <= LEFT_TABS then return end
-    for i = LEFT_TABS + 1, n do tabs[i]:ClearAllPoints() end
-    tabs[n]:SetPoint("TOPRIGHT", win, "BOTTOMRIGHT", -5, 2)
-    for i = n - 1, LEFT_TABS + 1, -1 do
-        tabs[i]:SetPoint("TOPRIGHT", tabs[i + 1], "TOPLEFT", -3, 0)
+    local right = {}
+    for _, t in ipairs(tabs) do
+        if t.side == "right" then right[#right + 1] = t end
+    end
+    if #right == 0 then return end
+    for _, t in ipairs(right) do t:ClearAllPoints() end
+    right[#right]:SetPoint("TOPRIGHT", win, "BOTTOMRIGHT", -5, 2)
+    for i = #right - 1, 1, -1 do
+        right[i]:SetPoint("TOPRIGHT", right[i + 1], "TOPLEFT", -3, 0)
     end
 end
 
@@ -252,6 +254,7 @@ local function BuildTabs(f)
         tabs[i] = t
         t:SetID(i)
         t:SetText(def.name)
+        t.side = def.side
         if i == 1 then t:SetPoint("TOPLEFT", f, "BOTTOMLEFT", 5, 2) end
         t:SetScript("OnClick", function(self) SelectTab(self:GetID()) end)
     end

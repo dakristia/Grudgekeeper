@@ -1,5 +1,6 @@
 -- Grudgekeeper - the window (/grudge, the minimap button): the Grudgekeeper's ledger, an open book.
---   Leather tabs on top, one per page of GK.LedgerPages: Kill orders, Leaderboard, Grudges, News.
+--   Leather tabs on top, one per page of GK.LedgerPages: Kill orders, Leaderboard, Grudges, News and
+--   Kill on sight over the left page; Watch, Kudos and Names over the right page (NotesUI.lua).
 --   The left page is that page's table; the right page is the row you clicked - an enemy's wanted
 --   poster, a guildie's record (Profile.lua writes both, for the small cards and for here).
 -- Folded by the bookmark on its right edge, the ledger is one page: the table, and a click on a row
@@ -45,7 +46,8 @@ local PAGE_W = (OPEN.gutter - OPEN.left) * W_OPEN    -- ~368
 local PAGE_H = (OPEN.bottom - OPEN.top) * OPEN.H     -- ~496
 local GUTTER_X = OPEN.gutter * W_OPEN                -- where the right page starts, ~409
 Fit(SINGLE, PAGE_W / (SINGLE.right - SINGLE.left))   -- ~463 x ~566, the hole ~34 across
-OPEN.stop = GUTTER_X - 30                            -- open, the tabs stay over the left page
+OPEN.stopRight = OPEN.stop                           -- open, the right group may run to the iron...
+OPEN.stop = GUTTER_X - 30                            -- ...and the left group stays over the left page
 OPEN.x2, SINGLE.x2 = GUTTER_X, SINGLE.x              -- where the right-hand (or only) page starts
 -- The other look, to compare (GK.db.ledgerLook = "frame", switched from /grudge debug): the same pages
 -- on a plain sheet (Media/sheet_wide, sheet_single) in Blizzard's own SettingsFrameTemplate, which
@@ -54,6 +56,7 @@ OPEN.x2, SINGLE.x2 = GUTTER_X, SINGLE.x              -- where the right-hand (or
 local FX, FY, FGAP, FB = 20, 34, 16, 14
 local FRAME = { W = 2 * FX + 2 * PAGE_W + FGAP, H = FY + PAGE_H + FB, x = FX, y = FY, cover = 0 }
 FRAME.x2, FRAME.stop = FX + PAGE_W + FGAP, FX + PAGE_W
+FRAME.stopRight = FRAME.W - 34                       -- clear of Blizzard's X in the corner
 local FRAME_FOLDED = { W = 2 * FX + PAGE_W, H = FRAME.H, x = FX, y = FY, x2 = FX, cover = 0 }
 FRAME_FOLDED.stop = FRAME_FOLDED.W - 34              -- clear of Blizzard's X in the corner
 local ROW_H, ROWS = 32, 9
@@ -235,8 +238,11 @@ end
 
 --- The ledger's pages, in tab order; other files add theirs with GK.AddLedgerPage. A page is
 --- { name, items = fn -> items, empty text, headings, sub = fn(items) -> text, links = fn -> { { text, on,
---- click } }, linksTail = fn -> text, sortable, default = fn(items) -> the row chosen when none is }.
+--- click } }, linksTail = fn -> text, sortable, side, default = fn(items) -> the row chosen when none is }.
 --- headings: the column headings over the table, { text, x, justify }. links: ink links under the title.
+--- side: "right" puts the tab over the right page in the open book (the friendly lists); anything else is
+--- over the left page. Folded, all the tabs share one row. A page with links and a sub line has the sub
+--- text after the links, on their line.
 GK.LedgerPages = {
     { name = "Kill orders", items = OrderItems,
       headings = { { "Name", 48 }, { "Bounty", COL_RIGHT, "RIGHT" } }, sortable = true,
@@ -275,6 +281,13 @@ end
 
 local SORTS = { { "default", "Default" }, { "newest", "Newest" }, { "oldest", "Oldest" }, { "name", "A-Z" },
     { "votes", "Votes" } }
+
+local function SortWord(mode)
+    for _, s in ipairs(SORTS) do
+        if s[1] == mode then return s[2] end
+    end
+    return SORTS[1][2]
+end
 
 --- A page's rows in the order GK.db.sortMode asks for, and only yours with GK.db.mineOnly. Sorting or
 --- filtering drops the header rows and sorts the rest together; the page's own order, without Mine only,
@@ -578,22 +591,36 @@ local function BuildList(page)
     -- the page's own links (the leaderboard's this week and all time), laid out from its links()
     page.links = {}
     for i = 1, 4 do page.links[i] = Link(function(self) self.click() end) end
-    -- the sort links and Mine only, on a row of their own under the sub line, right-aligned
-    local function SortLink(text, click)
-        local b = Link(click)
-        b.label = text
-        b:Set(text, false)
-        b:SetWidth(math.ceil(b.text:GetStringWidth() or 40) + 2)
-        return b
-    end
-    page.mine = SortLink("Mine only", function() GK.db.mineOnly = not GK.db.mineOnly end)
-    page.mine:SetPoint("TOPRIGHT", -40, -70)
-    page.sorts = {}
-    for i = #SORTS, 1, -1 do                      -- from the right, each to the left of the one after
-        local s = SORTS[i]
-        page.sorts[i] = SortLink(s[2], function() GK.db.sortMode = s[1] end)
-        page.sorts[i].mode = s[1]
-        page.sorts[i]:SetPoint("RIGHT", i == #SORTS and page.mine or page.sorts[i + 1], "LEFT", -8, 0)
+    -- Sort and Mine only are the game's own widgets, so they look clickable (ink links read as text), on
+    -- a row of their own under the sub line, right-aligned and above the column headings.
+    page.mine = CreateFrame("CheckButton", nil, page, "UICheckButtonTemplate")
+    page.mine:SetSize(24, 24)
+    local label = page.mine.Text or page.mine:CreateFontString(nil, "OVERLAY")
+    Ink(label, INK, TEXT_FONT, 11)
+    label:SetText("Mine only")
+    if not page.mine.Text then label:SetPoint("LEFT", page.mine, "RIGHT", 2, 0) end
+    -- the check box sits left of its label, so it starts the label's width in from the right edge
+    page.mine:SetPoint("TOPRIGHT", -(40 + 24 + math.ceil(TextWidth(label))), -66)
+    page.mine:SetScript("OnClick", function(self)
+        GK.db.mineOnly = self:GetChecked() and true or false
+        offset = 0
+        Refresh()
+    end)
+    page.sort = CreateFrame("DropdownButton", nil, page, "WowStyle1DropdownTemplate")
+    page.sort:SetWidth(110)
+    page.sort:SetPoint("RIGHT", page.mine, "LEFT", -6, 0)
+    if page.sort.SetupMenu then
+        -- one radio per mode; the mode we pass is what the game hands back to both functions
+        page.sort:SetupMenu(function(_, root)
+            for _, s in ipairs(SORTS) do
+                root:CreateRadio(s[2], function(mode) return (GK.db.sortMode or "default") == mode end,
+                    function(mode)
+                        GK.db.sortMode = mode
+                        offset = 0
+                        Refresh()
+                    end, s[1])
+            end
+        end)
     end
     page.reset = page:CreateFontString(nil, "ARTWORK")    -- the links' tail, anchored after the last one shown
     Ink(page.reset, FADED, TEXT_FONT, 11)
@@ -850,23 +877,38 @@ local function BuildFrame()
     win.frame = f
 end
 
---- Sizes the tabs to fit left of `stop`. The row is only so wide (the page, short of the top-right iron),
+--- Sizes a group of tabs to fit in `room`. The row is only so wide (a page, short of the top-right iron),
 --- and every page another file adds makes it longer, so the labels step down a point at a time, with
---- their padding, until it fits (or reach TAB_FONT_MIN).
-local function FitTabs(stop)
+--- their padding, until it fits (or reach TAB_FONT_MIN). Each group takes its own size: the right group
+--- is short and keeps the full type while the left one steps down.
+local function FitTabs(tabs, room)
     local size = TAB_FONT
     while true do
         local x = 0
         local pad = math.floor(TAB_PAD * size / TAB_FONT + 0.5)
-        for _, t in ipairs(win.tabs) do
+        for _, t in ipairs(tabs) do
             t.label:SetFont(TITLE_FONT, size, "")
             t.w = math.ceil(t.label:GetStringWidth() or 60) + pad
             t.dx = x
             t:SetWidth(t.w)
             x = x + t.w + 4
         end
-        if size <= TAB_FONT_MIN or 8 + x - 4 <= stop then return end
+        if size <= TAB_FONT_MIN or x - 4 <= room then return end
         size = size - 1
+    end
+end
+
+--- Places a group of tabs along the book's top edge, as far in as they fit: from `want` if there is room,
+--- else pushed left, but never left of `least` nor past `stop`. They come out from under the cover's top
+--- edge. The labels' real widths decide (in the preview's stand-in font, News ran under the iron).
+local function PlaceTabs(tabs, want, least, stop, cover)
+    if #tabs == 0 then return end
+    FitTabs(tabs, stop - least)
+    local last = tabs[#tabs]
+    local x = math.max(least, math.min(want, stop - last.dx - last.w))
+    for _, t in ipairs(tabs) do
+        t:ClearAllPoints()
+        t:SetPoint("BOTTOMLEFT", win, "TOPLEFT", x + t.dx, -(cover + 8))
     end
 end
 
@@ -887,15 +929,15 @@ local function Layout()
     win.list:SetPoint("TOPLEFT", b.x, -b.y)
     win.detail:ClearAllPoints()
     win.detail:SetPoint("TOPLEFT", folded and b.x or b.x2, -b.y)
-    -- over the (left) page, as far in as they fit, coming out from under the cover's top edge; the
-    -- labels' real widths decide (in the preview's stand-in font, News ran under the iron)
-    FitTabs(b.stop)
-    local last = win.tabs[#win.tabs]
-    local x = math.max(8, math.min(b.x + 12, b.stop - last.dx - last.w))
+    -- Two groups in the open book: the enemy's pages over the left page, the friendly ones (side = "right")
+    -- over the right page, from just inside its left edge to the iron. Folded there is one page, one row.
+    local left, right = {}, {}
     for _, t in ipairs(win.tabs) do
-        t:ClearAllPoints()
-        t:SetPoint("BOTTOMLEFT", win, "TOPLEFT", x + t.dx, -(b.cover + 8))
+        local into = (not folded and t.side == "right") and right or left
+        into[#into + 1] = t
     end
+    PlaceTabs(left, b.x + 12, 8, b.stop, b.cover)
+    if b.stopRight then PlaceTabs(right, b.x2 + 12, b.x2 + 4, b.stopRight, b.cover) end
     -- the close button fills its socket; the cross sits inside it, clear of the rim
     if b.close then
         local hole = b.close[3]
@@ -965,7 +1007,7 @@ local function Build()
     win.detail:SetFrameLevel(level + 3)
     win.detail:SetSize(PAGE_W, PAGE_H)
     BuildDetail(win.detail)
-    -- Layout places the tabs, over the left page as far in as they fit
+    -- Layout places the tabs, each group over its page as far in as it fits
     win.tabs = {}
     local x = 0
     for i, def in ipairs(GK.LedgerPages) do
@@ -980,6 +1022,7 @@ local function Build()
         t:SetWidth(w)
         t:SetHeight(TAB_H)
         t.art = TabArt(t, TAB_H_ON)
+        t.side = def.side
         t.dx, t.w = x, w
         t:SetScript("OnClick", function() SelectTab(i) end)
         win.tabs[i] = t
@@ -1063,14 +1106,23 @@ Refresh = function()
     list.reset:ClearAllPoints()
     if last then list.reset:SetPoint("LEFT", last, "RIGHT", 4, 0) end
     list.reset:SetText(last and def.linksTail and def.linksTail() or "")
-    list.sub:SetText(def.sub and def.sub(items) or "")
-    local sortable, mode = def.sortable == true, GK.db.sortMode or "default"
-    for _, b in ipairs(list.sorts) do
-        b:SetShown(sortable)
-        b:Set(b.label, b.mode == mode)
+    list.sub:ClearAllPoints()
+    if last then
+        -- on the links' line, after the tail if there is one; under them it ran into the links
+        list.sub:SetPoint("LEFT", list.reset:GetText() ~= "" and list.reset or last, "RIGHT", 10, 0)
+    else
+        list.sub:SetPoint("TOPLEFT", 48, -52)
     end
+    list.sub:SetText(def.sub and def.sub(items) or "")
+    local sortable = def.sortable == true
+    list.sort:SetShown(sortable)
     list.mine:SetShown(sortable)
-    list.mine:Set("Mine only", GK.db.mineOnly == true)
+    list.mine:SetChecked(GK.db.mineOnly == true)
+    if sortable then
+        if list.sort.GenerateMenu then list.sort:GenerateMenu() end
+        -- the chosen mode's own name, led by what it is for ("Sort: Newest")
+        if list.sort.OverrideText then list.sort:OverrideText("Sort: " .. SortWord(GK.db.sortMode)) end
+    end
     for i, fs in ipairs(list.heads) do
         local h = def.headings[i]
         fs:ClearAllPoints()
