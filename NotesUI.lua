@@ -30,7 +30,7 @@ local COLOUR = { kos = "c8281e", watch = "ffcc00", kudos = "4dff66" }
 local NEAR_GAP = 90                      -- the same player warns you at most this often
 local MAX_CARD_LINES = 9                 -- what the ledger's card has room for
 local CARD_NOTES = 5                     -- notes on a card before "and 3 more"
-local MENU_NOTES = 10                    -- notes a menu lists to vote on or delete
+local MENU_NOTES = 10                    -- notes a menu lists at once to vote on or delete; more go in submenus of this many
 
 local function Plural(n, word) return ("%d %s%s"):format(n, word, n == 1 and "" or "s") end
 
@@ -192,21 +192,33 @@ function GK.NoteMenu(root, key)
     local theirs, mine = {}, {}
     for _, n in ipairs(GK.NotesOf(key)) do
         local into = n.mine and mine or theirs
-        if #into < MENU_NOTES then into[#into + 1] = n end
+        into[#into + 1] = n
     end
     local function Label(n) return n.text and Short(n.text, 36) or ("[" .. (n.tag and GK.TagText(n.tag, 12) or "?") .. "]") end
+    -- Every note can be reached: a few go straight in the menu, more are split into "Notes 1-10", "Notes 11-20"...
+    local function EachNote(parent, notes, add)
+        if #notes <= MENU_NOTES then
+            for _, n in ipairs(notes) do add(parent, n) end
+            return
+        end
+        for first = 1, #notes, MENU_NOTES do
+            local last = math.min(first + MENU_NOTES - 1, #notes)
+            local page = parent:CreateButton(("Notes %d-%d"):format(first, last))
+            for i = first, last do add(page, notes[i]) end
+        end
+    end
     if #theirs > 0 then
         local vote = root:CreateButton("Vote on a note")
-        for _, n in ipairs(theirs) do
-            local sub = vote:CreateButton(Who(n.author) .. ": " .. Label(n))
+        EachNote(vote, theirs, function(parent, n)
+            local sub = parent:CreateButton(Who(n.author) .. ": " .. Label(n))
             if n.myVote ~= 1 then sub:CreateButton("Up", function() GK.VoteNote(key, n.author, n.id, 1) end) end
             if n.myVote ~= -1 then sub:CreateButton("Down", function() GK.VoteNote(key, n.author, n.id, -1) end) end
             if n.myVote ~= 0 then sub:CreateButton("Take back", function() GK.VoteNote(key, n.author, n.id, 0) end) end
-        end
+        end)
     end
     if #mine > 0 then
         local del = root:CreateButton("Delete my note")
-        for _, n in ipairs(mine) do del:CreateButton(Label(n), function() GK.DeleteNote(key, n.id) end) end
+        EachNote(del, mine, function(parent, n) parent:CreateButton(Label(n), function() GK.DeleteNote(key, n.id) end) end)
     end
     if IsEnemy(key, p) then
         root:CreateButton("Open their poster", function() GK.ShowPoster({ key = key, c = p.c, r = p.r, l = p.l }) end)
@@ -274,6 +286,16 @@ local EMPTY = {
     names = "No nice names yet. Right-click a player with a funny character name and pick Add to nice names.",
 }
 
+--- Did I vote, one way or the other, on a note of this player's? Mine only keeps such a row (D9).
+local function VotedOn(p)
+    local me = LIB.Me()
+    for _, group in pairs(p.votes) do
+        local vote = me and group[me]
+        if vote and vote.v ~= 0 then return true end
+    end
+    return false
+end
+
 --- The rows of one list, and the text for when there are none. list: kos, watch, kudos or names.
 function GK.NotesItems(list)
     local items = {}
@@ -285,7 +307,8 @@ function GK.NotesItems(list)
             items[#items + 1] = { key = "nn:" .. r.key, name = GK.Show(r.key), faded = r.hidden or nil,
                 face = { c = n.c, rf = n.rf, sx = n.sx },
                 sub = (r.hidden and "hidden - " or "") .. "added by " .. (r.by and Who(r.by) or "someone"),
-                right = r.score ~= 0 and ScoreText(r.score) or "", ts = r.ts, votes = r.score, own = r.mine or nil,
+                right = r.score ~= 0 and ScoreText(r.score) or "", ts = r.ts, votes = r.score,
+                own = (r.mine or r.myVote ~= 0) or nil,
                 select = { kind = "card", make = function() return GK.NameCard(r.key) end } }
         end
         return items, EMPTY.names
@@ -303,7 +326,7 @@ function GK.NotesItems(list)
         local key = e.key
         items[#items + 1] = { key = "p:" .. key, name = GK.Show(key), face = { c = p.c, rf = p.rf, sx = p.sx },
             sub = table.concat(bits, " - "), right = e.score ~= 0 and ScoreText(e.score) or "", ts = e.ts,
-            votes = e.score, own = e.mine or nil,
+            votes = e.score, own = (e.mine or VotedOn(p)) or nil,
             select = { kind = "card", make = function() return GK.NoteCard(key, list) end } }
     end
     -- the page's own order: the newest news first
@@ -457,7 +480,7 @@ local function LayoutSheet()
 end
 
 local function BuildSheet()
-    local f = CreateFrame("Frame", "GrudgekeeperNote", UIParent)
+    local f = CreateFrame("Frame", "GrudgekeeperNoteSheet", UIParent)
     f:SetSize(SHEET_W, SHEET_H)
     f:SetPoint("CENTER", 0, 80)
     f:SetFrameStrata("DIALOG")
@@ -558,7 +581,7 @@ local function BuildSheet()
     wax:SetPoint("BOTTOMRIGHT", -20, 12)
 
     f:Hide()
-    if LIB.RegisterPopup then LIB.RegisterPopup(f) else tinsert(UISpecialFrames, "GrudgekeeperNote") end
+    if LIB.RegisterPopup then LIB.RegisterPopup(f) else tinsert(UISpecialFrames, "GrudgekeeperNoteSheet") end
     sheet = f
 end
 
@@ -763,7 +786,8 @@ end
 local function Nearby(key, s)
     local kos, watch = #s.lists.kos > 0, #s.lists.watch > 0
     local warn = kos and GK.db.noteAlerts
-    local line = not kos and watch and GK.db.watchNearby
+    -- the Shame line stands in only when the Marked warning will not run (a player can be on both lists)
+    local line = not warn and watch and GK.db.watchNearby
     if not (warn or line) then return end
     local now = GetTime()
     if nearAt[key] and now - nearAt[key] < NEAR_GAP then return end
