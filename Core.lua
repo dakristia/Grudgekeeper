@@ -35,6 +35,7 @@ local defaults = {
     inspectTab = true,       -- a tab of ours on the game's Inspect window: a guildie's record, an enemy's poster
     sortMode = "default",    -- how the ledger's sortable pages order their rows: default, newest, oldest, name, votes
     mineOnly = false,        -- ...and whether they list only the rows that are yours
+    look = "ledger",         -- "ledger" (the book) or "classic" (Guild Grudge's standard game frames, Classic/)
     guilds = {},             -- [guild key] = { board, orders, wanted, slain, feed, nextId } (Guild.lua)
 }
 -- This character's own record.
