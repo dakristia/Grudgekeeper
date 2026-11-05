@@ -43,8 +43,11 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
   sense (kill orders, grudges, news, notes). The leaderboard keeps its rank order. "Mine only" keeps the
   rows you wrote, posted, took, fulfilled or voted on.
 - **D10. Noted players are highlighted quietly, and alert only if asked.** A player with notes and no
-  kill order gets a small, dim mark on their nameplate and a tooltip line. They raise the "is near"
-  warning only when a setting turns that on (off by default).
+  kill order gets a small, dim mark on their nameplate (left of where a kill order's seal sits: a cross
+  for Kill on sight, an exclamation for Watch, a tick for Kudos) and a tooltip line. An enemy's existing
+  Grudge line gets the list and the note count added; anyone else gets a line of their own. They raise
+  the "is near" warning only when a setting turns that on (off by default); a Watch player nearby is one
+  chat line, also off by default; Kudos is never announced. At most one warning per player every 90 seconds.
 - **D11. Group-join warnings.** When someone on your Watch list joins your group you get a warning, the
   same way Grudgekeeper warns about a target nearby. A Kudos player joining gets one friendly chat line.
   Both are settings.
@@ -124,10 +127,30 @@ Every hook is small and named here, so a merge conflict is easy to resolve by re
   functions the drawing code calls.
 - **H7. Wrapped functions.** Some features wrap a `GK.*` function at load time rather than editing it:
   `GK.PosterCard` and `GK.RecordCard` (notes on the card), `GK.TooltipLine` (notes on an enemy's tooltip),
-  `GK.Warn` (alert style, D13), `SlashCmdList.GRUDGEKEEPER` (the new subcommands), and in the Classic look
+  `GK.Warn` (alert style, D13), `SlashCmdList.GRUDGEKEEPER` (the new subcommands; anything it does not know
+  goes to the original, whose help gets our lines below it), `GK.ImportGuildGrudge` (tells the guild what the
+  import made, through `GK.NotesBroadcast`), and in the Classic look
   `GK.OpenWindow`, `GK.ToggleWindow`, `GK.ShowPoster`, `GK.ShowRecord`, `GK.ShowCard`, `GK.OpenLetters`,
   `GK.ShowLetter`, `GK.NoticeUpdate`, `GK.OpenPost`. Each wrapper calls the original unless its setting says
   otherwise.
+- **H8. Core.lua: defaults.** Seven new settings in `defaults` (`notesList`, `noteAlerts`, `watchNearby`,
+  `watchGroup`, `kudosGroup`, `plateNotes`, `alertStyle`), and `Grudgekeeper.toc` lists `NotesUI.lua`
+  after `Profile.lua`. Their checkboxes are one section in the settings page, added through H5.
+
+## What the Notes tab shows
+
+- One page, four ink links (Q7); the chosen one is kept in `GK.db.notesList`. A row is a player (or a
+  name) with their face, tags and newest note, and the score on the right. The columns are the same for
+  every list (Name, Votes), because a page's headings are fixed.
+- A click opens a card on the right page: for a player, who put them on which list (with tags), up to five
+  notes as `"text" - Author, 3 days ago (+2)`, the score, and Add a note / More... (move or remove my mark,
+  vote on a note, delete one of mine, open the wanted poster for an enemy). For a nice name, who added it
+  and the score, with Vote up (Take back once voted) and More... (Vote down, Remove for my own, and Hide /
+  Show for everyone for officers).
+- The wanted poster and the record get up to two lines of their own about notes, never past nine lines.
+- The note sheet (`GK.OpenNoteSheet`) is one parchment: the list as three ink links, the tags of that list
+  as ink links, a box for your own tag, and a box for up to 200 letters. A list alone, or a tag alone, is
+  enough to write.
 
 ## Data
 
@@ -172,10 +195,15 @@ Q;1                                     tell me yours (at login)
   newest first, at most 150, paced to 2 messages a second so it stays inside LibForever's receive budget
   (30 per sender per 10 seconds).
 - Live changes go out at once. Nothing is sent while `GK.testMode` is on, or outside a guild.
+- After the import (D15) the same reply goes out unasked, once (`GK.NotesBroadcast`): the notes it made as
+  mine are news to everyone else.
 
 ## Testing
 
 - `tests/run.lua` runs with Lua 5.1: `lua5.1 tests/run.lua` from the repo root. It loads `Notes.lua` and
-  `Import.lua` against a small mock of the WoW API and LibForever (`tests/wow_mock.lua`).
+  `Import.lua` against a small mock of the WoW API and LibForever (`tests/wow_mock.lua`). With
+  `boot({ ui = true })` it also loads `NotesUI.lua`, against stand-ins for the files that one builds on
+  (`tests/ui_mock.lua`); the code that makes frames (the note sheet, the nameplate marks, the settings
+  section) is not run there, only what it calls.
 - In game, the PR was tried as a renamed copy (own saved variables, own prefixes, own slash command) so
   nothing reached the guild's real clients.
