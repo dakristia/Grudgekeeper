@@ -564,6 +564,9 @@ local function BuildList(page)
             self.text:SetText(text)
             Ink(self.text, on and BLOOD or FADED, TEXT_FONT, 11)
             self.line:SetShown(on and true or false)
+            -- at least the 70 the leaderboard's links always had; a longer label ("Kill on sight") gets
+            -- its own width, or it ran into the link after it
+            self:SetWidth(math.max(70, math.ceil(TextWidth(self.text)) + 2))
         end
         b:SetScript("OnClick", function(self)
             click(self)
