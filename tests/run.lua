@@ -867,6 +867,97 @@ test("import: odd data in Guild Grudge's tables does not stop it", function()
     eq(counts.notes, 3)
 end)
 
+test("import: a vote that is not a table is skipped and counted, and the import goes on", function()
+    local db = sampleDB()
+    db.entries["ganker forever"].notes["Meyer Self-1-1"].votes["Edvard Eide"] = 1
+    db.names["funny name"].votes["Edvard Eide"] = "up"
+    local GK = boot({ me = IME, guildGrudge = db })
+    local counts = GK.ImportGuildGrudge()
+    eq(counts.skipped, 2)
+    eq(counts.votes, 5)
+    assert(GK.db.importedGG["Guild-Realm"], "finished")
+end)
+
+test("import: note ids come from the note, not from the order it was walked in", function()
+    local function ids(reverse)
+        local db = sampleDB()
+        local notes = db.entries["ganker forever"].notes
+        local a = { author = "Kari Hansen", ts = B + 100, text = "first", id = "Kari Hansen-9-1" }
+        local b = { author = "Kari Hansen", ts = B + 100, text = "second", id = "Kari Hansen-9-2" }
+        local c = { author = "Kari Hansen", ts = B + 100, text = "no id of its own" }
+        local order = reverse and { c, b, a } or { a, b, c }
+        for i, n in ipairs(order) do notes["k" .. i] = n end
+        local GK = boot({ me = IME, guildGrudge = db })
+        GK.ImportGuildGrudge()
+        local out = {}
+        for _, n in ipairs(GK.NotesOf("Ganker Forever-Realm")) do out[n.text] = n.id end
+        return out, GK
+    end
+    local one, GK = ids(false)
+    local two = ids(true)
+    for _, text in ipairs({ "first", "second", "no id of its own", "camped me at the FP" }) do
+        assert(one[text], text .. " was imported")
+        eq(one[text], two[text], text)
+    end
+end)
+
+test("import: an imported note of mine reaches another client under the same id", function()
+    local GK = boot({ me = IME, guildGrudge = sampleDB() })
+    GK.ImportGuildGrudge()
+    local mine
+    for _, n in ipairs(GK.NotesOf("Ganker Forever-Realm")) do
+        if n.author == IME then mine = n end
+    end
+    assert(mine.id > 2 ^ 31, "bigger than a time, so it can't meet one")
+    W.advance(200)
+    W.takeSent()
+    GK.NotesBroadcast()
+    W.advance(200)
+    local sent = W.takeSent()
+    local GK2 = boot({ me = "Other-Realm" })
+    for _, m in ipairs(sent) do W.receive(GK2, IME, m.text) end
+    local got = GK2.NotesOf("Ganker Forever-Realm")
+    eq(#got, 1, "only mine travelled")
+    eq(got[1].id, mine.id)
+end)
+
+test("import: not while the test panel is open; it tries again later", function()
+    local GK = boot({ me = IME, guildGrudge = sampleDB() })
+    GK.testMode = true
+    local r, why = GK.ImportGuildGrudge()
+    eq(r, nil)
+    eq(why, "test mode")
+    W.advance(16)
+    eq(GK.db.importedGG, nil, "no marker was set")
+    eq(GK.IsNoted("Ganker Forever-Realm"), false)
+    GK.testMode = false
+    W.advance(40)
+    assert(GK.db.importedGG["Guild-Realm"], "imported once the panel closed")
+end)
+
+test("import: in a guild it waits for the guild's name, and gives up quietly", function()
+    local GK = boot({ me = IME, guildGrudge = sampleDB() })
+    W.guildKey = false
+    local r, why = GK.ImportGuildGrudge()
+    eq(r, nil)
+    eq(why, "not yet")
+    W.advance(200)
+    eq(GK.db.importedGG, nil, "no marker, no store of the wrong guild")
+    eq(GK.IsNoted("Ganker Forever-Realm"), false)
+    eq(#W.printed, 0, "quiet")
+    -- the name turns up in time
+    local GK2 = boot({ me = IME, guildGrudge = sampleDB() })
+    W.guildKey = false
+    W.advance(16)
+    W.guildKey = nil
+    W.advance(16)
+    assert(GK2.db.importedGG["Guild-Realm"], "imported under the guild")
+    -- without a guild at all the guildless store is the one
+    local GK3 = boot({ me = IME, guildGrudge = sampleDB(), inGuild = false })
+    W.advance(16)
+    assert(GK3.db.importedGG["-"], "imported into the store of your own")
+end)
+
 -- ---------------------------------------------------------------------------
 -- What a letter says and which way the kill order sheet goes (Letters.lua, Post.lua)
 -- ---------------------------------------------------------------------------

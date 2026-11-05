@@ -65,7 +65,11 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
   when Guild Grudge itself is not loaded, so the two never fight over it.
 - **D15. A one-time import from Guild Grudge.** When both addons are enabled, Grudgekeeper reads
   `GuildGrudgeDB` once per guild and takes over its notes, lists, tags, nice names and votes. Bounties and
-  claims are not imported (D4). Afterwards the player disables Guild Grudge.
+  claims are not imported (D4). Afterwards the player disables Guild Grudge. The import waits while the
+  test panel is open, and in a guild until the client has said which one (a few tries, then it gives up
+  quietly and tries again at the next login); the guildless store is used only without a guild. An imported
+  note's id comes from the note itself (`ts * 100` plus a number from its own id, else from its text), so
+  every client gives the same note the same id.
 - **D16. A separate addon-message prefix, `GrudgeNotes`.** The notes travel on their own prefix with
   their own small protocol. Grudgekeeper's protocol and Guild.lua are not touched, and an old
   Grudgekeeper client ignores the new messages completely. See Q3.
