@@ -32,6 +32,8 @@ Core.lua
 Sightings.lua
 Kills.lua
 Guild.lua
+Notes.lua
+Import.lua
 Letters.lua
 Notice.lua
 Window.lua
