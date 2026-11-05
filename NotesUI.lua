@@ -867,6 +867,8 @@ end
 -- ---------------------------------------------------------------------------
 -- Settings
 -- ---------------------------------------------------------------------------
+-- This file loads before Options.lua, which makes the list: start it here if it isn't there yet.
+GK.OptionSections = GK.OptionSections or {}
 GK.OptionSections[#GK.OptionSections + 1] = function(f, anchor, h)
     local head = h.Section(anchor, "Notes")
     local alerts = h.Check(head, "Warn me when a Kill on sight player is near", "noteAlerts",
