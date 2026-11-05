@@ -1271,5 +1271,642 @@ test("classic: the Inspect page gets a card of ours over the ledger's while the 
     eq(page.classic.shown, false)
 end)
 
+-- ---------------------------------------------------------------------------
+-- Telling the guild what the import made
+-- ---------------------------------------------------------------------------
+test("NotesBroadcast sends my own records two a second, never someone else's, never in test mode", function()
+    local GK = boot()
+    W.advance(11)
+    for i = 1, 5 do GK.AddNote("Player" .. i .. "-Realm", "my note " .. i) end
+    W.receive(GK, KARI, msg("N", 1, GANK, 1, B, "", "", "", "", "", "Kari's note"))
+    W.takeSent()
+    eq(GK.NotesBroadcast(), true)
+    W.advance(10)
+    local sent = W.takeSent()
+    eq(#sent, 5)
+    local per = {}
+    for _, m in ipairs(sent) do
+        per[m.at] = (per[m.at] or 0) + 1
+        assert(not m.text:find("Kari's note", 1, true), "never someone else's")
+    end
+    for at, n in pairs(per) do assert(n <= 2, "at most 2 at one moment, got " .. n .. " at " .. at) end
+    GK.testMode = true
+    eq(GK.NotesBroadcast(), false)
+    W.advance(10)
+    eq(#W.sent, 0)
+    local GK2 = boot({ inGuild = false })
+    eq(GK2.NotesBroadcast(), false, "outside a guild")
+end)
+
+-- ---------------------------------------------------------------------------
+-- The ledger side: NotesUI.lua, against stand-ins for the files it builds on (tests/ui_mock.lua)
+-- ---------------------------------------------------------------------------
+local function bootUI(opts)
+    opts = opts or {}
+    opts.ui = true
+    return boot(opts)
+end
+
+--- A stand-in for the game's menu description: remembers the buttons made on it, and their children.
+local function fakeNode(label)
+    local n = { label = label, kids = {} }
+    function n:CreateButton(text, fn)
+        local k = fakeNode(text)
+        k.fn = fn
+        table.insert(self.kids, k)
+        return k
+    end
+    function n:CreateDivider() end
+    return n
+end
+local function kid(node, label)
+    for _, k in ipairs(node.kids) do
+        if k.label == label then return k end
+    end
+end
+local function labels(node)
+    local out = {}
+    for _, k in ipairs(node.kids) do out[#out + 1] = k.label end
+    return table.concat(out, "|")
+end
+
+test("the Notes page is the fifth tab, with a link per list", function()
+    local GK = bootUI()
+    eq(#GK.LedgerPages, 5)
+    local page = GK.LedgerPages[5]
+    eq(page.name, "Notes")
+    eq(page.sortable, true)
+    local links = page.links()
+    eq(#links, 4)
+    eq(links[1].text, "Kill on sight")
+    eq(links[1].on, true, "kos is the default")
+    links[2].click()
+    eq(GK.db.notesList, "watch")
+    eq(page.links()[2].on, true)
+    eq(page.links()[1].on, false)
+    GK.db.notesList = "somewhere"
+    eq(page.links()[1].on, true, "an unknown list is kos")
+end)
+
+test("the page's rows: newest first, with tags, the newest note, the score and my own", function()
+    local GK = bootUI()
+    W.receive(GK, KARI, msg("N", 1, GANK, 1, B + 10, "", "Scammer", "ROGUE", "Orc", 60, "took my gold"))
+    W.receive(GK, KARI, msg("L", 1, GANK, "watch", B + 11))
+    W.receive(GK, EDVARD, msg("V", 1, GANK, KARI, 1, 1, B + 12))
+    W.receive(GK, KARI, msg("N", 1, "Older Foe-Realm", 1, B + 5, "", "", "", "", "", "ganked me"))
+    GK.db.notesList = "kos"
+    local items, empty = GK.LedgerPages[5].items()
+    eq(#items, 1, "Gank is on Watch, not on kos")
+    eq(items[1].name, "Older Foe")
+    eq(items[1].sub, '"ganked me"')
+    eq(items[1].right, "")
+    eq(items[1].own, nil)
+    assert(empty:find("Nobody is on Kill on sight"), empty)
+    items, empty = GK.NotesItems("watch")
+    eq(#items, 1)
+    local it = items[1]
+    eq(it.key, "p:" .. GANK)
+    eq(it.name, "Gank Master")
+    eq(it.sub, 'Scammer - "took my gold"')
+    eq(it.right, "+1")
+    eq(it.votes, 1)
+    eq(it.ts, B + 11)
+    eq(it.face.c, "ROGUE")
+    eq(it.select.kind, "card")
+    eq(it.select.make().key, GANK)
+    GK.AddNote(GANK, "mine too", nil, "watch")
+    eq(GK.NotesItems("watch")[1].own, true)
+    -- two rows come in the order of their news
+    GK.AddNote("Older Foe-Realm", "again", nil, "watch")
+    W.advance(20)
+    GK.AddNote("Older Foe-Realm", "and again")
+    local rows = GK.NotesItems("watch")
+    eq(#rows, 2)
+    eq(rows[1].name, "Older Foe", "the newest news first")
+    eq(GK.LedgerPages[5].sub({ 1 }), "1 player on Kill on sight")
+    GK.db.notesList = "watch"
+    eq(GK.LedgerPages[5].sub(rows), "2 players on Watch")
+end)
+
+test("the Names list: hidden ones only for officers, and faded", function()
+    local GK, LIB = bootUI()
+    W.receive(GK, KARI, msg("M", 1, NICE, B + 1, "", "PRIEST", "Human", "Human", 3, 40))
+    W.receive(GK, KARI, msg("M", 1, "Silly Two-Realm", B + 2))
+    W.receive(GK, EDVARD, msg("G", 1, NICE, 1, B + 3))
+    LIB.roster["Master-Realm"] = { rankIndex = 0 }
+    W.receive(GK, "Master-Realm", msg("H", 1, "Silly Two-Realm", 1, B + 4))
+    local items, empty = GK.NotesItems("names")
+    eq(#items, 1)
+    eq(items[1].name, "Nina Nice")
+    eq(items[1].right, "+1")
+    eq(items[1].sub, "added by Kari")
+    eq(items[1].face.rf, "Human")
+    eq(items[1].faded, nil)
+    assert(empty:find("No nice names"), empty)
+    LIB.roster[ME] = { rankIndex = 0 }
+    items = GK.NotesItems("names")
+    eq(#items, 2)
+    eq(items[1].name, "Silly Two", "the newest first")
+    eq(items[1].faded, true)
+    eq(items[1].sub, "hidden - added by Kari")
+    GK.db.notesList = "names"
+    eq(GK.LedgerPages[5].sub(items), "2 nice names in the guild's list")
+    eq(#GK.LedgerPages[5].items(), 2)
+end)
+
+test("a noted player's card: title, who put them where, the notes with their votes, the score", function()
+    local GK = bootUI()
+    W.receive(GK, KARI, msg("N", 1, GANK, 1, B + 10, "", "Ninja looter", "ROGUE", "Orc", 60, "took the chest: twice"))
+    W.receive(GK, KARI, msg("L", 1, GANK, "watch", B + 11))
+    W.receive(GK, EDVARD, msg("N", 1, GANK, 1, B + 20, "", "", "", "", "", "agreed"))
+    W.receive(GK, EDVARD, msg("V", 1, GANK, KARI, 1, 1, B + 21))
+    local d = GK.NoteCard(GANK)
+    eq(d.title, "KILL ON SIGHT", "Edvard's note without a mark counts as kos, and no list of mine is chosen")
+    eq(d.name, "Gank Master")
+    eq(d.info, "Level 60 Orc")
+    eq(d.big, "+1")
+    eq(d.caption, "votes")
+    eq(d.c, "ROGUE")
+    eq(d.lines[1], "Kill on sight: Edvard")
+    eq(d.lines[2], "Watch: Kari - Ninja looter")
+    eq(#d.lines, 4)
+    eq(d.lines[3], '"agreed" - Edvard, 3 days ago')
+    assert(d.lines[4]:find('^"took the chest:\194\160twice" %- Kari, 3 days ago %(%+1%)$'), d.lines[4])
+    assert(not d.lines[4]:find("^[^:,]+: "), "the ledger would read that as a label")
+    -- the page's list wins when they are on it; my own mark wins over that
+    GK.db.notesList = "watch"
+    eq(GK.NoteCard(GANK).title, "WATCH")
+    GK.SetMark(GANK, "kudos")
+    eq(GK.NoteCard(GANK).title, "KUDOS")
+    eq(GK.NoteCard(GANK).lines[3], "Kudos: you")
+    -- buttons
+    local t
+    GK.OpenNoteSheet = function(arg, list) t = { arg = arg, list = list } end
+    d.buttons[1][2]()
+    eq(t.arg.key, GANK)
+    eq(t.arg.c, "ROGUE")
+    eq(t.list, "kudos", "my mark at the time of the click")
+    eq(GK.NoteCard(GANK).buttons[1][1], "Add a note")
+    eq(GK.NoteCard(GANK).buttons[2][1], "More...")
+    eq(GK.NoteCard("Nobody-Realm"), nil)
+end)
+
+test("a card gives five notes and then says how many more", function()
+    local GK = bootUI()
+    for i = 1, 8 do W.receive(GK, KARI, msg("N", 1, GANK, i, B + i, "", "", "", "", "", "note " .. i)) end
+    local d = GK.NoteCard(GANK)
+    eq(#d.lines, 7, "one list, five notes, the rest counted")
+    eq(d.lines[2], '"note 8" - Kari, 3 days ago')
+    eq(d.lines[7], "and 3 more notes.")
+    GK.Person("Empty-Realm", true)
+    local e = GK.NoteCard("Empty-Realm")
+    eq(e.title, "NOTES")
+    eq(e.lines[1], "Nothing is written down about them.")
+end)
+
+test("the More menu: move or remove my mark, vote on others' notes, delete mine, the poster for an enemy", function()
+    local GK = bootUI()
+    W.receive(GK, KARI, msg("N", 1, GANK, 1, B + 10, "", "", "ROGUE", "Orc", 60, "hers"))
+    local mine = GK.AddNote(GANK, "my own note", nil, "watch")
+    require("wow_mock").seen[GANK] = true
+    local root = fakeNode("root")
+    GK.NoteMenu(root, GANK)
+    eq(labels(root), "Move my mark to|Remove my mark|Vote on a note|Delete my note|Open their poster",
+        "we have seen them as an enemy")
+    eq(labels(kid(root, "Move my mark to")), "Kill on sight|Kudos", "not the list I am on")
+    kid(kid(root, "Move my mark to"), "Kudos").fn()
+    eq(GK.MyMark(GANK), "kudos")
+    local vote = kid(root, "Vote on a note")
+    eq(#vote.kids, 1, "only Kari's note, not mine")
+    local row = vote.kids[1]
+    eq(row.label, "Kari: hers")
+    eq(labels(row), "Up|Down")
+    kid(row, "Up").fn()
+    eq(GK.NoteScore(GANK, KARI, 1), 1)
+    root = fakeNode("root")
+    GK.NoteMenu(root, GANK)
+    eq(labels(kid(root, "Vote on a note").kids[1]), "Down|Take back")
+    kid(kid(root, "Delete my note"), "my own note").fn()
+    eq(#GK.NotesOf(GANK), 1)
+    kid(root, "Remove my mark").fn()
+    eq(GK.MyMark(GANK), nil)
+    kid(root, "Open their poster").fn()
+    eq(require("wow_mock").poster.key, GANK)
+    -- a human has no poster, and nothing to vote on or delete
+    W.receive(GK, KARI, msg("N", 1, "Pal Human-Realm", 1, B, "", "", "MAGE", "Human", 20, "nice"))
+    root = fakeNode("root")
+    GK.NoteMenu(root, "Pal Human-Realm")
+    eq(labels(root), "Move my mark to|Vote on a note")
+end)
+
+test("a nice name's card: who added it, the vote buttons, and the officer's hide", function()
+    local GK, LIB = bootUI()
+    W.receive(GK, KARI, msg("M", 1, NICE, B + 1, "", "PRIEST", "Human", "Human", 3, 40))
+    local d = GK.NameCard(NICE)
+    eq(d.title, "NICE NAME")
+    eq(d.name, "Nina Nice")
+    eq(d.lines[1], "Added by: Kari")
+    eq(d.big, "0")
+    eq(d.buttons[1][1], "Vote up")
+    eq(d.buttons[2][1], "More...")
+    d.buttons[1][2]()
+    eq(GK.NameScore(NICE), 1)
+    d = GK.NameCard(NICE)
+    eq(d.buttons[1][1], "Take back")
+    eq(d.big, "+1")
+    local root = fakeNode("root")
+    GK.NameMenu(root, NICE)
+    eq(labels(root), "Vote down|Take back my vote", "no hide: I am no officer")
+    LIB.roster[ME] = { rankIndex = 0 }
+    root = fakeNode("root")
+    GK.NameMenu(root, NICE)
+    eq(labels(root), "Vote down|Take back my vote|Hide for everyone")
+    kid(root, "Hide for everyone").fn()
+    d = GK.NameCard(NICE)
+    eq(d.lines[2], "Hidden: an officer hid it from the list.")
+    root = fakeNode("root")
+    GK.NameMenu(root, NICE)
+    assert(kid(root, "Show for everyone"))
+    LIB.roster[ME] = { rankIndex = 5 }
+    eq(GK.NameCard(NICE), nil, "hidden from a non-officer")
+    -- my own: remove, and no vote
+    GK.AddNiceName("Mine Funny-Realm")
+    d = GK.NameCard("Mine Funny-Realm")
+    eq(d.buttons[1][1], "Remove")
+    eq(d.buttons[2], nil, "nothing to put in More for my own name when I am no officer")
+    d.buttons[1][2]()
+    eq(GK.NameCard("Mine Funny-Realm"), nil)
+end)
+
+test("the poster and the record get at most two lines about notes, and never more than nine in all", function()
+    local GK = bootUI()
+    local W2 = require("wow_mock")
+    W2.posterLines = {}
+    eq(#GK.PosterCard({ key = GANK }).lines, 0, "nobody noted: nothing added")
+    W.receive(GK, KARI, msg("N", 1, GANK, 1, B + 10, "", "Ninja looter", "", "", "", "took the chest"))
+    W.receive(GK, KARI, msg("N", 1, GANK, 2, B + 11, "", "", "", "", "", "again"))
+    W.receive(GK, KARI, msg("L", 1, GANK, "watch", B + 12))
+    local d = GK.PosterCard({ key = GANK })
+    eq(#d.lines, 2)
+    eq(d.lines[1], "Notes: 2, on Watch (Ninja looter) - see the Notes page")
+    eq(d.lines[2], 'Newest: "again" - Kari, 3 days ago')
+    W2.posterLines = { 1, 2, 3, 4, 5, 6, 7, 8 }
+    d = GK.PosterCard({ key = GANK })
+    eq(#d.lines, 9, "one fits")
+    eq(d.lines[9], "Notes: 2, on Watch (Ninja looter) - see the Notes page")
+    W2.posterLines = { 1, 2, 3, 4, 5, 6, 7, 8, 9 }
+    eq(#GK.PosterCard({ key = GANK }).lines, 9)
+    W2.recordLines = {}
+    eq(#GK.RecordCard(GANK).lines, 2)
+    eq(#GK.RecordCard("Stranger-Realm").lines, 0)
+    -- a mark with no note
+    GK.SetMark("Marked-Realm", "kudos")
+    eq(GK.RecordCard("Marked-Realm").lines[1], "Notes: none, on Kudos - see the Notes page")
+    eq(#GK.RecordCard("Marked-Realm").lines, 1)
+    W2.posterLines, W2.recordLines = nil, nil
+end)
+
+test("writing a note: a few words, a tag or a list is enough; nothing at all is not", function()
+    local GK = bootUI()
+    local t = { key = GANK, c = "ROGUE", r = "Orc", l = 60 }
+    eq(select(1, GK.WriteNote(t, "kos", "  ", " ")), true, "a list alone sets my mark")
+    eq(GK.MyMark(GANK), "kos")
+    eq(GK.Person(GANK).c, "ROGUE", "and what we know of them goes with it")
+    eq(#GK.NotesOf(GANK), 0)
+    local ok, why = GK.WriteNote(t, nil, "", "")
+    eq(ok, nil)
+    assert(why:find("Write something"), why)
+    eq(GK.WriteNote(t, "watch", "took my gold", "Scammer"), true)
+    eq(GK.MyMark(GANK), "watch")
+    eq(GK.NotesOf(GANK)[1].text, "took my gold")
+    eq(GK.NotesOf(GANK)[1].tag, "Scammer")
+    eq(GK.WriteNote(t, "watch", "", "Toxic"), true, "a tag alone is a note")
+    eq(#GK.NotesOf(GANK), 2)
+    eq(GK.WriteNote(t, nil, "no list, only words", ""), true)
+    eq(GK.MyMark(GANK), "watch", "no list chosen: my mark stays")
+    ok, why = GK.WriteNote({ key = "NoRealm" }, "kos", "x")
+    eq(ok, nil)
+    assert(why:find("no name"), why)
+    eq(select(1, GK.WriteNote(nil, "kos", "x")), nil)
+    eq(count(GK.Store().people), 1, "no record made for a name that can't be kept")
+end)
+
+test("slash parsing: names are two words, and a note's own words are not taken for one", function()
+    local GK = bootUI()
+    local known = function(key) return key == GANK end
+    local P = GK.ParseNotesCommand
+    local r = P("note", "Gank Master he took my loot", nil, known)
+    eq(r.key, GANK)
+    eq(r.text, "he took my loot")
+    r = P("note", "he took my loot", KARI, known)
+    eq(r.key, KARI, "no known name: the target")
+    eq(r.text, "he took my loot")
+    r = P("note", "Gank Master he took my loot", KARI, known)
+    eq(r.key, GANK, "a known name wins over the target")
+    r = P("note", "Brand New took my loot", nil, known)
+    eq(r.key, "Brand New-Realm", "no target: the first two words")
+    eq(r.text, "took my loot")
+    local none, usage = P("note", "too short", nil, known)
+    eq(none, nil)
+    assert(usage:find("Usage: /grudge note"), usage)
+    eq(select(1, P("note", "", KARI, known)), nil)
+    eq(select(1, P("note", "Gank Master", KARI, known)), nil, "a name and nothing to say")
+    r = P("watch", "Gank Master ninja looter", KARI, known)
+    eq(r.key, GANK)
+    eq(r.text, "ninja looter")
+    eq(r.list, "watch")
+    r = P("kudos", "Nina Nice", nil, known)
+    eq(r.key, NICE)
+    eq(r.text, "")
+    eq(r.list, "kudos")
+    r = P("kudos", "", KARI, known)
+    eq(r.key, KARI)
+    eq(select(1, P("watch", "", nil, known)), nil)
+    r = P("nice", "Funny Name", KARI, known)
+    eq(r.key, "Funny Name-Realm")
+    eq(P("nice", "", KARI, known).key, KARI)
+    eq(select(1, P("nice", "one", nil, known)), nil)
+    r = P("move", "Gank Master Watch", nil, known)
+    eq(r.key, GANK)
+    eq(r.list, "watch")
+    eq(r.clear, false)
+    r = P("move", "Gank Master none", nil, known)
+    eq(r.list, nil)
+    eq(r.clear, true)
+    r = P("move", "kudos", KARI, known)
+    eq(r.key, KARI)
+    eq(r.list, "kudos")
+    eq(select(1, P("move", "Gank Master", nil, known)), nil, "no list")
+    eq(select(1, P("move", "Gank Master elsewhere", nil, known)), nil)
+    eq(select(1, P("move", "", KARI, known)), nil)
+    eq(select(1, P("move", "kudos", nil, known)), nil, "no name and no target")
+end)
+
+test("/grudge: our subcommands act, everything else is Core's, and the help grows", function()
+    local GK = bootUI()
+    local W2 = require("wow_mock")
+    W.units.target = GANK
+    local slash = SlashCmdList.GRUDGEKEEPER
+    slash("note he took my loot")
+    eq(GK.NotesOf(GANK)[1].text, "he took my loot")
+    assert(W.printed[#W.printed]:find("Written down on Gank Master"), W.printed[#W.printed])
+    slash("watch Nina Nice great healer")
+    eq(GK.MyMark(NICE), "watch")
+    eq(GK.NotesOf(NICE)[1].text, "great healer")
+    slash("move Nina Nice kudos")
+    eq(GK.MyMark(NICE), "kudos")
+    slash("move Nina Nice none")
+    eq(GK.MyMark(NICE), nil)
+    W.units.target = nil
+    slash("nice Funny Name")
+    assert(GK.Store().names["Funny Name-Realm"], "a nice name")
+    slash("nice Funny Name")
+    assert(W.printed[#W.printed]:find("already"), W.printed[#W.printed])
+    slash("notes")
+    eq(W2.opened, 5, "the Notes tab")
+    slash("note")
+    assert(W.printed[#W.printed]:find("Usage: /grudge note"), W.printed[#W.printed])
+    -- Core's own, untouched
+    slash("options")
+    eq(W2.optionsOpened, true)
+    -- its help for what nobody knows, with ours below
+    W.printed = {}
+    slash("bogus")
+    local all = table.concat(W.printed, "\n")
+    assert(all:find("commands:", 1, true), "Core's help")
+    assert(all:find("/grudge notes", 1, true), "ours")
+    -- a command Core knows gets no help from us
+    W.printed = {}
+    slash("notice")
+    assert(not table.concat(W.printed, "\n"):find("/grudge notes", 1, true))
+end)
+
+test("/gg is ours only when Guild Grudge isn't loaded", function()
+    SLASH_GRUDGEKEEPERGG1 = nil
+    local GK = bootUI({ me = IME, guildGrudge = {} })
+    eq(SLASH_GRUDGEKEEPERGG1, nil, "Guild Grudge has it")
+    local GK2 = bootUI()
+    eq(SLASH_GRUDGEKEEPERGG1, "/gg")
+    SlashCmdList.GRUDGEKEEPERGG("watch Nina Nice")
+    eq(GK2.MyMark(NICE), "watch", "it forwards")
+end)
+
+test("the alert style: a raid warning with its sound and a chat line, or the scroll", function()
+    local GK = bootUI()
+    local W2 = require("wow_mock")
+    GK.Warn("Gank is near!", true)
+    eq(#W2.raid, 0, "scroll is the default: the original ran")
+    eq(#W2.warned, 1, "...the stand-in for Notice.lua")
+    GK.db.alertStyle = "raid"
+    GK.Warn("Gank is near!", true)
+    eq(#W2.warned, 1, "the original is not called")
+    eq(#W2.raid, 1)
+    eq(W2.raid[1].text, "Gank is near!")
+    eq(W2.raid[1].colour, ChatTypeInfo.RAID_WARNING)
+    eq(W2.played[1], 8959)
+    assert(W.printed[#W.printed]:find(GK.TAG, 1, true) and W.printed[#W.printed]:find("Gank is near!", 1, true))
+    GK.db.sound = false
+    GK.Warn("again", true)
+    eq(#W2.played, 1, "no sound when sounds are off")
+    eq(#W2.raid, 2)
+end)
+
+test("the tooltip: an enemy's Grudge line gets the notes, anyone else gets a line of their own", function()
+    local GK = bootUI()
+    local W2 = require("wow_mock")
+    eq(GK.TooltipLine(GANK, nil), nil, "nobody noted: the original's answer")
+    W2.tipLine = "|cffc8281eGrudge|r  killed you 3"
+    eq(GK.TooltipLine(GANK, nil), W2.tipLine)
+    W.receive(GK, KARI, msg("N", 1, GANK, 1, B + 10, "", "Ninja looter", "", "", "", "x"))
+    W.receive(GK, KARI, msg("N", 1, GANK, 2, B + 11, "", "", "", "", "", "y"))
+    W.receive(GK, KARI, msg("L", 1, GANK, "watch", B + 12))
+    eq(GK.TooltipLine(GANK, nil), W2.tipLine .. "  -  Watch, 2 notes")
+    W2.tipLine = nil
+    eq(GK.TooltipLine(GANK, nil), "|cffc8281eGrudge|r  Watch, 2 notes")
+    eq(GK.NoteTipLine(GANK), "|cffffcc00Watch|r  Ninja looter - 2 notes")
+    W.receive(GK, EDVARD, msg("L", 1, NICE, "kudos", B))
+    eq(GK.NoteTipLine(NICE), "|cff4dff66Kudos|r")
+    eq(GK.NoteTipLine("Stranger-Realm"), nil)
+    -- the answer follows the data
+    GK.SetMark(NICE, "kos")
+    W.receive(GK, EDVARD, msg("L", 1, NICE, "", B + 1, 1))
+    eq(GK.NoteTipLine(NICE), "|cffc8281eKill on sight|r")
+end)
+
+test("a noted player in sight: Kill on sight warns when asked, Watch says a line, both at most every 90 seconds", function()
+    local GK, LIB = bootUI()
+    local W2 = require("wow_mock")
+    W.receive(GK, KARI, msg("N", 1, GANK, 1, B, "", "", "ROGUE", "Orc", 60, "x"))
+    W.receive(GK, KARI, msg("N", 1, NICE, 1, B, "", "Ninja looter", "", "", "", "y"))
+    W.receive(GK, KARI, msg("L", 1, NICE, "watch", B))
+    W.units.mouseover = GANK
+    LIB.fire("UPDATE_MOUSEOVER_UNIT")
+    eq(#W2.warned, 0, "off by default")
+    GK.db.noteAlerts = true
+    LIB.fire("UPDATE_MOUSEOVER_UNIT")
+    eq(#W2.warned, 1)
+    eq(W2.warned[1].text, "Kill on sight: Gank Master is near!")
+    eq(W2.warned[1].urgent, true)
+    LIB.fire("UPDATE_MOUSEOVER_UNIT")
+    eq(#W2.warned, 1, "within 90 seconds")
+    W.advance(91)
+    LIB.fire("UPDATE_MOUSEOVER_UNIT")
+    eq(#W2.warned, 2)
+    -- an open kill order says it already
+    W.advance(91)
+    W2.order = { key = "o1" }
+    LIB.fire("UPDATE_MOUSEOVER_UNIT")
+    eq(#W2.warned, 2, "Sightings.lua warns about that one")
+    W2.order = nil
+    -- Watch: a line in chat
+    W.units.mouseover = NICE
+    LIB.fire("UPDATE_MOUSEOVER_UNIT")
+    eq(#W2.warned, 2)
+    GK.db.watchNearby = true
+    LIB.fire("UPDATE_MOUSEOVER_UNIT")
+    assert(W.printed[#W.printed]:find("Nina Nice from your Watch list is near [Ninja looter]", 1, true), W.printed[#W.printed])
+    eq(#W2.warned, 2, "a line, not a warning")
+    local lines = #W.printed
+    LIB.fire("UPDATE_MOUSEOVER_UNIT")
+    eq(#W.printed, lines, "within 90 seconds")
+    -- kudos is never announced; a mob and myself are not players of the book
+    W.receive(GK, EDVARD, msg("L", 1, "Pal Human-Realm", "kudos", B))
+    W.units.mouseover = "Pal Human-Realm"
+    LIB.fire("UPDATE_MOUSEOVER_UNIT")
+    eq(#W.printed, lines)
+    W.mobs.mouseover = true
+    W.units.mouseover = GANK
+    W.advance(91)
+    LIB.fire("UPDATE_MOUSEOVER_UNIT")
+    eq(#W2.warned, 2, "a mob")
+    -- what we saw of a noted player is kept
+    W.mobs.mouseover = nil
+    GK.db.noteAlerts = false
+    LIB.fire("UPDATE_MOUSEOVER_UNIT")
+    eq(GK.Person(GANK).l, 60)
+end)
+
+test("joining the group: Watch warns with the tag, Kudos says one green line, each once", function()
+    local GK, LIB = bootUI()
+    local W2 = require("wow_mock")
+    W.receive(GK, KARI, msg("N", 1, GANK, 1, B, "", "Ninja looter", "", "", "", "x"))
+    W.receive(GK, KARI, msg("L", 1, GANK, "watch", B))
+    W.receive(GK, KARI, msg("L", 1, NICE, "kudos", B))
+    W.units.party1 = GANK
+    LIB.fire("GROUP_ROSTER_UPDATE")
+    eq(#W2.warned, 1)
+    eq(W2.warned[1].text, "Watch list: Gank Master joined your group [Ninja looter]")
+    eq(W2.warned[1].urgent, true)
+    LIB.fire("GROUP_ROSTER_UPDATE")
+    eq(#W2.warned, 1, "once")
+    W.units.party2 = NICE
+    LIB.fire("GROUP_ROSTER_UPDATE")
+    eq(#W2.warned, 1)
+    assert(W.printed[#W.printed]:find("|cff4dff66Kudos:|r Nina Nice joined your group", 1, true), W.printed[#W.printed])
+    -- leaving and joining again repeats it
+    W.units.party1 = nil
+    LIB.fire("GROUP_ROSTER_UPDATE")
+    W.units.party1 = GANK
+    LIB.fire("GROUP_ROSTER_UPDATE")
+    eq(#W2.warned, 2)
+    -- the settings
+    W.units.party1 = nil
+    LIB.fire("GROUP_ROSTER_UPDATE")
+    GK.db.watchGroup, GK.db.kudosGroup = false, false
+    W.units.party1 = GANK
+    W.units.party2 = nil
+    LIB.fire("GROUP_ROSTER_UPDATE")
+    eq(#W2.warned, 2)
+    -- a raid is read by raidN
+    W.units.party1 = nil
+    LIB.fire("GROUP_ROSTER_UPDATE")
+    GK.db.watchGroup = true
+    W2.group = { raid = true, size = 3 }
+    W.units.raid3 = GANK
+    LIB.fire("GROUP_ROSTER_UPDATE")
+    eq(#W2.warned, 3)
+    W.units.raid3 = nil
+end)
+
+test("the right-click menu: a submenu for any player but a mob or myself, with the watch and kudos tags", function()
+    local GK = bootUI()
+    local W2 = require("wow_mock")
+    local menu = W2.menus["MENU_UNIT_ENEMY_PLAYER"]
+    assert(menu, "hooked")
+    for _, which in ipairs({ "SELF", "PLAYER", "PARTY", "RAID_PLAYER", "RAID", "FRIEND", "COMMUNITIES_GUILD_MEMBER", "GUILD" }) do
+        assert(W2.menus["MENU_UNIT_" .. which], which)
+    end
+    W.units.mouseover = GANK
+    local root = fakeNode("root")
+    menu(nil, root, { unit = "mouseover" })
+    local sub = kid(root, "Grudgekeeper notes")
+    assert(sub)
+    eq(labels(sub), "Add a note|Watch list|Kudos|Add to nice names", "no Their notes: nobody wrote about them")
+    eq(#kid(sub, "Watch list").kids, #GK.TAGS.watch + 1)
+    eq(kid(sub, "Watch list").kids[1].label, "Ninja looter")
+    eq(kid(sub, "Watch list").kids[#GK.TAGS.watch + 1].label, "No tag")
+    eq(kid(sub, "Kudos").kids[1].label, "Helpful")
+    -- a tag puts them on the list with that tag
+    kid(sub, "Watch list").kids[1].fn()
+    eq(GK.MyMark(GANK), "watch")
+    eq(GK.NotesOf(GANK)[1].tag, "Ninja looter")
+    eq(GK.Person(GANK).c, "ROGUE", "learned from the unit")
+    kid(sub, "Kudos").kids[#GK.TAGS.kudos + 1].fn()
+    eq(GK.MyMark(GANK), "kudos", "No tag: just the mark")
+    kid(sub, "Add to nice names").fn()
+    assert(GK.Store().names[GANK])
+    -- now they are noted
+    root = fakeNode("root")
+    menu(nil, root, { unit = "mouseover" })
+    sub = kid(root, "Grudgekeeper notes")
+    assert(kid(sub, "Their notes"))
+    kid(sub, "Their notes").fn()
+    eq(W2.card().key, GANK)
+    -- not a mob, not me, not when the setting is off
+    W2.mobs.mouseover = true
+    root = fakeNode("root")
+    menu(nil, root, { unit = "mouseover" })
+    eq(#root.kids, 0)
+    W2.mobs.mouseover = nil
+    menu(nil, root, { unit = "player" })
+    eq(#root.kids, 0, "myself")
+    GK.db.unitMenu = false
+    menu(nil, root, { unit = "mouseover" })
+    eq(#root.kids, 0)
+    GK.db.unitMenu = true
+    -- a name in chat has no unit: the key comes from the menu's own fields
+    W2.menuKey = "Chatter One-Realm"
+    menu(nil, root, { name = "Chatter One" })
+    eq(#root.kids, 1)
+    W2.menuKey = nil
+end)
+
+test("the import tells the guild afterwards, once", function()
+    local GK = bootUI({ me = IME, guildGrudge = sampleDB() })
+    W.takeSent()
+    assert(GK.ImportGuildGrudge())
+    W.advance(30)
+    local text = {}
+    for _, m in ipairs(W.takeSent()) do text[#text + 1] = m.text end
+    local all = table.concat(text, "\n")
+    assert(all:find("camped me at the FP", 1, true), "my note went out")
+    assert(not all:find("ganked my alt", 1, true), "Kari's did not")
+    assert(GK.ImportGuildGrudge() == nil)
+    W.advance(30)
+    eq(#W.sent, 0, "nothing more: it was done already")
+end)
+
+test("the settings: defaults for every new setting, and a section for them", function()
+    local GK = bootUI()
+    eq(GK.db.notesList, "kos")
+    eq(GK.db.noteAlerts, false)
+    eq(GK.db.watchNearby, false)
+    eq(GK.db.watchGroup, true)
+    eq(GK.db.kudosGroup, true)
+    eq(GK.db.plateNotes, true)
+    eq(GK.db.alertStyle, "scroll")
+    eq(#GK.OptionSections, 1)
+end)
+
 say(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)
