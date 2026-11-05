@@ -40,7 +40,7 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
 - **D8. Votes.** Notes and nice names can be voted up or down, one vote per player, which they can change
   or take back. You can't vote on your own note or name.
 - **D9. Sorting and Mine only.** Newest, oldest, A-Z and most votes, on the pages where an order makes
-  sense (kill orders, grudges, news, notes). The leaderboard keeps its rank order. "Mine only" keeps the
+  sense (kill orders, grudges, news and the four list pages). The leaderboard keeps its rank order. "Mine only" keeps the
   rows you wrote, posted, took, fulfilled or voted on.
 - **D10. Noted players are highlighted quietly, and alert only if asked.** A player with notes and no
   kill order gets a small, dim mark on their nameplate (left of where a kill order's seal sits: a cross
@@ -68,6 +68,11 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
   Grudgekeeper client ignores the new messages completely. See Q3.
 - **D17. Tests.** A Lua 5.1 test harness (`tests/`) runs the data layer outside the game. It is not
   packaged (`.pkgmeta` ignores `tests/`). See Q5.
+- **D18. The four lists are four tabs, in two groups.** The enemy's pages sit over the left page in the
+  open book - the owner's four and **Kill on sight** - and the friendly ones (**Watch**, **Kudos**,
+  **Names**) over the right page. Kill on sight is for an enemy you want to mark without a bounty or a
+  history, e.g. a colleague on Horde. (This was Q7, "one Notes tab with a switch, or elsewhere?"; the
+  owner tried it in the game and asked for tabs.) Folded, all the tabs share one row.
 
 ## Questions for the owner
 
@@ -88,16 +93,13 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
 - **Q6. Who counts as an officer** for hiding names? Today: the guild master, and any rank that can listen
   to officer chat (`C_GuildInfo.GuildControlGetRankFlags`, flag 3), checked against the sender's rank in
   the roster when the message arrives. If that call isn't there, only the guild master.
-- **Q7. The Notes tab.** The ledger has four tabs. This PR adds a fifth, **Notes**, whose page has ink links
-  like the leaderboard's week switch: Kill on sight / Watch / Kudos / Names. Is one tab with a switch
-  right, or would the owner rather have the lists elsewhere?
 
 ## What lives where
 
 | File | New or changed | What |
 |---|---|---|
 | `Notes.lua` | new | The data and the wire: people, notes, marks, tags, votes, nice names, hides, the `GrudgeNotes` protocol, queries for pages, cards and the tooltip. No frames. |
-| `NotesUI.lua` | new | The ledger look for the notes: the Notes page, the note sheet, right-click menu entries, card lines, tooltip lines, nameplate marks, group-join and nearby warnings, settings, slash commands and `/gg`. |
+| `NotesUI.lua` | new | The ledger look for the notes: the four list pages, the note sheet, right-click menu entries, card lines, tooltip lines, nameplate marks, group-join and nearby warnings, settings, slash commands and `/gg`. |
 | `Import.lua` | new | The one-time import from `GuildGrudgeDB` (D15). |
 | `Classic/*.lua` | new | The Classic look (D12). |
 | `tests/` | new | The test harness (D17). |
@@ -109,13 +111,19 @@ Every hook is small and named here, so a merge conflict is easy to resolve by re
 
 - **H1. Window.lua: a page registry.** `TABS`, `PAGES` and `HEADINGS` become one list of page
   definitions, `GK.LedgerPages`, each `{ name, items = fn, headings, sub = fn, links = fn, sortable,
-  default = fn }`. The four existing pages move into it unchanged in behaviour; the leaderboard's
+  side, default = fn }`. `side = "right"` puts the page's tab over the right page in the open book (D18);
+  `Layout` fits each of the two groups of tabs to its own span (the left group to the left page, the
+  right group from the right page's left edge to the top-right iron), one font size per group. A page
+  with both `links` and `sub` shows the sub text after the links, on their line. The four existing pages move into it unchanged in behaviour; the leaderboard's
   This week / All time links become its `links`. `GK.AddLedgerPage(def)` appends a page before the book
   is built. The Classic window reads the same list.
 - **H2. Window.lua: a generic card.** `DetailCard` also accepts `{ kind = "card", make = fn }`, where `make`
   returns a card table in Profile.lua's shape.
 - **H3. Window.lua: sort and mine only.** `Refresh` passes each page's items through `GK.SortItems(items,
-  page)`, which applies the sort mode and Mine only for pages with `sortable = true`. Item tables gain two
+  page)`, which applies the sort mode and Mine only for pages with `sortable = true`. The two controls
+  are Blizzard's own, so they look clickable: a `WowStyle1DropdownTemplate` dropdown (radios for Default,
+  Newest, Oldest, A-Z and Votes, its text "Sort: Newest") and a `UICheckButtonTemplate` check box, on a
+  row under the sub line, right-aligned; both are hidden on pages that are not sortable. Item tables gain two
   optional fields, `ts` (a time to sort by) and `votes` (a score), and `mine` is set on more rows.
 - **H4. Profile.lua: show any card.** `GK.ShowCard(make)` opens the small card for a card table that
   `make()` builds, and refills it the same way as the poster and the record.
@@ -150,7 +158,7 @@ Every hook is small and named here, so a merge conflict is easy to resolve by re
   tab's page) are wrapped to serve both looks. Each wrapper calls the original whenever `GK.db.look` is
   `"ledger"`; with `GK.db.alertStyle == "raid"` the classic `GK.Warn` leaves the warning to the original chain.
 
-- **H8. Core.lua: defaults.** Seven new settings in `defaults` (`notesList`, `noteAlerts`, `watchNearby`,
+- **H8. Core.lua: defaults.** Six new settings in `defaults` (`noteAlerts`, `watchNearby`,
   `watchGroup`, `kudosGroup`, `plateNotes`, `alertStyle`), and `Grudgekeeper.toc` lists `NotesUI.lua`
   after `Profile.lua`. Their checkboxes are one section in the settings page, added through H5.
 
@@ -165,7 +173,7 @@ after `Options.lua`.
 |---|---|
 | `Classic/Classic.lua` | The setting, `GK.IsClassic()`, the wrapping (`C.Wraps`, `C.Always`), `/grudge classic`, and the shared pieces: `C.Frame` (a `ButtonFrameTemplate` frame), `C.Face` (a round portrait with a class badge), `C.Button`, `C.Tip`, `C.FormatLines`. |
 | `Classic/Cards.lua` | `C.CardView`, which draws any card table (title, name, info, big and caption, lines, up to two buttons); the small card that `GK.ShowPoster`, `GK.ShowRecord` and `GK.ShowCard` open; the Inspect tab's page. |
-| `Classic/Window.lua` | The window as Guild Grudge's is made: tabs from `GK.LedgerPages` (the first four on the left, any added after them on the right), search box (name and sub line), a sort menu and Mine only on the sortable pages (`GK.db.sortMode`, `GK.db.mineOnly`), the page's links and sub line in a strip under the toolbar, a scrolling list and the chosen row's card in a panel. It reads each page's `items()`, passes them through `GK.SortItems`, and gets the card from `GK.LedgerCard`, with the ledger's rule for which row is chosen (`page.default`). |
+| `Classic/Window.lua` | The window as Guild Grudge's is made: tabs from `GK.LedgerPages` (the pages with `side = "right"` in a group on the right, the rest on the left), search box (name and sub line), a sort menu and Mine only on the sortable pages (`GK.db.sortMode`, `GK.db.mineOnly`), the page's links and sub line in a strip under the toolbar, a scrolling list and the chosen row's card in a panel. It reads each page's `items()`, passes them through `GK.SortItems`, and gets the card from `GK.LedgerCard`, with the ledger's rule for which row is chosen (`page.default`). |
 | `Classic/Letters.lua` | The pile in one standard frame, drawn from `GK.LetterContent`, with a pager. |
 | `Classic/Notice.lua` | The letter icon: an envelope button with the unread count, draggable (`GK.db.classicNotice`), blinking when a letter lands. A warning is a red glow and a line of chat. The parchment notice stays hidden. |
 | `Classic/Sheets.lua` | The kill order sheet (from `GK.PostPlan`, sealing through `GK.PostSubmit`) and the note sheet (`GK.OpenNoteSheet(t, list)`: a tag box with a menu of `GK.KnownTags(list)`, a note, saved with `GK.AddNote`). |
@@ -191,11 +199,13 @@ Known gaps:
   Classic card with its own background while the look is classic; switching the look with the Inspect window
   open takes effect at its next update.
 
-## What the Notes tab shows
+## What the list pages show
 
-- One page, four ink links (Q7); the chosen one is kept in `GK.db.notesList`. A row is a player (or a
-  name) with their face, tags and newest note, and the score on the right. The columns are the same for
-  every list (Name, Votes), because a page's headings are fixed.
+- Four pages, one per list (D18): Kill on sight, Watch, Kudos and Names. `GK.OpenNotes(list)` opens the
+  right one, and `/grudge notes` (Kill on sight), `/grudge watch`, `/grudge kudos` and `/grudge names`
+  with no name do the same. A row is a player (or a name) with their face, tags and newest note, and the
+  score on the right. Every page is sortable and has its own headings and empty text, but no links: the
+  list is the tab. The count line is the page's `sub`.
 - A click opens a card on the right page: for a player, who put them on which list (with tags), up to five
   notes as `"text" - Author, 3 days ago (+2)`, the score, and Add a note / More... (move or remove my mark,
   vote on a note, delete one of mine, open the wanted poster for an enemy). For a nice name, who added it
