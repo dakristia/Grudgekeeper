@@ -843,5 +843,145 @@ test("import: odd data in Guild Grudge's tables does not stop it", function()
     eq(counts.notes, 3)
 end)
 
+-- ---------------------------------------------------------------------------
+-- What a letter says and which way the kill order sheet goes (Letters.lua, Post.lua)
+-- ---------------------------------------------------------------------------
+local function bootSheets(opts)
+    local GK = boot(opts)
+    for _, file in ipairs({ "Letters.lua", "Post.lua" }) do
+        assert(loadfile(W.dir .. file))("Grudgekeeper", GK)
+    end
+    GK.orders = {}                                     -- stand-ins for Guild.lua: the orders on a player
+    function GK.OrdersOn(key) return GK.orders[key] or {} end
+    function GK.OrderOn(key) return (GK.orders[key] or {})[1] end
+    function GK.Pot(o) return o.reward or 0, 0 end
+    function GK.Accept() end
+    return GK
+end
+
+test("letter content: a kill letter is a note with its closing line after a blank line", function()
+    local GK = bootSheets({ me = ME })
+    local L = { id = 2, kind = "kill", n = GANK, c = "ROGUE", r = "Orc", l = 35, p = 2, z = "Hillsbrad",
+        rank = 4, of = 12, total = 31, sample = true }
+    local d = GK.LetterContent(L)
+    eq(d.note, true)
+    eq(d.title, "Blood drawn")
+    eq(d.seal, "seal_red")
+    eq(d.blood, false)
+    eq(d.key, GANK)
+    eq(d.c, "ROGUE")
+    eq(d.sample, true)
+    eq(#d.buttons, 1)
+    eq(d.buttons[1][1], "Leaderboard")
+    eq(table.concat(d.lines, "\n"), "You killed Gank Master, a level 35 Orc in Hillsbrad.\n"
+        .. "Worth 2 points.\nThat puts you at 31 points - #4 of 12 in the guild.\n\nKeep them coming.")
+end)
+
+test("letter content: a long note leaves the closing line out", function()
+    local GK = bootSheets({ me = ME })
+    local L = { id = 1, kind = "kill", n = GANK, p = 2, revenge = 2, avenged = KARI, streak = 5, of = 3, rank = 1,
+        total = 40 }
+    local d = GK.LetterContent(L)
+    eq(#d.lines, 6)
+    eq(d.lines[#d.lines], "That puts you at 40 points - #1 of 3 in the guild.")
+end)
+
+test("letter content: a slain letter has blood, a black seal and no buttons when it cannot act", function()
+    local GK = bootSheets({ me = ME })
+    GK.orders[GANK] = { { by = KARI, reward = 100 } }
+    local d = GK.LetterContent({ id = 1, kind = "slain", n = GANK, times = 1 })
+    eq(d.title, "Slain")
+    eq(d.seal, "seal_black")
+    eq(d.blood, true)
+    eq(d.buttons[1][1], "Hitlist")
+    local e = GK.LetterContent({ id = 1, kind = "expired", n = GANK })
+    eq(e.buttons[1][1], "Post it again")
+    eq(e.blood, false)
+end)
+
+test("letter content: an order is a scroll with a name, a foot and Take the order", function()
+    local GK = bootSheets({ me = ME })
+    local d = GK.LetterContent({ id = 1, kind = "order", n = GANK, c = "MAGE", l = 60, by = KARI, reward = 20000,
+        note = "Camps the flight master.", times = 3 })
+    eq(d.note, nil)
+    eq(d.title, "KILL ORDER")
+    eq(d.name, "Gank Master")
+    eq(d.foot, "Posted by Kari")
+    eq(d.seal, "seal_red")
+    eq(d.stamp, nil)
+    eq(d.lines[1], '"Camps the flight master."')
+    eq(d.lines[2], "Has killed Kari 3 times.")
+    eq(#d.buttons, 1)
+    eq(d.buttons[1][1], "Hitlist")
+    local done = GK.LetterContent({ id = 2, kind = "complete", n = GANK, by = KARI, doneBy = ME, z = "Hillsbrad" })
+    eq(done.title, "ORDER COMPLETE")
+    eq(done.name, "Gank Master is dead")
+    eq(done.stamp, "stamp_fulfilled")
+    eq(done.seal, "seal_broken")
+    eq(done.lines[1], "You collected the bounty in Hillsbrad.")
+    eq(done.buttons[1][1], "Tell the guild")
+    eq(done.buttons[2][1], "Hitlist")
+end)
+
+test("kill order sheet: a new order, one of yours, and someone else's pot", function()
+    local GK = bootSheets({ me = ME })
+    local t = { key = GANK }
+    local p = GK.PostPlan(t)
+    eq(p.case, "new")
+    eq(p.title, "KILL ORDER")
+    eq(p.bounty, "Bounty")
+    eq(p.button, "Seal it")
+    eq(p.amount, 0)
+    eq(p.note, "")
+    eq(p.asksWhy, true)
+    eq(p.pot, nil)
+    GK.orders[GANK] = { { by = ME, reward = 25000, note = "camper" } }
+    p = GK.PostPlan(t)
+    eq(p.case, "change")
+    eq(p.button, "Change it")
+    eq(p.amount, 25000)
+    eq(p.note, "camper")
+    eq(GK.PostLabel(t), "Change your kill order")
+    local theirs = { by = KARI, reward = 5000, pot = { [ME] = 300 } }
+    GK.orders[GANK] = { theirs }
+    p = GK.PostPlan(t)
+    eq(p.case, "pot")
+    eq(p.pot, theirs)
+    eq(p.title, "ADD TO THE POT")
+    eq(p.bounty, "Your share")
+    eq(p.button, "Add it")
+    eq(p.amount, 300)
+    eq(p.asksWhy, false)
+    eq(p.small, "Kari already has an order on them: 50s. Your share goes on top, and you pay it to whoever fulfils it.")
+    eq(GK.PostLabel(t), "Add to the pot")
+end)
+
+test("kill order sheet: sealing posts a new order, or adds to the pot it was opened on", function()
+    local GK = bootSheets({ me = ME })
+    local posted, added = {}, {}
+    function GK.PostOrder(t, copper, note) posted[#posted + 1] = { t, copper, note } return { key = "o1" } end
+    function GK.Contribute(o, copper) added[#added + 1] = { o, copper } end
+    local t = { key = GANK }
+    eq(GK.PostSubmit(t, 12000, "why"), true)
+    eq(#posted, 1)
+    eq(posted[1][2], 12000)
+    eq(posted[1][3], "why")
+    local theirs = { by = KARI, reward = 5000 }
+    GK.orders[GANK] = { theirs }
+    eq(GK.PostSubmit(t, 700, "ignored"), true)
+    eq(added[1][1], theirs)
+    eq(added[1][2], 700)
+    eq(#posted, 1, "no second order")
+    -- the plan the sheet was opened with decides, even if an order has appeared since
+    GK.orders[GANK] = nil
+    eq(GK.PostSubmit(t, 900, "n", { case = "pot", pot = theirs }), true)
+    eq(added[2][1], theirs)
+    -- a refused order says why and answers false
+    function GK.PostOrder() return nil, "Too many orders." end
+    W.printed = {}
+    eq(GK.PostSubmit(t, 1, ""), false)
+    assert(W.printed[1] and W.printed[1]:find("Too many orders.", 1, true), "said why")
+end)
+
 say(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

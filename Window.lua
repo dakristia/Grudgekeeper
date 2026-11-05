@@ -334,6 +334,7 @@ local function DetailCard(spec)
     end
     return d
 end
+GK.LedgerCard = DetailCard                 -- the Classic look shows the same card for a row's select
 
 --- "All time: 31 kills, 12 deaths." reads as a two-column row: a short label, then the rest.
 local function Split(line)
