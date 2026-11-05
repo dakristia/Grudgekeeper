@@ -65,8 +65,10 @@ end
 -- What a card says. Plain data, so the smoke test can read it without a frame:
 -- { title, name, info, lines, big, caption, seal, blood, buttons = { { text, fn } }, c, unit, key }
 -- ---------------------------------------------------------------------------
---- An enemy player. t = { key, guid, c, r, l, unit }: whatever the caller knows.
-function GK.PosterCard(t)
+--- An enemy player. t = { key, guid, c, r, l, unit }: whatever the caller knows. inLedger: drawn on
+--- the ledger's own page (Window.lua), where your own order's button withdraws it rather than
+--- opening the hitlist you are already looking at.
+function GK.PosterCard(t, inLedger)
     local key, guid = t.key, t.guid
     local s = GK.Store()
     local w = Find(s.wanted, key)
@@ -79,8 +81,9 @@ function GK.PosterCard(t)
             or (w and w[field])
     end
     local c, r, l = Pick("c"), Pick("r"), Pick("l")
+    -- race and sex only from a look this session: enough for their race's face in the portrait
     local d = { key = key, unit = t.unit, c = c, name = GK.Show(key), info = GK.Describe(l, c, r), lines = {},
-        buttons = {} }
+        buttons = {}, rf = live and live.rf, sx = live and live.sx }
     local lines = d.lines
     local killedUs = 0
     if w and next(w.victims) then
@@ -134,6 +137,8 @@ function GK.PosterCard(t)
             d.buttons[2] = { (o.pot and me and o.pot[me]) and "Your share" or "Add to the pot", function()
                 GK.OpenPost({ key = o.n, guid = o.guid, c = o.c, r = o.r, l = o.l })
             end }
+        elseif inLedger then
+            d.buttons[1] = { "Withdraw", function() GK.Withdraw(o) end }
         else
             d.buttons[1] = { "Hitlist", function() GK.OpenWindow(1) end }
         end
@@ -184,17 +189,18 @@ function GK.RecordCard(key, unit)
         local c, w = GK.char, GK.Week()
         local nemesis, nf = GK.Nemesis()
         local _, class = UnitClass("player")
+        local _, raceFile = UnitRace("player")
         r = { p = c.points, k = c.kills, d = c.deaths, wp = w.p, wk = w.k, wd = w.d, wid = w.id,
             st = c.streak, bs = c.bestStreak, od = c.done, ow = c.won, nm = nemesis, nt = nf and nf.d,
-            c = class, l = UnitLevel("player"), t = time() }
+            c = class, l = UnitLevel("player"), t = time(), rf = raceFile, sx = UnitSex("player") }
         key = LIB.Me() or key
     else
         r, key = Find(GK.Store().board, key)
         if not r then return nil end
     end
     local p = r.p or 0
-    local d = { key = key, unit = unit, c = r.c, title = GK.Show(key),
-        name = ("%s - %s"):format(GK.Title(p), Plural(p, "point")), lines = {}, buttons = {},
+    local d = { key = key, unit = unit, c = r.c, rf = r.rf, sx = r.sx, title = GK.Show(key),
+        name = GK.Title(p), lines = {}, buttons = {},   -- the points are the big number, not said twice
         big = tostring(p), caption = p == 1 and "point" or "points" }
     -- place on the board: all time, and this week if they are on this week's
     local function Place(weekly)
@@ -296,17 +302,16 @@ local function Build()
         if i == 1 then b:SetPoint("BOTTOMLEFT", 46, 50) else b:SetPoint("LEFT", f.buttons[1], "RIGHT", 6, 0) end
         f.buttons[i] = b
     end
-    local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    close:SetFrameLevel(f:GetFrameLevel() + 12)
-    close:SetPoint("TOPRIGHT", -10, -10)
     -- Our own Hide, so closing works in combat too.
-    close:SetScript("OnClick", function() f:Hide() end)
+    local close = GK.MakeCloseButton(f, 20, function() f:Hide() end, 14)
+    close:SetFrameLevel(f:GetFrameLevel() + 12)
+    close:SetPoint("TOPRIGHT", -12, -12)
     if LIB.RegisterWindow then LIB.RegisterWindow(f, GK.db, "profile") end
     card = f
 end
 
---- The face of whoever the card is about, while the unit it was opened from is still them; their
---- class crest otherwise; the Grudgekeeper himself when we don't even know the class.
+--- The face of whoever the card is about, while the unit it was opened from is still them; else their
+--- race's portrait when we know race and sex; else their class crest; else the Grudgekeeper himself.
 local function Portrait(f, d)
     local coords = d.c and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[d.c]
     local face = false
@@ -317,12 +322,13 @@ local function Portrait(f, d)
     end
     if face then
         f.portrait:SetTexCoord(0, 1, 0, 1)
-    elseif coords then
-        f.portrait:SetTexture(CLASS_ICONS)
-        f.portrait:SetTexCoord(unpack(coords))
     else
-        f.portrait:SetTexture(MEDIA .. "portrait")
-        f.portrait:SetTexCoord(0, 1, 0, 1)
+        local kind = GK.SetPortrait(f.portrait, d)
+        face = kind == "race"
+        if kind == "seal" then
+            f.portrait:SetTexture(MEDIA .. "portrait")
+            f.portrait:SetTexCoord(0, 1, 0, 1)
+        end
     end
     local badge = face and coords
     f.badge:SetShown(badge and true or false)
@@ -394,9 +400,9 @@ end
 -- The game's right-click menu on a player
 -- ---------------------------------------------------------------------------
 -- Menu.ModifyMenu is how the game lets addons add to its menus: our part runs after Blizzard's own
--- entries are built, and adds one line at the end. Nothing of Blizzard's is replaced or wrapped.
--- An enemy player always gets the line - the poster for someone with no record still offers to put a
--- price on them. A friendly player gets it only when there is a record: you, or a guildie on the board.
+-- entries are built, and adds its lines at the end. Nothing of Blizzard's is replaced or wrapped.
+-- An enemy player always gets two: the poster, and the kill order on them. A friendly player gets the
+-- record line only when there is a record: you, or a guildie on the board.
 local FRIENDLY = { "SELF", "PLAYER", "PARTY", "RAID_PLAYER", "RAID", "FRIEND", "COMMUNITIES_GUILD_MEMBER", "GUILD" }
 
 --- A name from the menu's context: a plain string the client lets us read, or nil.
@@ -405,9 +411,10 @@ local function Text(v)
     return v
 end
 
-local function AddLine(root, fn)
+local function AddLine(root, fn, also, alsoFn)
     if root.CreateDivider then root:CreateDivider() end
     root:CreateButton(LABEL, fn)
+    if also then root:CreateButton(also, alsoFn) end
 end
 
 --- Who a friendly menu is about, as a key: from its unit, else the name it was opened on (a chat
@@ -432,7 +439,9 @@ local function OnEnemyMenu(_, root, ctx)
     local t = unit and GK.ReadUnit(unit)   -- an enemy player we can tell apart, or nil
     if not t then return end
     t.unit = unit
-    AddLine(root, function() GK.ShowPoster(t) end)
+    -- and the kill order itself, one click from the enemy: opening the ledger to post one was too much
+    -- work (the owner, 2026-11-05). The label says which of the sheet's three cases it will open.
+    AddLine(root, function() GK.ShowPoster(t) end, GK.PostLabel(t), function() GK.OpenPost(t) end)
 end
 
 local function OnFriendlyMenu(_, root, ctx)

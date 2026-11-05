@@ -136,6 +136,25 @@ local function Build()
     if LIB.RegisterPopup then LIB.RegisterPopup(frame) else tinsert(UISpecialFrames, "GrudgekeeperPost") end
 end
 
+--- The orders on a target that decide what the sheet does: yours, and the first guildie's.
+local function Orders(t)
+    local me = LIB.Me()
+    local mine, theirs
+    for _, o in ipairs(GK.OrdersOn(t.key, t.guid)) do
+        if o.by == me then mine = o elseif not theirs then theirs = o end
+    end
+    return mine, theirs, me
+end
+
+--- What GK.OpenPost(t) will do, said as the line in the right-click menu: decided by the same Orders, so the
+--- line can't promise a new order and open someone else's pot.
+function GK.PostLabel(t)
+    local mine, theirs = Orders(t)
+    if mine then return "Change your kill order" end
+    if theirs then return "Add to the pot" end
+    return "Post a kill order"
+end
+
 --- Open the sheet for a target: { key, guid, c, r, l }. Three ways it can go:
 ---   you have an open order on them   it is filled in, and sealing changes it
 ---   a guildie has one                the sheet adds your share to THEIR pot - one order, one pot,
@@ -145,11 +164,7 @@ function GK.OpenPost(t)
     if not (t and t.key) then return end
     if not frame then Build() end
     target = t
-    local me = LIB.Me()
-    local mine, theirs
-    for _, o in ipairs(GK.OrdersOn(t.key, t.guid)) do
-        if o.by == me then mine = o elseif not theirs then theirs = o end
-    end
+    local mine, theirs, me = Orders(t)
     pot = (not mine) and theirs or nil
     frame.name:SetText(GK.Show(t.key))
     frame.info:SetText(GK.Describe(t.l, t.c, t.r))

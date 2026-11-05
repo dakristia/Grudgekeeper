@@ -30,15 +30,16 @@ local HELP = {
     { "What it does",
       "Grudgekeeper keeps score of your world PvP: every enemy player you kill, everyone who kills you, and "
       .. "how often. Your guild sees a leaderboard of points, and who has killed the guild most. Anyone can "
-      .. "put a kill order - with a bounty, or for honour - on an enemy player. Take an order and you are "
-      .. "warned when the target is near; kill them and the order is yours, a screenshot is taken, and the "
-      .. "one who posted it is told what they owe you." },
+      .. "put a kill order - with a bounty, or for honour - on an enemy player. Take an order, or post one, "
+      .. "and you are warned when the target is near; kill them and the order is yours, a screenshot is "
+      .. "taken, and whoever put gold on it is told what they owe you." },
     { "Letters, not popups",
       "News arrives as a small sealed letter, the way the game shows new mail - but wherever you put it: "
       .. "a kill order from your guild, your points after a kill, who killed you. It fades in, blinks, and "
-      .. "waits; click it to read. Drag it anywhere, or use Place the letter icon above. Nothing opens in "
-      .. "the middle of your screen. When a target you took is near, the letter glows red and a soft chime "
-      .. "sounds." },
+      .. "waits; click it to read. Your own kills wait a minute, and for the fight to end, before they show. "
+      .. "Drag it anywhere, or use Place the letter icon above. Nothing opens in "
+      .. "the middle of your screen. When a target you took or posted is near, the letter glows red and a "
+      .. "soft chime sounds." },
     { "How it knows",
       "Forever keeps the combat log from addons, so Grudgekeeper reads what the game does hand over: your "
       .. "killing blows (and your pet's), the death recap when you die, and the players you can see - their "
@@ -156,9 +157,10 @@ local function Build(panel)
     placeNote:SetPoint("LEFT", place, "RIGHT", 10, 0)
 
     local h2 = Section(place, "Warnings")
-    local near = Check(h2, "Warn me when a target I took is near", "alertNear",
-        "On by default. The scroll glows red, a soft chime sounds and one line under it says who. Only for "
-        .. "orders you took, and at most every 90 seconds per target.")
+    local near = Check(h2, "Warn me when my targets are near", "alertNear",
+        "On by default. The scroll glows red, a soft chime sounds and one line under it says who. For orders "
+        .. "you took and orders you posted - an automatic one your death posted too - at most every 90 "
+        .. "seconds per target.")
     local all = Check(near, "Warn me for every open kill order", "alertAll",
         "Off by default. The same warning for every order the guild has out, taken or not.")
     local marks = Check(all, "Mark kill order targets' nameplates", "plateMarks",
@@ -191,11 +193,14 @@ local function Build(panel)
     local tip = Check(h5, "One line on enemy players' tooltips", "tooltip",
         "On by default. Only for enemies you have a history with: how often they killed you and you them, "
         .. "how often they killed the guild, and the bounty on them. Everyone else's tooltip is left alone.")
-    local menu = Check(tip, "Grudgekeeper profile in the right-click menu", "unitMenu",
-        "On by default. Right-click an enemy player for their wanted poster, or a guildie for their record: on "
-        .. "the target frame, party and raid frames, a name in chat and the guild roster. One line at the "
-        .. "end of the game's menu; nothing of the game's own is changed.")
-    local guildBadge = Box(menu, "A badge beside the guild window", "On by default. A small round Grudgekeeper "
+    local menu = Check(tip, "Grudgekeeper in the right-click menu", "unitMenu",
+        "On by default. Right-click an enemy player for their wanted poster or a kill order on them, or a "
+        .. "guildie for their record: on the target frame, party and raid frames, a name in chat and the guild "
+        .. "roster. Our lines go at the end of the game's menu; nothing of the game's own is changed.")
+    local inspect = Check(menu, "A Grudgekeeper tab on the Inspect window", "inspectTab",
+        "On by default. Inspect a guildie - or an enemy, if the game lets you - and a tab below the game's own "
+        .. "opens their page of the ledger right there. Anyone else gets no tab.")
+    local guildBadge = Box(inspect, "A badge beside the guild window", "On by default. A small round Grudgekeeper "
         .. "badge on the guild window's right edge; click it for the leaderboard.", function(on)
             GK.db.guildButton = on
             GK.RefreshGuildBadge()

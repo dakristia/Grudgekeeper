@@ -7,7 +7,8 @@ leaderboard, and kill orders with a bounty on them.
 - `/grudge post` writes a kill order on your target.
 - `/grudge test` puts four sample letters in your pile.
 - Right-click a player and pick **Grudgekeeper profile**: a wanted poster for an enemy, the record of a
-  guildie.
+  guildie. On an enemy, **Post a kill order** is right below it.
+- Inspect a guildie and the **Grudgekeeper** tab below the game's own shows their page of the ledger.
 
 Forever closes the combat log to addons. Grudgekeeper counts what the client does hand over: your
 killing blows (`PARTY_KILL`), the death recap, and the enemy players you can see (nameplates, target,

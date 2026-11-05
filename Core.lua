@@ -31,7 +31,8 @@ local defaults = {
     guildButton = true,      -- a small Grudgekeeper badge beside the guild window
     minimap = {},            -- LibDBIcon's own record: where the button sits, whether it is hidden
     mapPins = true,          -- where an order's target was last seen, on the world map
-    unitMenu = true,         -- "Grudgekeeper profile" in the game's right-click menu on a player
+    unitMenu = true,         -- our lines in the game's right-click menu on a player: profile, and kill order on an enemy
+    inspectTab = true,       -- a tab of ours on the game's Inspect window: a guildie's record, an enemy's poster
     guilds = {},             -- [guild key] = { board, orders, wanted, slain, feed, nextId } (Guild.lua)
 }
 -- This character's own record.
@@ -370,14 +371,17 @@ function GK.Board(weekly)
                 if r.wid == week then p, k, d = r.wp or 0, r.wk or 0, r.wd or 0 else p, k, d = 0, 0, 0 end
             end
             if not weekly or p > 0 or k > 0 or d > 0 then
-                list[#list + 1] = { who = who, p = p, k = k, d = d, l = r.l, c = r.c, total = r.p or 0 }
+                list[#list + 1] = { who = who, p = p, k = k, d = d, l = r.l, c = r.c, total = r.p or 0,
+                    rf = r.rf, sx = r.sx }
             end
         end
     end
     local _, class = UnitClass("player")
+    local _, raceFile = UnitRace("player")
     local c, w = GK.char, GK.Week()
     list[#list + 1] = { who = me or "?", p = weekly and w.p or c.points, k = weekly and w.k or c.kills,
-        d = weekly and w.d or c.deaths, l = UnitLevel("player"), c = class, total = c.points, me = true }
+        d = weekly and w.d or c.deaths, l = UnitLevel("player"), c = class, total = c.points, me = true,
+        rf = raceFile, sx = UnitSex("player") }
     table.sort(list, function(a, b)
         if a.p ~= b.p then return a.p > b.p end
         if a.k ~= b.k then return a.k > b.k end
@@ -512,6 +516,7 @@ LIB.On("PLAYER_LOGIN", function()
     GK.StartMail()
     GK.StartSocial()
     GK.StartProfiles()
+    GK.StartInspect()
     GK.StartMapPins()
     GK.RegisterOptions()
 end)

@@ -1,27 +1,88 @@
--- Grudgekeeper - the window (/grudge, the minimap button): four pages on one sheet of parchment.
---   Kill orders   every order the guild has out, with its pot, and the ones that closed lately
---   Leaderboard   the guild's points this week or all time, with titles, and who the guild most wants dead
---   Grudges       your nemesis, every enemy you have a history with, and your own log
---   News          what the guild has been up to: kills, deaths, orders posted, backed and fulfilled
+-- Grudgekeeper - the window (/grudge, the minimap button): the Grudgekeeper's ledger, an open book.
+--   Four leather tabs on top: Kill orders, Leaderboard, Grudges, News.
+--   The left page is that page's table; the right page is the row you clicked - an enemy's wanted
+--   poster, a guildie's record (Profile.lua writes both, for the small cards and for here).
+-- Folded by the bookmark on its right edge, the ledger is one page: the table, and a click on a row
+-- turns that page to the row, with Back to return. GK.db.ledgerFolded keeps the choice.
 -- Nothing here ever opens by itself: this is where you come to look.
+-- The art (art/import_grudgekeeper.py): Media/ledger_book (the whole book lying open, pages and all),
+-- ledger_tab (the tabs and the bookmark), rank_1..3 (the top three's seals), portrait_ring, close.
 local ADDON, GK = ...
 local LIB = LibStub("LibForever-1.0")
 
-local W, H, ROLL_H = 500, 532, 38
-local ROW_H, ROWS = 46, 7
 local MEDIA = "Interface\\AddOns\\Grudgekeeper\\Media\\"
 local TITLE_FONT = "Fonts\\MORPHEUS.ttf"
 local TEXT_FONT = "Fonts\\FRIZQT__.TTF"
-local INK = { 0.22, 0.13, 0.05 }
-local FADED = { 0.42, 0.33, 0.22 }
-local BLOOD = { 0.47, 0.06, 0.04 }
-local SKULL = "Interface\\Worldmap\\GlowSkull_64Red"
+local MASK = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
 local CLASS_ICONS = "Interface\\TargetingFrame\\UI-Classes-Circles"
-local MAX_FOES_SHOWN = 40
+local INK = { 0.22, 0.13, 0.05 }
+local FADED = { 0.35, 0.25, 0.15 }        -- 0.42/0.33/0.22 blended into the parchment in the game
+local BLOOD = { 0.47, 0.06, 0.04 }
+
+-- The book, in UI units: one picture per view. Media/ledger_book is the book open at two pages (a
+-- 1502x992 picture), Media/ledger_single the book folded back to one page (1103x1348). Measured by
+-- art/import_grudgekeeper.py (2026-11-04), as fractions of each picture: where the parchment is (and
+-- the gutter), the socket for the close button (centre, and radius as a fraction of the width), where
+-- the cover's top edge is (the spine's headband can stand above it), and how far the top-right iron
+-- reaches along that edge. The folded one is drawn at the scale that makes its page as wide as an open
+-- one's, so what is written on a page sits the same in both.
+local OPEN = { w = 1502, h = 992, left = 0.0499, gutter = 0.4987, top = 0.0302, bottom = 0.9466,
+               sx = 0.9747, sy = 0.0373, sr = 0.0151, edge = 0.008, iron = 0.0586 }
+local SINGLE = { w = 1103, h = 1348, left = 0.1215, right = 0.9166, top = 0.0564, bottom = 0.9444,
+                 sx = 0.9405, sy = 0.0475, sr = 0.0367, edge = 0.016, iron = 0.146 }
+local W_OPEN = 820
+local function Fit(book, width)
+    local scale = width / book.w
+    book.W, book.H = width, book.h * scale
+    book.x, book.y = book.left * width, book.top * book.H                   -- the page's top left
+    book.close = { (1 - book.sx) * width, book.sy * book.H, 2 * book.sr * width }   -- in, down, across
+    book.cover = book.edge * book.H                                         -- the cover's top edge
+    book.stop = width - book.iron * width - 4                               -- where the tabs must end
+    return book
+end
+Fit(OPEN, W_OPEN)                                    -- 820 x ~542, the hole ~25 across
+local PAGE_W = (OPEN.gutter - OPEN.left) * W_OPEN    -- ~368
+local PAGE_H = (OPEN.bottom - OPEN.top) * OPEN.H     -- ~496
+local GUTTER_X = OPEN.gutter * W_OPEN                -- where the right page starts, ~409
+Fit(SINGLE, PAGE_W / (SINGLE.right - SINGLE.left))   -- ~463 x ~566, the hole ~34 across
+OPEN.stop = GUTTER_X - 30                            -- open, the tabs stay over the left page
+OPEN.x2, SINGLE.x2 = GUTTER_X, SINGLE.x              -- where the right-hand (or only) page starts
+-- The other look, to compare (GK.db.ledgerLook = "frame", switched from /grudge debug): the same pages
+-- on a plain sheet (Media/sheet_wide, sheet_single) in Blizzard's own SettingsFrameTemplate, which
+-- Forever draws in bronze. Laid out as Guildhall's window is: the sheet where the template's backdrop
+-- goes (7,-18 to -3,3), the pages clear of the frame's edges and under its title bar.
+local FX, FY, FGAP, FB = 20, 34, 16, 14
+local FRAME = { W = 2 * FX + 2 * PAGE_W + FGAP, H = FY + PAGE_H + FB, x = FX, y = FY, cover = 0 }
+FRAME.x2, FRAME.stop = FX + PAGE_W + FGAP, FX + PAGE_W
+local FRAME_FOLDED = { W = 2 * FX + PAGE_W, H = FRAME.H, x = FX, y = FY, x2 = FX, cover = 0 }
+FRAME_FOLDED.stop = FRAME_FOLDED.W - 34              -- clear of Blizzard's X in the corner
+local ROW_H, ROWS = 32, 9
+local FACE = 30                                      -- a row's portrait; 26 blended into the page
+local LIST_TOP = 112                                 -- the first row, down from the page's top
+-- the right-hand column stops short of the row's end: room for the chosen row's red bar, and folded,
+-- for the » that says a click turns the page (they ran into each other in the preview)
+local COL1, COL2, COL_WIDE, COL_RIGHT = 232, 266, 196, PAGE_W - 36
+local TAB_V0, TAB_V1, TAB_CAP = 16 / 128, 112 / 128, 0.08   -- ledger_tab: the tab across rows 16-112
+-- The tabs' height, 8 of it behind the book's top edge, so they come out of the pages (laid on the
+-- cover they looked loose); 24/30 in 13pt was too big, 20/24 in 12pt read small in the game.
+local TAB_H, TAB_H_ON, TAB_FONT = 22, 26, 14
+local TABS = { "Kill orders", "Leaderboard", "Grudges", "News" }
 
 local win
 local tab = 1
 local weekly = true          -- the leaderboard shows this week until you ask for all time
+local offset = 0             -- the first row shown, per the list as it stands
+local selected = {}          -- [tab] = the key of the row whose detail is shown
+local turned = false         -- folded: the page shows the detail, not the list
+
+--- The book's art toned down: the generated parchment was "veldig bright" in the game. A part
+--- desaturation and a darker vertex colour, the same on the book, the sheets and the leather tabs, so
+--- nothing stands out brighter than the rest (previewed 2026-11-05: 0.45/0.78 went grey).
+local TONE_D, TONE_M = 0.30, 0.86
+local function Tone(tex, r, g, b)
+    tex:SetDesaturation(TONE_D)
+    tex:SetVertexColor((r or 1) * TONE_M, (g or 1) * TONE_M, (b or 1) * TONE_M)
+end
 
 local function Ink(fs, colour, font, size)
     fs:SetFont(font, size, "")
@@ -29,108 +90,71 @@ local function Ink(fs, colour, font, size)
     fs:SetShadowOffset(0, 0)
 end
 
-local function ClassIcon(tex, class)
-    local coords = class and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[class]
-    if coords then
-        tex:SetTexture(CLASS_ICONS)
-        tex:SetTexCoord(unpack(coords))
-    else
-        tex:SetTexture(SKULL)
-        tex:SetTexCoord(0, 1, 0, 1)
-    end
+local function Plural(n, word) return ("%d %s%s"):format(n, word, n == 1 and "" or "s") end
+
+--- A text's own width, not cut to its box: GetStringWidth on a one-line string with a width set can
+--- answer the box, which would always "fit".
+local function TextWidth(fs)
+    local w = fs.GetUnboundedStringWidth and fs:GetUnboundedStringWidth()
+    return w or fs:GetStringWidth() or 0
 end
 
-local function Plural(n, word)
-    return ("%d %s%s"):format(n, word, n == 1 and "" or "s")
-end
-
-local function PostOn(t) return function() GK.OpenPost(t) end end
--- Clicking a row opens the card on whoever it is about (Profile.lua): an enemy's wanted poster, a
--- guildie's record. x: any record that carries their guid, class, race and level.
-local function PosterOf(key, x)
-    return function() GK.ShowPoster({ key = key, guid = x and x.guid, c = x and x.c, r = x and x.r, l = x and x.l }) end
-end
-local function RecordOf(key) return function() GK.ShowRecord(key) end end
+local function Folded() return GK.db and GK.db.ledgerFolded == true end
 
 -- ---------------------------------------------------------------------------
--- What each page lists. An item: { class, skull, text1, right1, text2, faded, header, mine,
--- button = { text, fn }, button2 = { text, fn }, open = fn (a click on the row) }
+-- What each page lists. An item: { key, name, sub, rank, seal, face = { rf, sx, c }, c1, c2, wide,
+-- right, rightColour, faded, mine, header, select = { kind = "poster", t, order } or
+-- { kind = "record", key } }
 -- ---------------------------------------------------------------------------
 local STATE_WORD = { d = "FULFILLED", p = "PAID", x = "WITHDRAWN", e = "EXPIRED" }
 
+local function PosterSpec(key, x, order)
+    return { kind = "poster", order = order,
+        t = { key = key, guid = x and x.guid, c = x and x.c, r = x and x.r, l = x and x.l } }
+end
+
 local function OrderItems()
-    local me, items = LIB.Me(), {}
-    -- What I owe, worked out once for the page (it was asked again for every closed order).
-    local owed = {}
-    for _, e in ipairs(GK.Owed()) do owed[e.o] = (owed[e.o] or 0) + e.share end
+    local items = {}
     for _, o in ipairs(GK.AllOrders()) do
-        local it = { class = o.c, text1 = GK.Show(o.n), open = PosterOf(o.n, o) }
         local pot, backers = GK.Pot(o)
+        local it = { key = "o:" .. o.key, name = GK.Show(o.n), face = { c = o.c }, select = PosterSpec(o.n, o, o) }
         if o.state == "o" then
-            it.right1 = pot > 0 and GK.Coins(pot) or "for honour"
+            it.right = pot > 0 and GK.MoneyText(pot) or "honour"
             local hunting = 0
-            if o.hunters then
-                for _ in pairs(o.hunters) do hunting = hunting + 1 end
-            end
-            local bits = { GK.Describe(o.l, o.c, o.r),
-                o.auto and ("by %s's death"):format(GK.Show(o.by)) or ("by " .. GK.Show(o.by)) }
+            for _ in pairs(o.hunters or {}) do hunting = hunting + 1 end
+            local bits = { o.auto and ("by %s's death"):format(GK.Show(o.by)) or ("by " .. GK.Show(o.by)) }
             if backers > 0 then bits[#bits + 1] = Plural(backers, "backer") end
             if hunting > 0 then bits[#bits + 1] = hunting .. " hunting" end
-            if o.seen then bits[#bits + 1] = ("seen in %s %s"):format(o.seen.z or "?", GK.Ago(o.seen.t)) end
-            it.text2 = table.concat(bits, "  -  ")
-            if o.by == me then
-                it.button = { "Withdraw", function() GK.Withdraw(o) end }
-            else
-                local mine = GK.char.accepted[o.key]
-                it.button = { mine and "Drop it" or "Take it", function() GK.Accept(o, not mine) end }
-                it.button2 = { o.pot and o.pot[me] and "Your share" or "Add to pot",
-                    PostOn({ key = o.n, guid = o.guid, c = o.c, r = o.r, l = o.l }) }
-            end
+            if o.seen then bits[#bits + 1] = "seen " .. GK.Ago(o.seen.t) end
+            it.sub = table.concat(bits, " - ")
         else
-            it.faded = true
-            it.right1 = STATE_WORD[o.state] or ""
-            local bits = {}
-            if o.doneBy then bits[#bits + 1] = "by " .. GK.Show(o.doneBy) end
-            bits[#bits + 1] = GK.Ago(o.paidAt or o.doneAt)
-            if pot > 0 and o.state ~= "x" and o.state ~= "e" then bits[#bits + 1] = GK.MoneyText(pot) end
-            if owed[o] then
-                bits[#bits + 1] = "you owe " .. GK.MoneyText(owed[o])
-                it.button = { "Paid", function() GK.PayShare(o) end }
-            end
-            it.text2 = table.concat(bits, "  -  ")
+            it.faded, it.right, it.rightColour = true, STATE_WORD[o.state] or "", BLOOD
+            it.sub = (o.doneBy and ("by " .. GK.Show(o.doneBy) .. " - ") or "") .. GK.Ago(o.paidAt or o.doneAt)
         end
         items[#items + 1] = it
     end
-    return items, "No kill orders. Target an enemy player and click Post a kill order - or put a price on someone "
-        .. "who killed you, from the Grudges page."
+    return items, "No kill orders. Right-click an enemy player and pick Post a kill order - or put a price "
+        .. "on someone who killed you, from the Grudges page."
 end
 
 local function BoardItems()
     local items = {}
     for i, r in ipairs(GK.Board(weekly)) do
-        items[#items + 1] = { class = r.c, text1 = ("#%d  %s"):format(i, GK.Show(r.who)),
-            right1 = Plural(r.p, "point"),
-            text2 = ("%s  -  %s  -  %s"):format(GK.Title(r.total), Plural(r.k, "kill"), Plural(r.d, "death")),
-            mine = r.me, open = RecordOf(r.who) }
+        items[#items + 1] = { key = "b:" .. r.who, rank = i, seal = i <= 3 and r.p > 0,
+            name = GK.Show(r.who), sub = GK.Title(r.total), face = { rf = r.rf, sx = r.sx, c = r.c },
+            c1 = tostring(r.k), c2 = tostring(r.d), right = tostring(r.p), mine = r.me,
+            select = { kind = "record", key = r.who } }
     end
     local wanted = GK.MostWanted()
     if #wanted > 0 then
-        items[#items + 1] = { header = true, text1 = "Most wanted" }
+        items[#items + 1] = { header = true, name = "Most wanted" }
         for i = 1, math.min(#wanted, 10) do
             local e = wanted[i]
-            local victims = {}
-            for who, n in pairs(e.w.victims) do victims[#victims + 1] = { who = who, n = n } end
-            table.sort(victims, function(a, b) return a.n > b.n end)
-            local names = {}
-            for j = 1, math.min(3, #victims) do names[j] = ("%s %d"):format(GK.Show(victims[j].who), victims[j].n) end
-            local it = { class = e.w.c, text1 = GK.Show(e.key),
-                right1 = ("killed us %s"):format(Plural(e.total, "time")),
-                text2 = GK.Describe(e.w.l, e.w.c, e.w.r) .. "  -  " .. table.concat(names, ", "),
-                open = PosterOf(e.key, e.w) }
-            if not GK.OrderOn(e.key) then
-                it.button = { "Post order", PostOn({ key = e.key, c = e.w.c, r = e.w.r, l = e.w.l }) }
-            end
-            items[#items + 1] = it
+            local o = GK.OrderOn(e.key)
+            items[#items + 1] = { key = "w:" .. e.key, name = GK.Show(e.key), sub = GK.Describe(e.w.l, e.w.c, e.w.r),
+                face = { c = e.w.c }, wide = "killed us " .. e.total,
+                right = o and ((GK.Pot(o)) > 0 and GK.MoneyText((GK.Pot(o))) or "order") or "",
+                rightColour = BLOOD, select = PosterSpec(e.key, e.w) }
         end
     end
     return items, ""
@@ -138,340 +162,839 @@ end
 
 local function GrudgeItems()
     local items, c = {}, GK.char
-    local key, f = GK.Nemesis()
-    if key then
-        items[#items + 1] = { skull = true, text1 = "Your nemesis: " .. GK.Show(key),
-            right1 = ("%d - %d"):format(f.k or 0, f.d or 0),
-            text2 = ("Has killed you %s; you got them %s."):format(Plural(f.d, "time"), Plural(f.k or 0, "time")),
-            open = PosterOf(key, f) }
-    end
-    if (c.bestStreak or 0) > 0 then
-        items[#items + 1] = { skull = true, text1 = ("%s - %s"):format(GK.Title(c.points), Plural(c.points, "point")),
-            right1 = ("streak %d"):format(c.streak or 0),
-            text2 = ("Best streak %d kills without dying.  %s, %s all time."):format(c.bestStreak,
-                Plural(c.kills, "kill"), Plural(c.deaths, "death")),
-            open = RecordOf(LIB.Me()) }
-    end
-    -- Everyone you have a history with, the longest history first.
     local foes = {}
     for k, v in pairs(c.foes) do
         if (v.k or 0) + (v.d or 0) > 0 then foes[#foes + 1] = { key = k, f = v } end
     end
     table.sort(foes, function(a, b) return (a.f.k + a.f.d) > (b.f.k + b.f.d) end)
-    if #foes > 0 then items[#items + 1] = { header = true, text1 = "Your grudges" } end
-    for i = 1, math.min(#foes, MAX_FOES_SHOWN) do
+    if #foes > 0 then items[#items + 1] = { header = true, name = "Your grudges" } end
+    for i = 1, math.min(#foes, 40) do
         local e = foes[i]
-        local it = { class = e.f.c, text1 = GK.Show(e.key),
-            right1 = ("you %d - they %d"):format(e.f.k or 0, e.f.d or 0),
-            text2 = GK.Describe(e.f.l, e.f.c, e.f.r) .. "  -  last met " .. GK.Ago(e.f.last),
-            open = PosterOf(e.key, e.f) }
-        if (e.f.d or 0) > 0 and not GK.OrderOn(e.key) then
-            it.button = { "Post order", PostOn({ key = e.key, c = e.f.c, r = e.f.r, l = e.f.l }) }
+        items[#items + 1] = { key = "f:" .. e.key, name = GK.Show(e.key), face = { c = e.f.c },
+            sub = GK.Describe(e.f.l, e.f.c, e.f.r) .. " - last met " .. GK.Ago(e.f.last),
+            c1 = tostring(e.f.k or 0), c2 = tostring(e.f.d or 0), select = PosterSpec(e.key, e.f) }
+    end
+    if #c.log > 0 then items[#items + 1] = { header = true, name = "Lately" } end
+    for i, e in ipairs(c.log) do
+        local it = { key = "l:" .. i, face = { c = e.c }, select = PosterSpec(e.n, e),
+            sub = table.concat({ e.z or "", GK.Ago(e.t) }, e.z and " - " or "") }
+        if e.k == "K" then
+            it.name = "Killed " .. GK.Show(e.n)
+            it.right = (e.p or 0) > 0 and ("+%d"):format(e.p) or "no points"
+        else
+            it.name, it.right, it.rightColour = "Slain by " .. GK.Show(e.n), e.s or "", BLOOD
         end
         items[#items + 1] = it
-    end
-    if #c.log > 0 then items[#items + 1] = { header = true, text1 = "Lately" } end
-    for _, e in ipairs(c.log) do
-        local where = table.concat({ GK.Describe(e.l, e.c, e.r), e.z or "", GK.Ago(e.t) }, "  -  ")
-        if e.k == "K" then
-            local extra = (e.rv and "revenge" or "") .. (e.av and ((e.rv and ", " or "") .. "for " .. GK.Show(e.av)) or "")
-            items[#items + 1] = { class = e.c, text1 = "Killed " .. GK.Show(e.n),
-                right1 = (e.p or 0) > 0 and ("+%d%s"):format(e.p, extra ~= "" and ("  " .. extra) or "") or "no points",
-                text2 = where, open = PosterOf(e.n, e) }
-        else
-            items[#items + 1] = { class = e.c, text1 = "Slain by " .. GK.Show(e.n), right1 = e.s or "", text2 = where,
-                open = PosterOf(e.n, e) }
-        end
     end
     return items, "No kills or deaths yet. Only the open world counts: dungeons and battlegrounds hide who is who."
 end
 
 local function NewsItems()
     local items = {}
-    for _, e in ipairs(GK.Store().feed) do
+    for i, e in ipairs(GK.Store().feed) do
         local who, target = GK.Show(e.who), GK.Show(e.n)
         local line, right
         if e.kind == "K" then
             line = ("%s killed %s"):format(who, target)
             right = (e.p or 0) > 0 and ("+%d"):format(e.p) or nil
-            if e.av then line = line .. (" for %s"):format(GK.Show(e.av)) end
         elseif e.kind == "D" then
             line = ("%s fell to %s"):format(who, target)
         elseif e.kind == "F" then
             line = ("%s fulfilled the order on %s"):format(who, target)
             right = (e.p or 0) > 0 and GK.MoneyText(e.p) or nil
         elseif e.kind == "C" and e.au then
-            line = ("%s's death put a price on %s"):format(who, target)
-            right = "for honour"
+            line, right = ("%s's death put a price on %s"):format(who, target), "honour"
         elseif e.kind == "C" then
             line = ("%s put a price on %s"):format(who, target)
-            right = (e.p or 0) > 0 and GK.MoneyText(e.p) or "for honour"
+            right = (e.p or 0) > 0 and GK.MoneyText(e.p) or "honour"
         elseif e.kind == "T" then
-            line = ("%s added to the pot on %s"):format(who, target)
-            right = GK.MoneyText(e.p or 0)
+            line, right = ("%s added to the pot on %s"):format(who, target), GK.MoneyText(e.p or 0)
         end
         if line then
-            items[#items + 1] = { class = e.c, text1 = line, right1 = right,
-                text2 = table.concat({ e.z or "", GK.Ago(e.t) }, e.z and "  -  " or ""), open = PosterOf(e.n, e) }
+            items[#items + 1] = { key = "n:" .. i, name = line, face = { c = e.c }, right = right,
+                sub = table.concat({ e.z or "", GK.Ago(e.t) }, e.z and " - " or ""), select = PosterSpec(e.n, e) }
         end
     end
-    return items, "Nothing yet. Kills, deaths and kill orders from everyone in your guild who runs Grudgekeeper show up here."
+    return items, "Nothing yet. Kills, deaths and kill orders from everyone in your guild who runs Grudgekeeper "
+        .. "show up here."
 end
 
 local PAGES = { OrderItems, BoardItems, GrudgeItems, NewsItems }
+-- The column headings over each table: { text, x, justify }.
+local HEADINGS = {
+    { { "Name", 48 }, { "Bounty", COL_RIGHT, "RIGHT" } },
+    { { "#", 12 }, { "Name", 48 }, { "K", COL1, "CENTER" }, { "D", COL2, "CENTER" }, { "Points", COL_RIGHT, "RIGHT" } },
+    { { "Name", 48 }, { "You", COL1, "CENTER" }, { "They", COL2, "CENTER" } },
+    { { "What happened", 48 } },
+}
 
 -- ---------------------------------------------------------------------------
--- The list
+-- The detail: what the right page (or the turned page) shows
 -- ---------------------------------------------------------------------------
-local function BuildRow(row)
-    row.icon = row:CreateTexture(nil, "ARTWORK")
-    row.icon:SetSize(32, 32)
-    row.icon:SetPoint("LEFT", 4, 0)
-    row.text1 = row:CreateFontString(nil, "ARTWORK")
-    row.text1:SetPoint("TOPLEFT", 44, -6)
-    row.text1:SetJustifyH("LEFT")
-    row.text1:SetWordWrap(false)
-    row.right1 = row:CreateFontString(nil, "ARTWORK")
-    row.right1:SetPoint("TOPRIGHT", -8, -8)
-    row.right1:SetJustifyH("RIGHT")
-    row.text1:SetPoint("RIGHT", row.right1, "LEFT", -8, 0)
-    row.text2 = row:CreateFontString(nil, "ARTWORK")
-    row.text2:SetPoint("TOPLEFT", row.text1, "BOTTOMLEFT", 0, -5)
-    row.text2:SetJustifyH("LEFT")
-    row.text2:SetWordWrap(false)
-    row.button = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-    row.button:SetSize(84, 20)
-    row.button:SetPoint("BOTTOMRIGHT", -6, 4)
-    row.button2 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-    row.button2:SetSize(84, 20)
-    row.button2:SetPoint("RIGHT", row.button, "LEFT", -4, 0)
-    row.text2:SetPoint("RIGHT", row.button2, "LEFT", -6, 0)
-    row.line = row:CreateTexture(nil, "BACKGROUND")
-    row.line:SetColorTexture(0.35, 0.22, 0.1, 0.25)
-    row.line:SetHeight(1)
-    row.line:SetPoint("BOTTOMLEFT", 6, 0)
-    row.line:SetPoint("BOTTOMRIGHT", -6, 0)
-    row.mine = row:CreateTexture(nil, "BACKGROUND")
-    row.mine:SetAllPoints()
-    row.mine:SetColorTexture(0.6, 0.12, 0.05, 0.12)
-    -- A row about someone opens their card when clicked: a faint wash under the mouse says so. The
-    -- row's own buttons are children and take their own clicks first.
-    row.hl = row:CreateTexture(nil, "BACKGROUND", nil, 1)
-    row.hl:SetAllPoints()
-    row.hl:SetColorTexture(0.35, 0.22, 0.1, 0.12)
-    row.hl:Hide()
-    row:EnableMouse(true)
-    row:SetScript("OnEnter", function(self) if self.open then self.hl:Show() end end)
-    row:SetScript("OnLeave", function(self) self.hl:Hide() end)
-    row:SetScript("OnMouseUp", function(self, button)
-        if button == "LeftButton" and self.open and self:IsMouseOver() then self.open() end
-    end)
-end
-
-local function SetRowButton(b, spec)
-    b:SetShown(spec ~= nil)
-    if spec then
-        b:SetText(spec[1])
-        b:SetScript("OnClick", function() spec[2]() end)
+--- The card for a selected row. A closed order says so, and what you still owe on it.
+local function DetailCard(spec)
+    if not spec then return nil end
+    if spec.kind == "record" then
+        local d = GK.RecordCard(spec.key)
+        if d then d.buttons = {} end            -- its one button opens the leaderboard: we are in it
+        return d
     end
-end
-
-local function FillRow(row, it)
-    row.icon:SetShown(not it.header)
-    if not it.header then
-        if it.skull then
-            row.icon:SetTexture(SKULL)
-            row.icon:SetTexCoord(0, 1, 0, 1)
-        else
-            ClassIcon(row.icon, it.class)
+    local d = GK.PosterCard(spec.t, true)
+    local o = spec.order
+    if o and o.state ~= "o" then
+        local me = LIB.Me()
+        table.insert(d.lines, 1, ("The order is closed: %s%s, %s."):format(STATE_WORD[o.state] or "",
+            o.doneBy and (" by " .. GK.Show(o.doneBy)) or "", GK.Ago(o.paidAt or o.doneAt)))
+        local owe = 0
+        for _, e in ipairs(GK.Owed()) do
+            if e.o == o then owe = owe + e.share end
+        end
+        if owe > 0 and o.doneBy ~= me then
+            table.insert(d.lines, 2, ("You owe %s %s - at a mailbox, Pay bounty fills it in."):format(
+                GK.Show(o.doneBy), GK.MoneyText(owe)))
+            d.buttons = { { "Mark as paid", function() GK.PayShare(o) end } }
         end
     end
-    local colour = it.faded and FADED or INK
-    if it.header then
-        Ink(row.text1, BLOOD, TITLE_FONT, 18)
-        row.text1:SetPoint("TOPLEFT", 8, -16)
+    return d
+end
+
+--- "All time: 31 kills, 12 deaths." reads as a two-column row: a short label, then the rest.
+local function Split(line)
+    local label, value = line:match("^([^:,]+): (.+)$")
+    if label and #label <= 14 then return label, value end
+    return nil, line
+end
+
+-- ---------------------------------------------------------------------------
+-- Building the book
+-- ---------------------------------------------------------------------------
+--- A leather tab: the tab art in three pieces, so any width keeps its rounded ends. h is the tab's
+--- thickness. side: the tab turned a quarter clockwise, standing out of the book's right edge, its rounded
+--- end outward (in one stretched piece its corners were squashed flat: "ser ikke så bra ut").
+local function TabArt(parent, h, side)
+    local cap = h * 512 * TAB_CAP / 96
+    local function Piece(u0, u1)
+        local t = parent:CreateTexture(nil, "ARTWORK")
+        t:SetTexture(MEDIA .. "ledger_tab")
+        -- turned: down the screen runs along the art, rightward runs up it (eight-number form: UL, LL, UR, LR)
+        if side then t:SetTexCoord(u0, TAB_V1, u1, TAB_V1, u0, TAB_V0, u1, TAB_V0)
+        else t:SetTexCoord(u0, u1, TAB_V0, TAB_V1) end
+        return t
+    end
+    local a, m, b = Piece(0, TAB_CAP), Piece(TAB_CAP, 1 - TAB_CAP), Piece(1 - TAB_CAP, 1)
+    if side then
+        a:SetPoint("TOPLEFT")
+        a:SetPoint("TOPRIGHT")
+        a:SetHeight(cap)
+        b:SetPoint("BOTTOMLEFT")
+        b:SetPoint("BOTTOMRIGHT")
+        b:SetHeight(cap)
+        m:SetPoint("TOPLEFT", a, "BOTTOMLEFT")
+        m:SetPoint("BOTTOMRIGHT", b, "TOPRIGHT")
     else
-        Ink(row.text1, it.mine and BLOOD or colour, TITLE_FONT, 15)
-        row.text1:SetPoint("TOPLEFT", 44, -6)
+        a:SetPoint("TOPLEFT")
+        a:SetPoint("BOTTOMLEFT")
+        a:SetWidth(cap)
+        b:SetPoint("TOPRIGHT")
+        b:SetPoint("BOTTOMRIGHT")
+        b:SetWidth(cap)
+        m:SetPoint("TOPLEFT", a, "TOPRIGHT")
+        m:SetPoint("BOTTOMRIGHT", b, "BOTTOMLEFT")
     end
-    Ink(row.right1, it.faded and BLOOD or colour, TEXT_FONT, 12)
-    Ink(row.text2, FADED, TEXT_FONT, 11)
-    row.text1:SetText(it.text1 or "")
-    row.right1:SetText(it.right1 or "")
-    row.text2:SetText(it.text2 or "")
-    row.mine:SetShown(it.mine == true)
-    row.line:SetShown(not it.header)
-    row.open = it.open
-    row.hl:SetShown(it.open ~= nil and row:IsMouseOver())
-    SetRowButton(row.button, it.button)
-    SetRowButton(row.button2, it.button2)
-    -- the second line runs to whichever button is there, or to the edge
-    row.text2:ClearAllPoints()
-    row.text2:SetPoint("TOPLEFT", row.text1, "BOTTOMLEFT", 0, -5)
-    local stop = (it.button2 and row.button2) or (it.button and row.button) or nil
-    if stop then row.text2:SetPoint("RIGHT", stop, "LEFT", -6, 0) else row.text2:SetPoint("RIGHT", row, "RIGHT", -8, 0) end
+    return { a, m, b }
 end
 
-local function Refresh()
-    if not (win and win:IsShown()) then return end
-    local items, empty = PAGES[tab]()
-    win.empty:SetText(#items == 0 and empty or "")
-    local offset = FauxScrollFrame_GetOffset(win.scroll)
-    FauxScrollFrame_Update(win.scroll, #items, ROWS, ROW_H)
-    for i, row in ipairs(win.rows) do
-        local it = items[i + offset]
-        if it then
-            row:Show()
-            FillRow(row, it)
-        else
-            row:Hide()
+--- A round portrait in the bronze ring; badge: a class crest on its lower right, for a face.
+local function MakePortrait(parent, size)
+    local p = {}
+    p.tex = parent:CreateTexture(nil, "ARTWORK")
+    p.tex:SetSize(size * 0.82, size * 0.82)
+    local mask = parent:CreateMaskTexture()
+    mask:SetTexture(MASK, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    mask:SetAllPoints(p.tex)
+    p.tex:AddMaskTexture(mask)
+    p.ring = parent:CreateTexture(nil, "OVERLAY")
+    p.ring:SetTexture(MEDIA .. "portrait_ring")
+    p.ring:SetSize(size, size)
+    p.ring:SetPoint("CENTER", p.tex, "CENTER")
+    -- No dark rim behind the ring: one was tried for contrast and read as a brown halo ("ser litt rart
+    -- ut", 2026-11-05).
+    p.badge = parent:CreateTexture(nil, "OVERLAY", nil, 2)
+    p.badge:SetSize(size * 0.42, size * 0.42)
+    p.badge:SetPoint("CENTER", p.tex, "BOTTOMRIGHT", -size * 0.06, size * 0.06)
+    function p:Set(face)
+        local kind = GK.SetPortrait(self.tex, face)
+        local coords = kind == "race" and face.c and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[face.c]
+        self.badge:SetShown(coords and true or false)
+        if coords then
+            self.badge:SetTexture(CLASS_ICONS)
+            self.badge:SetTexCoord(unpack(coords))
         end
     end
-    local open = #GK.OpenOrders()
-    local rank, of = GK.MyRank()
-    win.status:SetText(("%s  -  %s, #%d of %d  -  %s"):format(Plural(open, "open order"),
-        Plural(GK.char.points, "point"), rank, of, GK.Title(GK.char.points)))
-    win.post:SetShown(tab == 1)
-    win.toggle:SetShown(tab == 2)
-    win.toggle:SetText(weekly and "Show all time" or "Show this week")
-    win.letters:SetText(("Letters (%d)"):format((GK.Unread())))
+    function p:SetShown(on)
+        self.tex:SetShown(on)
+        self.ring:SetShown(on)
+        if not on then self.badge:Hide() end
+    end
+    return p
 end
 
--- The page tabs: words in ink across the sheet, the chosen one in red and underlined.
-local function Tabs(parent, labels)
-    local buttons, widths, total = {}, {}, 0
-    local function Select(i)
-        tab = i
-        for j, b in ipairs(buttons) do
-            Ink(b.text, j == i and BLOOD or FADED, TITLE_FONT, 17)
-            b.line:SetShown(j == i)
-        end
+local Refresh                -- below; the rows and buttons call it
+
+local function Select(item)
+    selected[tab] = item.key
+    if Folded() then turned = true end
+    GK.Sound("IG_ABILITY_PAGE_TURN")
+    Refresh()
+end
+
+local function BuildRow(parent, i)
+    local row = CreateFrame("Button", nil, parent)
+    row:SetHeight(ROW_H)
+    row:SetPoint("TOPLEFT", 4, -(LIST_TOP + (i - 1) * ROW_H))
+    row:SetPoint("RIGHT", parent, "RIGHT", -6, 0)
+    row.wash = row:CreateTexture(nil, "BACKGROUND")
+    row.wash:SetAllPoints()
+    row.rule = row:CreateTexture(nil, "BORDER")
+    row.rule:SetColorTexture(0.27, 0.35, 0.55, 0.28)      -- a ledger's blue rule
+    row.rule:SetHeight(1)
+    row.rule:SetPoint("BOTTOMLEFT", 4, 0)
+    row.rule:SetPoint("BOTTOMRIGHT", -4, 0)
+    row.mark = row:CreateTexture(nil, "ARTWORK")           -- the chosen row's red bar
+    row.mark:SetColorTexture(BLOOD[1], BLOOD[2], BLOOD[3], 0.9)
+    row.mark:SetSize(3, ROW_H - 6)
+    row.mark:SetPoint("RIGHT", -2, 0)
+    row.seal = row:CreateTexture(nil, "ARTWORK")
+    row.seal:SetSize(24, 24)
+    row.seal:SetPoint("LEFT", 2, 0)
+    -- every font string gets its font HERE, not when filled: the game refuses SetText - even SetText("")
+    -- - on one that has none, and a header row is filled before any player row ever was (2026-11-05)
+    row.rank = row:CreateFontString(nil, "OVERLAY")
+    Ink(row.rank, FADED, TITLE_FONT, 13)
+    row.rank:SetPoint("CENTER", row.seal, "CENTER", 0, 0)
+    row.face = MakePortrait(row, FACE)
+    row.face.tex:SetPoint("CENTER", row, "LEFT", 55, 0)
+    row.name = row:CreateFontString(nil, "ARTWORK")
+    Ink(row.name, INK, TITLE_FONT, 13)
+    row.name:SetPoint("TOPLEFT", 74, -3)
+    row.name:SetJustifyH("LEFT")
+    row.name:SetWordWrap(false)
+    row.sub = row:CreateFontString(nil, "ARTWORK")
+    Ink(row.sub, FADED, TEXT_FONT, 11)
+    row.sub:SetPoint("TOPLEFT", 74, -19)
+    row.sub:SetJustifyH("LEFT")
+    row.sub:SetWordWrap(false)
+    local function Col(x, justify)
+        local fs = row:CreateFontString(nil, "ARTWORK")
+        Ink(fs, INK, TEXT_FONT, 12)
+        if justify == "RIGHT" then fs:SetPoint("RIGHT", row, "LEFT", x - 4, 0)
+        elseif justify == "CENTER" then fs:SetPoint("CENTER", row, "LEFT", x - 4, 0)
+        else fs:SetPoint("LEFT", row, "LEFT", x - 4, 0) end
+        return fs
     end
-    for i, label in ipairs(labels) do
-        local b = CreateFrame("Button", nil, parent)
+    row.c1, row.c2 = Col(COL1, "CENTER"), Col(COL2, "CENTER")
+    row.wide, row.right = Col(COL_WIDE), Col(COL_RIGHT, "RIGHT")
+    row.open = row:CreateFontString(nil, "ARTWORK")        -- folded: "this turns the page"
+    Ink(row.open, FADED, TEXT_FONT, 13)
+    row.open:SetPoint("RIGHT", -4, 0)
+    row.open:SetText("\194\187")                            -- », in the game's Latin-1 fonts
+    row:SetScript("OnClick", function(self) if self.item and not self.item.header then Select(self.item) end end)
+    row:SetScript("OnEnter", function(self)
+        if self.item and not self.item.header and not self.chosen then self.wash:SetColorTexture(0.6, 0.12, 0.05, 0.07) end
+    end)
+    row:SetScript("OnLeave", function(self) if self.fill then self.fill() end end)
+    return row
+end
+
+local function FillRow(row, it, chosen)
+    row.item, row.chosen = it, chosen
+    local function Wash()
+        if chosen then row.wash:SetColorTexture(0.6, 0.12, 0.05, 0.14)
+        elseif it.mine then row.wash:SetColorTexture(0.6, 0.12, 0.05, 0.06)
+        else row.wash:SetColorTexture(0, 0, 0, 0) end
+    end
+    row.fill = Wash
+    Wash()
+    if it.header then
+        Ink(row.name, BLOOD, TITLE_FONT, 16)
+        row.name:SetPoint("TOPLEFT", 44, -8)
+        row.name:SetText(it.name)
+        row.sub:SetText("")
+        row.seal:Hide()
+        row.rank:SetText("")
+        row.face:SetShown(false)
+        row.mark:Hide()
+        row.open:Hide()
+        row.c1:SetText("") row.c2:SetText("") row.wide:SetText("") row.right:SetText("")
+        row.rule:SetColorTexture(0.42, 0.33, 0.22, 0.6)
+        return
+    end
+    row.rule:SetColorTexture(0.27, 0.35, 0.55, 0.28)
+    row.name:SetPoint("TOPLEFT", 74, -3)
+    Ink(row.name, it.mine and BLOOD or (it.faded and FADED or INK), TITLE_FONT, 13)
+    row.name:SetText(it.name or "")
+    Ink(row.sub, FADED, TEXT_FONT, 11)
+    row.sub:SetText(it.sub or "")
+    local rc = it.rightColour or (it.faded and FADED or INK)
+    row.right:SetTextColor(rc[1], rc[2], rc[3])
+    row.right:SetText(it.right or "")
+    -- The name runs to whichever column is there. Before a right-hand number it stops at that number's
+    -- own width, not a fixed 70 kept for "12g 34s": a "+2" in the news cut "Seedkek One" to "Seedke..."
+    -- with half the row empty (2026-11-05), and a long sum ran past the fixed stop into the name.
+    local stop = (it.c1 and COL1 - 20) or (it.wide and COL_WIDE - 8)
+        or (it.right and COL_RIGHT - 4 - row.right:GetStringWidth() - 12) or (PAGE_W - 24)
+    row.name:SetWidth(stop - 74)
+    row.sub:SetWidth(stop - 74)
+    row.seal:SetShown(it.seal == true)
+    if it.seal then row.seal:SetTexture(MEDIA .. "rank_" .. it.rank) end
+    Ink(row.rank, it.seal and { 0.23, 0.14, 0.02 } or FADED, TITLE_FONT, it.seal and 12 or 13)
+    row.rank:SetText(it.rank and tostring(it.rank) or "")
+    row.face:SetShown(true)
+    row.face:Set(it.face or {})
+    row.c1:SetText(it.c1 or "")
+    row.c2:SetText(it.c2 or "")
+    row.wide:SetText(it.wide or "")
+    row.mark:SetShown(chosen and not Folded())
+    row.open:SetShown(Folded())
+end
+
+local function BuildList(page)
+    local margin = page:CreateTexture(nil, "BORDER")
+    margin:SetColorTexture(0.63, 0.12, 0.08, 0.45)          -- the ledger's red margin line
+    margin:SetWidth(1)
+    margin:SetPoint("TOPLEFT", 38, -8)
+    margin:SetPoint("BOTTOMLEFT", 38, 48)                  -- it stops above the buttons, which ran across it
+    page.title = page:CreateFontString(nil, "ARTWORK")
+    Ink(page.title, BLOOD, TITLE_FONT, 21)
+    page.title:SetPoint("TOPLEFT", 48, -22)
+    page.sub = page:CreateFontString(nil, "ARTWORK")
+    Ink(page.sub, FADED, TEXT_FONT, 11)
+    page.sub:SetPoint("TOPLEFT", 48, -52)
+    -- the leaderboard's two ink links, this week and all time
+    local function Link(text, isWeekly)
+        local b = CreateFrame("Button", nil, page)
         b.text = b:CreateFontString(nil, "ARTWORK")
-        Ink(b.text, FADED, TITLE_FONT, 17)
-        b.text:SetText(label)
-        b.text:SetPoint("CENTER", 0, 1)
-        widths[i] = math.ceil(b.text:GetStringWidth()) + 24
-        total = total + widths[i]
-        b:SetSize(widths[i], 26)
+        Ink(b.text, FADED, TEXT_FONT, 11)
+        b.text:SetPoint("LEFT")
+        b.text:SetText(text)
         b.line = b:CreateTexture(nil, "ARTWORK")
-        b.line:SetColorTexture(BLOOD[1], BLOOD[2], BLOOD[3], 0.8)
-        b.line:SetHeight(2)
-        b.line:SetPoint("BOTTOMLEFT", 10, 0)
-        b.line:SetPoint("BOTTOMRIGHT", -10, 0)
+        b.line:SetColorTexture(BLOOD[1], BLOOD[2], BLOOD[3], 0.7)
+        b.line:SetHeight(1)
+        b.line:SetPoint("BOTTOMLEFT", 0, 0)
+        b.line:SetPoint("BOTTOMRIGHT", 0, 0)
+        b:SetSize(70, 16)
         b:SetScript("OnClick", function()
-            Select(i)
-            if FauxScrollFrame_SetOffset then FauxScrollFrame_SetOffset(win.scroll, 0) end
-            win.scroll:SetVerticalScroll(0)
+            weekly, offset = isWeekly, 0
             Refresh()
         end)
-        buttons[i] = b
+        return b
     end
-    local x = -total / 2
-    for i, b in ipairs(buttons) do
-        b:SetPoint("TOPLEFT", parent, "TOP", x, -84)
-        x = x + widths[i]
+    page.week = Link("This week", true)
+    page.week:SetPoint("TOPLEFT", 48, -50)
+    page.all = Link("All time", false)
+    page.all:SetPoint("LEFT", page.week, "RIGHT", 6, 0)
+    page.reset = page:CreateFontString(nil, "ARTWORK")
+    Ink(page.reset, FADED, TEXT_FONT, 11)
+    page.reset:SetPoint("LEFT", page.all, "RIGHT", 4, 0)
+    page.heads = {}
+    for i = 1, 5 do
+        local fs = page:CreateFontString(nil, "ARTWORK")
+        Ink(fs, FADED, TEXT_FONT, 10)
+        page.heads[i] = fs
     end
-    Select(tab)
-    return buttons
-end
-
-local function Build()
-    -- One big unrolled scroll, like the letters: the order parchment between two rolls. None of the
-    -- game's frames - Grudgekeeper has a look of its own.
-    win = CreateFrame("Frame", "GrudgekeeperFrame", UIParent)
-    win:SetSize(W, H)
-    win:SetClampedToScreen(true)
-    win:EnableMouse(true)
-    win:SetPoint("CENTER", 0, 40)
-    local paper = win:CreateTexture(nil, "BACKGROUND")
-    paper:SetPoint("TOPLEFT", 10, -ROLL_H / 2)
-    paper:SetPoint("BOTTOMRIGHT", -10, ROLL_H / 2)
-    paper:SetTexture(MEDIA .. "sheet")
-
-    -- The rolls lie over the paper's ends, above everything on the sheet.
-    local rolls = CreateFrame("Frame", nil, win)
-    rolls:SetAllPoints()
-    rolls:SetFrameLevel(win:GetFrameLevel() + 20)
-    local top = GK.MakeRoll(rolls, ROLL_H)
-    top:SetPoint("TOPLEFT")
-    top:SetPoint("TOPRIGHT")
-    local bottom = GK.MakeRoll(rolls, ROLL_H, true)
-    bottom:SetPoint("BOTTOMLEFT")
-    bottom:SetPoint("BOTTOMRIGHT")
-    local close = CreateFrame("Button", nil, rolls, "UIPanelCloseButton")
-    close:SetSize(24, 24)
-    close:SetPoint("TOPRIGHT", -4, 0)
-    -- Our own Hide, so closing works in combat too.
-    close:SetScript("OnClick", function() win:Hide() end)
-
-    local title = win:CreateFontString(nil, "ARTWORK")
-    Ink(title, BLOOD, TITLE_FONT, 30)
-    title:SetPoint("TOP", 0, -40)
-    title:SetText("Grudgekeeper")
-    win.tabs = Tabs(win, { "Kill orders", "Leaderboard", "Grudges", "News" })
-    -- Under the tabs: how many orders are out, and where you stand.
-    win.status = win:CreateFontString(nil, "ARTWORK")
-    Ink(win.status, FADED, TEXT_FONT, 11)
-    win.status:SetPoint("TOP", 0, -116)
-
-    local list = CreateFrame("Frame", nil, win)
-    list:SetPoint("TOPLEFT", 34, -134)
-    list:SetPoint("BOTTOMRIGHT", -34, 74)
-    win.scroll = CreateFrame("ScrollFrame", nil, list, "FauxScrollFrameTemplate")
-    win.scroll:SetPoint("TOPLEFT")
-    win.scroll:SetPoint("BOTTOMRIGHT", -24, 0)
-    win.scroll:SetScript("OnVerticalScroll", function(self, value)
-        FauxScrollFrame_OnVerticalScroll(self, value, ROW_H, Refresh)
+    local underline = page:CreateTexture(nil, "BORDER")
+    underline:SetColorTexture(0.42, 0.33, 0.22, 0.6)
+    underline:SetHeight(1)
+    underline:SetPoint("TOPLEFT", 8, -(LIST_TOP - 4))
+    underline:SetPoint("TOPRIGHT", -8, -(LIST_TOP - 4))
+    page.rows = {}
+    for i = 1, ROWS do page.rows[i] = BuildRow(page, i) end
+    page.empty = page:CreateFontString(nil, "ARTWORK")
+    Ink(page.empty, FADED, TEXT_FONT, 12)
+    page.empty:SetPoint("TOPLEFT", 48, -(LIST_TOP + 12))
+    page.empty:SetPoint("RIGHT", -24, 0)
+    page.empty:SetJustifyH("LEFT")
+    page.empty:SetSpacing(3)
+    -- turning through a long list: the spellbook's page arrows, and the mouse wheel
+    page.count = page:CreateFontString(nil, "ARTWORK")
+    Ink(page.count, FADED, TEXT_FONT, 10)
+    page.count:SetPoint("TOPRIGHT", -46, -(LIST_TOP + ROWS * ROW_H + 8))
+    local function Arrow(kind, dir)
+        local b = CreateFrame("Button", nil, page)
+        b:SetSize(20, 20)
+        b:SetNormalTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. kind .. "Page-Up")
+        b:SetPushedTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. kind .. "Page-Down")
+        b:SetDisabledTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. kind .. "Page-Disabled")
+        b:SetScript("OnClick", function()
+            offset = math.max(0, offset + dir * ROWS)
+            Refresh()
+        end)
+        return b
+    end
+    page.prev = Arrow("Prev", -1)
+    page.prev:SetPoint("LEFT", page.count, "RIGHT", 2, 0)
+    page.next = Arrow("Next", 1)
+    page.next:SetPoint("LEFT", page.prev, "RIGHT", -2, 0)
+    page:EnableMouseWheel(true)
+    page:SetScript("OnMouseWheel", function(_, delta)
+        offset = math.max(0, offset - delta * 3)
+        Refresh()
     end)
-    win.rows = {}
-    for i = 1, ROWS do
-        local row = CreateFrame("Frame", nil, list)
-        row:SetHeight(ROW_H)
-        row:SetPoint("TOPLEFT", 0, -(i - 1) * ROW_H)
-        row:SetPoint("RIGHT", win.scroll, "RIGHT", 0, 0)
-        BuildRow(row)
-        win.rows[i] = row
-    end
-    win.empty = list:CreateFontString(nil, "ARTWORK")
-    Ink(win.empty, FADED, TEXT_FONT, 13)
-    win.empty:SetPoint("TOPLEFT", 30, -50)
-    win.empty:SetPoint("RIGHT", -30, 0)
-    win.empty:SetSpacing(3)
-
     local function MakeButton(text, w)
-        local b = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
+        local b = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
         b:SetSize(w, 22)
         b:SetText(text)
         return b
     end
-    local settings = MakeButton(SETTINGS or "Settings", 84)
-    settings:SetPoint("BOTTOMRIGHT", -34, 40)
-    settings:SetScript("OnClick", function() if GK.OpenOptions() then win:Hide() end end)
-    win.letters = MakeButton("Letters", 100)
-    win.letters:SetPoint("RIGHT", settings, "LEFT", -6, 0)
-    win.letters:SetScript("OnClick", function() GK.OpenLetters() end)
-    win.post = MakeButton("Post a kill order", 140)
-    win.post:SetPoint("BOTTOMLEFT", 34, 40)
-    win.post:SetScript("OnClick", function() GK.PostOnTarget() end)
-    -- The leaderboard's own switch, in the same corner on its page.
-    win.toggle = MakeButton("Show all time", 140)
-    win.toggle:SetPoint("BOTTOMLEFT", 34, 40)
-    win.toggle:SetScript("OnClick", function()
-        weekly = not weekly
+    page.post = MakeButton("Post a kill order", 140)
+    page.post:SetPoint("BOTTOMLEFT", 24, 18)
+    page.post:SetScript("OnClick", function() GK.PostOnTarget() end)
+    page.letters = MakeButton("Letters", 96)
+    page.letters:SetPoint("LEFT", page.post, "RIGHT", 6, 0)
+    page.letters:SetScript("OnClick", function() GK.OpenLetters() end)
+    page.settings = MakeButton(SETTINGS or "Settings", 76)
+    page.settings:SetPoint("LEFT", page.letters, "RIGHT", 6, 0)
+    page.settings:SetScript("OnClick", function() if GK.OpenOptions() then win:Hide() end end)
+end
+
+-- Where the card's parts sit, in units from the page's top left. The ledger's right page has these; the
+-- Inspect tab (Inspect.lua) has a smaller page and lays the same card out tighter, at the same type
+-- sizes rather than scaled down (scaled to fit, 12pt ink came out under 10).
+local DETAIL = { w = PAGE_W, face = 92, faceX = 70, faceY = 86, bigY = 138, bigSize = 26, titleX = 128,
+    titleY = 44, titleSize = 24, seal = 46, sealX = 26, sealY = 40, ruleY = 194, linesY = 206, padX = 24,
+    valueX = 120, signY = 48, buttonY = 18 }
+
+local function BuildDetail(page, L)
+    L = L or DETAIL
+    page.layout = L
+    page.back = CreateFrame("Button", nil, page)
+    page.back:SetSize(220, 16)
+    page.back:SetPoint("TOPLEFT", 24, -16)
+    page.back.text = page.back:CreateFontString(nil, "ARTWORK")
+    Ink(page.back.text, BLOOD, TEXT_FONT, 12)
+    page.back.text:SetPoint("LEFT")
+    page.back:SetScript("OnClick", function()
+        turned = false
         Refresh()
     end)
+    page.face = MakePortrait(page, L.face)
+    page.face.tex:SetPoint("CENTER", page, "TOPLEFT", L.faceX, -L.faceY)
+    page.big = page:CreateFontString(nil, "ARTWORK")
+    Ink(page.big, BLOOD, TITLE_FONT, L.bigSize)
+    page.big:SetPoint("TOP", page, "TOPLEFT", L.faceX, -L.bigY)
+    page.caption = page:CreateFontString(nil, "ARTWORK")
+    Ink(page.caption, INK, TEXT_FONT, 11)
+    page.caption:SetPoint("TOP", page.big, "BOTTOM", 0, -1)
+    page.seal = page:CreateTexture(nil, "ARTWORK")
+    page.seal:SetSize(L.seal, L.seal)
+    page.seal:SetPoint("TOPRIGHT", -L.sealX, -L.sealY)
+    page.blood = page:CreateTexture(nil, "BORDER")
+    page.blood:SetTexture(MEDIA .. "blood")
+    page.blood:SetSize(170, 170)
+    page.blood:SetPoint("CENTER", page, "RIGHT", -80, -10)
+    page.blood:SetRotation(-0.5)
+    page.blood:SetAlpha(0.4)
+    page.title = page:CreateFontString(nil, "ARTWORK")
+    Ink(page.title, BLOOD, TITLE_FONT, L.titleSize)
+    page.title:SetPoint("TOPLEFT", L.titleX, -L.titleY)
+    page.title:SetJustifyH("LEFT")
+    page.title:SetWordWrap(false)                  -- one line: FillDetail steps the size down to fit
+    page.name = page:CreateFontString(nil, "ARTWORK")
+    Ink(page.name, INK, TITLE_FONT, 15)
+    page.name:SetPoint("TOPLEFT", page.title, "BOTTOMLEFT", 0, -4)
+    page.info = page:CreateFontString(nil, "ARTWORK")
+    Ink(page.info, FADED, TEXT_FONT, 11)
+    page.info:SetPoint("TOPLEFT", page.name, "BOTTOMLEFT", 0, -3)
+    -- below the portrait's number and its caption (on the ledger they end about 182 down)
+    page.rule = page:CreateTexture(nil, "BORDER")
+    page.rule:SetColorTexture(0.42, 0.33, 0.22, 0.6)
+    page.rule:SetHeight(1)
+    page.rule:SetPoint("TOPLEFT", L.padX, -L.ruleY)
+    page.rule:SetPoint("TOPRIGHT", -L.padX, -L.ruleY)
+    page.labels, page.values = {}, {}
+    for i = 1, 9 do
+        local l = page:CreateFontString(nil, "ARTWORK")
+        Ink(l, FADED, TEXT_FONT, 10)
+        l:SetJustifyH("LEFT")
+        local v = page:CreateFontString(nil, "ARTWORK")
+        Ink(v, INK, TEXT_FONT, 12)
+        v:SetJustifyH("LEFT")
+        v:SetSpacing(2)
+        page.labels[i], page.values[i] = l, v
+    end
+    page.sign = page:CreateFontString(nil, "ARTWORK")
+    Ink(page.sign, INK, TITLE_FONT, 14)
+    page.sign:SetPoint("BOTTOMRIGHT", -(L.padX + 2), L.signY)
+    page.sign:SetText("- the Grudgekeeper")
+    page.buttons = {}
+    for i = 1, 2 do
+        local b = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
+        b:SetSize(140, 22)
+        if i == 1 then b:SetPoint("BOTTOMLEFT", L.padX, L.buttonY) else b:SetPoint("LEFT", page.buttons[1], "RIGHT", 6, 0) end
+        page.buttons[i] = b
+    end
+end
 
+--- With no card, the page is blank but for the signature: no rule under nothing, and "choose a row" only
+--- when the list has rows to choose (in the game it sat beside "0 open orders").
+local function FillDetail(page, d, anyRows)
+    page.rule:SetShown(d ~= nil)
+    if not d then
+        page.face:SetShown(false)
+        page.title:SetText("")
+        page.name:SetText("")
+        page.info:SetText(anyRows and "Choose a row on the left." or "")
+        page.big:SetText("")
+        page.caption:SetText("")
+        page.seal:Hide()
+        page.blood:Hide()
+        for i = 1, #page.labels do page.labels[i]:SetText("") page.values[i]:SetText("") end
+        for _, b in ipairs(page.buttons) do b:Hide() end
+        return
+    end
+    local L = page.layout
+    page.face:SetShown(true)
+    page.face:Set(d)
+    -- The title on one line, beside the seal (or to the edge without one): a long name steps down in size
+    -- until it fits rather than breaking in two ("Kriger-" over "Skaalvik" in the Inspect tab, 2026-11-05).
+    local room = L.w - L.titleX - (d.seal and (L.sealX + L.seal + 4) or L.padX)
+    page.title:SetWidth(room)
+    page.title:SetText(d.title or "")
+    local size = L.titleSize
+    page.title:SetFont(TITLE_FONT, size, "")
+    while size > 14 and TextWidth(page.title) > room do
+        size = size - 1
+        page.title:SetFont(TITLE_FONT, size, "")
+    end
+    page.name:SetText(d.name or "")
+    page.info:SetText(d.info or "")
+    page.big:SetText(d.big or "")
+    page.caption:SetText(d.caption or "")
+    page.seal:SetShown(d.seal ~= nil)
+    if d.seal then page.seal:SetTexture(MEDIA .. d.seal) end
+    page.blood:SetShown(d.blood == true)
+    -- the lines: a short "Label: value" as two columns, anything else as a paragraph
+    local y = L.linesY
+    for i = 1, #page.labels do
+        local l, v = page.labels[i], page.values[i]
+        local line = d.lines[i]
+        l:ClearAllPoints()
+        v:ClearAllPoints()
+        if line then
+            local label, value = Split(line)
+            if label then
+                l:SetPoint("TOPLEFT", L.padX, -(y + 2))
+                l:SetText(label:upper())
+                v:SetPoint("TOPLEFT", L.valueX, -y)
+                v:SetWidth(L.w - L.valueX - L.padX)
+            else
+                l:SetText("")
+                v:SetPoint("TOPLEFT", L.padX, -y)
+                v:SetWidth(L.w - 2 * L.padX)
+            end
+            v:SetText(value)
+            y = y + math.max(18, (v:GetStringHeight() or 14) + 6)
+        else
+            l:SetText("")
+            v:SetText("")
+        end
+    end
+    for i, b in ipairs(page.buttons) do
+        local spec = d.buttons[i]
+        b:SetShown(spec ~= nil)
+        if spec then
+            b:SetText(spec[1])
+            b:SetScript("OnClick", function()
+                spec[2]()
+                if page.refill then page.refill() else Refresh() end
+            end)
+        end
+    end
+end
+
+--- The ledger's card on a page of someone else's (the Inspect tab): built with its own layout (see
+--- DETAIL), filled from GK.RecordCard or GK.PosterCard; refill is called after one of its buttons.
+function GK.BuildCardPage(page, layout, refill)
+    BuildDetail(page, layout)
+    page.back:Hide()
+    page.refill = refill
+end
+
+function GK.FillCardPage(page, d) FillDetail(page, d, false) end
+
+--- The book's tone (see Tone), for a page of ours drawn elsewhere.
+GK.Tone = function(tex, r, g, b) Tone(tex, r, g, b) end
+
+-- ---------------------------------------------------------------------------
+-- The whole book
+-- ---------------------------------------------------------------------------
+--- The frame look's frame, made the first time it is asked for: the book alone loads no sheet.
+local function BuildFrame()
+    if win.frame then return end
+    local f = CreateFrame("Frame", nil, win, "SettingsFrameTemplate")
+    f:SetAllPoints()
+    f:SetFrameLevel(win.bookFrame:GetFrameLevel())   -- where the book is: over the tabs, under the pages
+    f:EnableMouse(false)                             -- the window under it is what drags
+    -- the template's flat grey backdrop gives way to the sheet, where Guildhall puts its wood panel
+    if type(f.Bg) == "table" then f.Bg:Hide() end
+    win.sheet = f:CreateTexture(nil, "BACKGROUND")
+    win.sheet:SetPoint("TOPLEFT", 7, -18)
+    win.sheet:SetPoint("BOTTOMRIGHT", -3, 3)
+    Tone(win.sheet)
+    if type(f.NineSlice) == "table" and f.NineSlice.Text then f.NineSlice.Text:SetText("Grudgekeeper") end
+    -- the template's X calls HideUIPanel, which does nothing in combat from addon code
+    if type(f.ClosePanelButton) == "table" then
+        f.ClosePanelButton:SetScript("OnClick", function() win:Hide() end)
+    end
+    win.frame = f
+end
+
+local function Layout()
+    local folded, framed = Folded(), GK.db.ledgerLook == "frame"
+    local b
+    if framed then b = folded and FRAME_FOLDED or FRAME else b = folded and SINGLE or OPEN end
+    win:SetSize(b.W, b.H)
+    win.book:SetShown(not framed and not folded)
+    win.single:SetShown(not framed and folded)
+    if framed then
+        BuildFrame()
+        win.sheet:SetTexture(MEDIA .. (folded and "sheet_single" or "sheet_wide"))
+    end
+    if win.frame then win.frame:SetShown(framed) end
+    win.close:SetShown(not framed)                   -- framed, Blizzard's own X closes it
+    win.list:ClearAllPoints()
+    win.list:SetPoint("TOPLEFT", b.x, -b.y)
+    win.detail:ClearAllPoints()
+    win.detail:SetPoint("TOPLEFT", folded and b.x or b.x2, -b.y)
+    -- over the (left) page, as far in as they fit, coming out from under the cover's top edge; the
+    -- labels' real widths decide (in the preview's stand-in font, News ran under the iron)
+    local last = win.tabs[#win.tabs]
+    local x = math.max(8, math.min(b.x + 12, b.stop - last.dx - last.w))
+    for _, t in ipairs(win.tabs) do
+        t:ClearAllPoints()
+        t:SetPoint("BOTTOMLEFT", win, "TOPLEFT", x + t.dx, -(b.cover + 8))
+    end
+    -- the close button fills its socket; the cross sits inside it, clear of the rim
+    if b.close then
+        local hole = b.close[3]
+        win.close:SetSize(hole, hole)
+        win.close.cross:SetSize(hole * 0.7, hole * 0.7)
+        win.close.glow:SetSize(hole * 1.26, hole * 1.26)
+        win.close:ClearAllPoints()
+        win.close:SetPoint("CENTER", win, "TOPRIGHT", -b.close[1], -b.close[2])
+    end
+    win.fold.label:SetText(folded and "\194\187" or "\194\171")    -- » opens the book, « folds it
+end
+
+--- Keep the left edge where it is when the book changes width: anchor it by its top left first.
+local function Fold(on)
+    GK.db.ledgerFolded = on or nil
+    turned = false
+    local l, t = win:GetLeft(), win:GetTop()
+    if l and t then
+        win:ClearAllPoints()
+        win:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", l, t)
+    end
+    Layout()
+    Refresh()
+end
+
+local function SelectTab(i)
+    tab, offset, turned = i, 0, false
+    for j, t in ipairs(win.tabs) do
+        local on = j == i
+        t:SetHeight(on and TAB_H_ON or TAB_H)
+        for _, piece in ipairs(t.art) do
+            if on then Tone(piece, 0.9, 0.38, 0.28) else Tone(piece, 0.78, 0.62, 0.5) end
+        end
+        t.label:SetTextColor(on and 1 or 0.95, on and 0.9 or 0.86, on and 0.72 or 0.68)
+    end
+    Refresh()
+end
+
+local function Build()
+    win = CreateFrame("Frame", "GrudgekeeperFrame", UIParent)
+    win:SetSize(OPEN.W, OPEN.H)
+    win:SetClampedToScreen(true)
+    win:EnableMouse(true)
+    win:SetPoint("CENTER", 0, 30)
+    -- In levels above the window: the tabs and the bookmark (+1), BEHIND the book (+2), so they come
+    -- out of its pages; what is written on the pages (+3); the close button (+10). Each frame takes its
+    -- level before anything is built in it, so what it holds starts above it.
+    local level = win:GetFrameLevel()
+    local book = CreateFrame("Frame", nil, win)
+    book:SetAllPoints()
+    book:SetFrameLevel(level + 2)
+    win.bookFrame = book
+    -- one picture per view, the window always its size (Layout)
+    win.book = book:CreateTexture(nil, "BACKGROUND")
+    win.book:SetTexture(MEDIA .. "ledger_book")
+    win.book:SetAllPoints()
+    Tone(win.book)
+    win.single = book:CreateTexture(nil, "BACKGROUND")
+    win.single:SetTexture(MEDIA .. "ledger_single")
+    win.single:SetAllPoints()
+    Tone(win.single)
+    win.list = CreateFrame("Frame", nil, win)
+    win.list:SetFrameLevel(level + 3)
+    win.list:SetSize(PAGE_W, PAGE_H)
+    BuildList(win.list)
+    win.detail = CreateFrame("Frame", nil, win)
+    win.detail:SetFrameLevel(level + 3)
+    win.detail:SetSize(PAGE_W, PAGE_H)
+    BuildDetail(win.detail)
+    -- Layout places the tabs, over the left page as far in as they fit
+    win.tabs = {}
+    local x = 0
+    for i, name in ipairs(TABS) do
+        local t = CreateFrame("Button", nil, win)
+        t:SetFrameLevel(level + 1)
+        t.label = t:CreateFontString(nil, "OVERLAY")
+        t.label:SetFont(TITLE_FONT, TAB_FONT, "")
+        t.label:SetShadowOffset(1, -1)
+        t.label:SetText(name)
+        t.label:SetPoint("CENTER", 0, 4)
+        local w = math.ceil(t.label:GetStringWidth() or 60) + 22
+        t:SetWidth(w)
+        t:SetHeight(TAB_H)
+        t.art = TabArt(t, TAB_H_ON)
+        t.dx, t.w = x, w
+        t:SetScript("OnClick", function() SelectTab(i) end)
+        win.tabs[i] = t
+        x = x + w + 4
+    end
+    -- the bookmark that folds the book: a tab like the ones on top, standing 20 out of the right-hand
+    -- edge (both covers end ~4 inside the window's edge, so 10 of its 30 are behind the cover)
+    local fold = CreateFrame("Button", nil, win)
+    fold:SetFrameLevel(level + 1)
+    fold:SetSize(30, 76)
+    fold:SetPoint("LEFT", win, "RIGHT", -14, 60)
+    for _, piece in ipairs(TabArt(fold, 30, true)) do Tone(piece, 0.78, 0.62, 0.5) end
+    fold.label = fold:CreateFontString(nil, "OVERLAY")
+    fold.label:SetFont(TEXT_FONT, 18, "")
+    fold.label:SetShadowOffset(1, -1)
+    fold.label:SetTextColor(1, 0.9, 0.72)
+    fold.label:SetPoint("CENTER", 5, 1)                -- the middle of the part that shows
+    fold:SetScript("OnClick", function() Fold(not Folded()) end)
+    fold:SetScript("OnEnter", function(self)
+        self.label:SetTextColor(1, 1, 1)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine(Folded() and "Open the book" or "Fold to one page", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    fold:SetScript("OnLeave", function(self)
+        self.label:SetTextColor(1, 0.9, 0.72)
+        GameTooltip:Hide()
+    end)
+    win.fold = fold
+    -- the close button, in the top-right iron's socket (Layout sizes and places it per view)
+    local close = GK.MakeCloseButton(win, OPEN.close[3], function() win:Hide() end)
+    close:SetFrameLevel(level + 10)
+    win.close = close
     win:Hide()
     if LIB.RegisterWindow then LIB.RegisterWindow(win, GK.db, "window") end
-    win:HookScript("OnShow", Refresh)
+    win:HookScript("OnShow", function() Refresh() end)
+    Layout()
+    SelectTab(tab)
+end
+
+--- The row whose detail shows: the chosen one if it is still there, else the page's own default.
+local function Chosen(items)
+    local key = selected[tab]
+    if key then
+        for _, it in ipairs(items) do
+            if it.key == key then return it end
+        end
+    end
+    if tab == 2 then
+        for _, it in ipairs(items) do
+            if it.mine then return it end
+        end
+    end
+    if tab == 3 then return { key = "me", select = { kind = "record", key = LIB.Me() } } end
+    for _, it in ipairs(items) do
+        if not it.header and not it.faded then return it end
+    end
+    return nil
+end
+
+Refresh = function()
+    if not (win and win:IsShown()) then return end
+    local folded = Folded()
+    local items, empty = PAGES[tab]()
+    local list, detail = win.list, win.detail
+    local chosen = Chosen(items)
+    -- the list page
+    list.title:SetText(TABS[tab])
+    local onBoard = tab == 2
+    list.week:SetShown(onBoard)
+    list.all:SetShown(onBoard)
+    list.reset:SetShown(onBoard)
+    if onBoard then
+        Ink(list.week.text, weekly and BLOOD or FADED, TEXT_FONT, 11)
+        Ink(list.all.text, weekly and FADED or BLOOD, TEXT_FONT, 11)
+        list.week.line:SetShown(weekly)
+        list.all.line:SetShown(not weekly)
+        local get = C_DateAndTime and C_DateAndTime.GetSecondsUntilWeeklyReset
+        local ok, secs = false, nil
+        if get then ok, secs = pcall(get) end
+        local days = ok and type(secs) == "number" and not GK.Secret(secs) and math.ceil(secs / 86400) or nil
+        list.reset:SetText(days and ("-  resets in " .. Plural(days, "day")) or "")
+        list.sub:SetText("")
+    elseif tab == 1 then
+        local rank, of = GK.MyRank()
+        list.sub:SetText(("%s  -  you: %s, #%d of %d"):format(Plural(#GK.OpenOrders(), "open order"),
+            Plural(GK.char.points, "point"), rank, of))
+    elseif tab == 3 then
+        list.sub:SetText("Everyone you have a history with")
+    else
+        list.sub:SetText("What the guild has been up to")
+    end
+    for i, fs in ipairs(list.heads) do
+        local h = HEADINGS[tab][i]
+        fs:ClearAllPoints()
+        if h then
+            fs:SetText(h[1]:upper())
+            if h[3] == "RIGHT" then fs:SetPoint("BOTTOMRIGHT", list, "TOPLEFT", h[2] - 4, -(LIST_TOP - 6))
+            elseif h[3] == "CENTER" then fs:SetPoint("BOTTOM", list, "TOPLEFT", h[2] - 4, -(LIST_TOP - 6))
+            else fs:SetPoint("BOTTOMLEFT", list, "TOPLEFT", h[2], -(LIST_TOP - 6)) end
+        else
+            fs:SetText("")
+        end
+    end
+    offset = math.max(0, math.min(offset, math.max(0, #items - ROWS)))
+    for i, row in ipairs(list.rows) do
+        local it = items[i + offset]
+        if it then
+            row:Show()
+            FillRow(row, it, chosen ~= nil and it.key == chosen.key)
+        else
+            row:Hide()
+        end
+    end
+    list.empty:SetText(#items == 0 and empty or "")
+    local more = #items > ROWS
+    list.count:SetShown(more)
+    list.prev:SetShown(more)
+    list.next:SetShown(more)
+    if more then
+        list.count:SetText(("%d-%d of %d"):format(offset + 1, math.min(offset + ROWS, #items), #items))
+        list.prev:SetEnabled(offset > 0)
+        list.next:SetEnabled(offset + ROWS < #items)
+    end
+    list.letters:SetText(("Letters (%d)"):format((GK.Unread())))
+    -- the detail: the right-hand page, or the page turned
+    local showDetail = not folded or turned
+    list:SetShown(not folded or not turned)
+    detail:SetShown(showDetail)
+    detail.back:SetShown(folded)
+    detail.back.text:SetText("\194\171 Back to " .. TABS[tab]:lower())
+    if showDetail then FillDetail(detail, DetailCard(chosen and chosen.select), #items > 0) end
 end
 
 function GK.OpenWindow(page)
     if not win then Build() end
-    if page and win.tabs[page] then win.tabs[page]:Click() end
+    if page and win.tabs[page] then SelectTab(page) end
     win:Show()
     win:Raise()
     Refresh()
@@ -481,5 +1004,13 @@ function GK.ToggleWindow()
     if win and win:IsShown() then win:Hide() else GK.OpenWindow() end
 end
 
--- Once per burst of changes (GK.Changed gathers them); Refresh returns at once while the window is shut.
-LIB.Listen("GRUDGEKEEPER_CHANGED", Refresh)
+--- The book, or the plain sheet in Blizzard's frame - while we compare them (/grudge debug).
+function GK.SwitchLedgerLook()
+    GK.db.ledgerLook = GK.db.ledgerLook ~= "frame" and "frame" or nil
+    if not win then Build() end
+    Layout()
+    GK.OpenWindow()
+end
+
+-- Once per burst of changes (GK.Changed gathers them); Refresh returns at once while the book is shut.
+LIB.Listen("GRUDGEKEEPER_CHANGED", function() Refresh() end)

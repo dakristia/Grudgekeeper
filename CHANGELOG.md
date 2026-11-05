@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **The window is a ledger now.** An open book of two pages: the table on the left - kill orders, the leaderboard, your grudges, the news - and on the right the row you clicked: an enemy's wanted poster with Take the order and Add to the pot, a guildie's record. The bookmark on its edge folds it to one page; a click on a row then turns the page, and Back turns it back. A long list turns a page at a time, or scrolls with the wheel.
+- **Faces in the ledger.** A guildie shows their race's portrait with their class on its shoulder - it comes with their score, so they need this version too; an enemy shows their class, and on their poster their face once you have seen them this session. The top three of the week wear wax seals of gold, silver and copper.
+- **A close button of Grudgekeeper's own**, an iron cross, on the ledger, the kill order scroll, the profile cards and the letters.
+- **Your own kills wait a minute.** The letter about your kill - or about an order your kill fulfilled - goes into the pile at once, but the letter icon shows it only a minute after the kill and once you are out of combat, so nothing blinks at you the moment a fight ends. Another kill in that minute joins the same letter.
+- **A Grudgekeeper tab on the Inspect window.** Inspect a guildie and a tab below the game's own opens their page of the ledger - title, points, their week, kill streak, nemesis - right in the Inspect window. A guildie with no score yet says so. An enemy, if the game lets you inspect one, gets their wanted poster, and the tab glows while there is a kill order on them. Anyone else gets no tab, and the tab can be switched off.
+- **Kill orders from the right-click menu.** Right-click an enemy player and pick Post a kill order, right below Grudgekeeper profile - no need to open the ledger. When a guildie already has an order on them the line says Add to the pot, and on your own order Change your kill order.
+- **Your own orders warn you too.** The red glow, the chime and the line under the letter used to come only for orders you took - and your own can't be taken. Now an order you posted warns you as well, and so does one your death posted, so a player camping you can't walk back up unannounced. The setting is now called "Warn me when my targets are near".
+- **Turning between kill orders works.** The arrows and "1 of 3" on a kill order scroll sat behind its bottom roll, where they could not be clicked; they are on the roll now.
+- **Long letters stay clear of the seal.** A short letter from the Grudgekeeper still ends with his last word; a long one - a kill with revenge, a streak and a new title, or a death that posted a kill order - leaves it out, so the text never runs into the seal and the signature.
+
 ## 0.1.0-beta1
 
 The first version, a beta: nothing in it has met a real fight yet.

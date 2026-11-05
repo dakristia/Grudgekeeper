@@ -150,6 +150,7 @@ local ACTIONS = {
     { "Kari's record", function() GK.ShowRecord(Guildie("Kari")) end },
     { "Your record", function() GK.ShowRecord(LIB.Me(), "player") end },
     { "The leaderboard", function() GK.OpenWindow(2) end },
+    { "Book or frame", function() GK.SwitchLedgerLook() end },
 
     { "What the game allows" },
     { "Screenshot in 1 second", function()

@@ -4,7 +4,7 @@
 -- them. What we saw - level, class, race, GUID - is kept for a while, because a kill or a death only
 -- names someone, and the level has to come from having seen them.
 -- Anyone with an open kill order on them gets a skull over their nameplate. The target of an order
--- you took also lights up the notice scroll (Notice.lua), with a sound - never a popup.
+-- you took or posted also lights up the notice scroll (Notice.lua), with a sound - never a popup.
 local ADDON, GK = ...
 local LIB = LibStub("LibForever-1.0")
 local Secret = GK.Secret
@@ -154,10 +154,17 @@ end
 -- ---------------------------------------------------------------------------
 -- Seeing someone
 -- ---------------------------------------------------------------------------
+--- Is this order yours to hunt: one you took, or one you posted (your own, or one your death posted)?
+--- Your own orders can't be "taken" - their buttons offer Withdraw instead - so before this, the
+--- camper whose order your death posted could walk right up to you unannounced (the user, 2026-11-04).
+function GK.Hunting(order)
+    return GK.char.accepted[order.key] or order.by == LIB.Me()
+end
+
 -- The target of an open order is in sight: warn (if it's yours to hunt) and tell the guild where.
 local function Spotted(order, s)
     local now = GetTime()
-    if (GK.char.accepted[order.key] and GK.db.alertNear) or GK.db.alertAll then
+    if (GK.Hunting(order) and GK.db.alertNear) or GK.db.alertAll then
         if not alerted[order.key] or now - alerted[order.key] > ALERT_GAP then
             alerted[order.key] = now
             GK.Warn(("%s is near!"):format(GK.Show(order.n)), true)
@@ -209,6 +216,8 @@ function GK.See(unit)
         s.rawRace, s.r = race, GK.Clean(race, 20)
     end
     if not Secret(raceFile) then s.rf = raceFile or s.rf end
+    local sex = UnitSex(unit)
+    if not Secret(sex) and (sex == 2 or sex == 3) then s.sx = sex end       -- for their portrait
     local level = UnitLevel(unit)
     if not Secret(level) then s.l = GK.ValidLevel(level) or s.l end
     s.t, s.z = GetTime(), GK.Zone()

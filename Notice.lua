@@ -2,7 +2,7 @@
 -- envelope says you have mail - but on its own, wherever you put it, not on the minimap. It fades in
 -- and blinks when a letter lands, then rests with a faint glow until you read it. Click it to read,
 -- right-click for the hitlist, drag it anywhere; /grudge notice shows it to place it without waiting
--- for mail. When the target of an order you took is near it glows red, with a soft chime and one
+-- for mail. When the target of an order you took or posted is near it glows red, with a soft chime and one
 -- short line under it. That is the only warning Grudgekeeper gives: nothing opens in the middle of
 -- the screen.
 local ADDON, GK = ...
@@ -47,7 +47,7 @@ local function Tooltip(self)
         local shown = 0
         for i = #GK.char.letters, 1, -1 do
             local L = GK.char.letters[i]
-            if not L.read and shown < 5 then
+            if not L.read and not GK.Held(L) and shown < 5 then
                 shown = shown + 1
                 GameTooltip:AddLine("  " .. GK.LetterLine(L), 0.9, 0.8, 0.6)
             end
@@ -203,7 +203,7 @@ function GK.NoticeUpdate(landed, silent)
     local icon = MEDIA .. "notice"
     for i = #GK.char.letters, first or 1, -1 do
         local L = GK.char.letters[i]
-        if not L.read then
+        if not L.read and not GK.Held(L) then
             icon = GK.LETTER_ICON[L.kind] or icon
             break
         end

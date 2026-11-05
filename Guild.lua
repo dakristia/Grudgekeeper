@@ -5,7 +5,9 @@
 -- Messages, fields separated by ';' (every text field goes through GK.Clean on the way in). A field
 -- added later goes on the END, so an older client reads what it knows and ignores the rest:
 --   B;1;points;kills;deaths;level;class;weekPoints;weekKills;weekDeaths;weekId;streak;bestStreak;
---       ordersDone;bountyWon;nemesis;nemesisTimes              my score, and my profile's numbers
+--       ordersDone;bountyWon;nemesis;nemesisTimes;race;sex     my score, my profile's numbers, and
+--                                                              my race (file token) and sex (2 or 3),
+--                                                              for my portrait in the ledger
 --   Q;1                                                        tell me everything (at login)
 --   K;1;name;class;race;level;zone;points;avenged;times        I killed someone (avenging a guildie;
 --                                                              times: how often I have, in all)
@@ -468,9 +470,10 @@ function GK.SendBoard()
         local _, class = UnitClass("player")
         local w, c = GK.Week(), GK.char
         local nemesis, f = GK.Nemesis()
+        local _, raceFile = UnitRace("player")
         Send(Msg("B", PROTO, c.points, c.kills, c.deaths, UnitLevel("player"), class,
             w.p, w.k, w.d, w.id, c.streak or 0, c.bestStreak or 0, c.done or 0, c.won or 0,
-            nemesis, f and f.d or nil))
+            nemesis, f and f.d or nil, raceFile, UnitSex("player")))
     end)
 end
 
@@ -639,6 +642,11 @@ local function OnBoard(sender, f)
     r.od, r.ow = Int(f[14], 0, 1e6), Int(f[15], 0, 1e12)
     r.nm = GK.Clean(f[16], 64)
     r.nt = r.nm and Int(f[17], 1, 1e6) or nil
+    -- For their portrait: a race's file token (letters only, as the client's are) and a sex the game
+    -- knows (2 male, 3 female). Anything else is dropped, and the ledger shows their class instead.
+    local rf = f[18]
+    r.rf = (type(rf) == "string" and #rf <= 20 and rf:match("^%a+$")) and rf or nil
+    r.sx = Int(f[19], 2, 3)
 end
 
 local function OnKill(sender, f)
@@ -775,7 +783,7 @@ local function OnSighting(sender, f)
     local m, x, y = Int(f[7], 1, 1e6), Int(f[8], 0, 1000), Int(f[9], 0, 1000)
     if not (m and x and y) then m, x, y = nil, nil, nil end
     o.seen = { by = sender, z = zone, t = time(), l = GK.ValidLevel(f[6]), m = m, x = x, y = y }
-    if GK.char.accepted[o.key] and GK.db.alertNear then
+    if GK.Hunting(o) and GK.db.alertNear then
         GK.Warn(("%s saw %s%s"):format(GK.Show(sender), GK.Show(o.n), zone and (" in " .. zone) or ""), false)
     end
 end

@@ -81,24 +81,67 @@ local function Prune()
     while #list > MAX_LETTERS do table.remove(list, 1) end
 end
 
+-- A letter about your own kill waits before the notice shows it: it goes into the pile at once, but
+-- the notice and the unread count leave it out until a minute after the kill AND you are out of combat.
+-- Right after a fight it was one more thing blinking at you (the owner, 2026-11-05: "it can be annoying
+-- when it pops right after combat - wait a minute?"). Another kill in that minute joins the same letter
+-- and starts the minute again. Kept here, not in the saved letter: a reload lets it land at once.
+local KILL_HOLD = 60
+local holding = setmetatable({}, { __mode = "k" })   -- letter -> GetTime() it may land
+local releasePending = false
+local Release
+
+local function Hold(L)
+    holding[L] = GetTime() + KILL_HOLD
+    if not releasePending then
+        releasePending = true
+        C_Timer.After(KILL_HOLD + 0.1, Release)
+    end
+end
+
+Release = function()
+    releasePending = false
+    local now, soonest, landed = GetTime(), nil, false
+    for L, at in pairs(holding) do
+        if at > now then
+            soonest = math.min(soonest or math.huge, at - now)
+        elseif not InCombatLockdown() then
+            holding[L], landed = nil, true
+        end
+        -- its minute is up but you are fighting: PLAYER_REGEN_ENABLED calls this again
+    end
+    if soonest and not releasePending then
+        releasePending = true
+        C_Timer.After(soonest + 0.1, Release)
+    end
+    if landed then
+        GK.NoticeUpdate(true, true)
+        GK.Changed()
+    end
+end
+
+--- A letter still held back after your own kill: in the pile, not yet news.
+function GK.Held(L) return holding[L] ~= nil end
+
 -- silent: no sound as it lands - a letter about something you just did yourself, like a kill, is no
--- news to you, so it only waits by the minimap.
-local function Add(kind, data, silent)
+-- news to you, so it only waits by the minimap. hold: it waits a minute and for the fight to end first.
+local function Add(kind, data, silent, hold)
     GK.char.letterId = (GK.char.letterId or 0) + 1
     data.id, data.kind, data.t, data.read = GK.char.letterId, kind, time(), false
     local list = GK.char.letters
     list[#list + 1] = data
     Prune()
-    GK.NoticeUpdate(true, silent)
+    if hold then Hold(data) end
+    GK.NoticeUpdate(not hold, silent)
     GK.Changed()
     return data
 end
 
---- Unread letters: how many, and the first one's place in the pile.
+--- Unread letters: how many, and the first one's place in the pile. A held letter isn't news yet.
 function GK.Unread()
     local n, first = 0, nil
     for i, l in ipairs(GK.char.letters) do
-        if not l.read then
+        if not l.read and not holding[l] then
             n = n + 1
             first = first or i
         end
@@ -112,11 +155,12 @@ function GK.OrderLetter(o)
         times = w and w.victims[o.by] or nil, auto = o.auto })
 end
 
+--- Your own kill that fulfilled it waits like a kill letter does.
 function GK.CompleteLetter(o)
     local me = LIB.Me()
     Add("complete", { n = o.n, c = o.c, r = o.r, l = o.l, by = o.by, reward = o.reward, o = o.key,
         doneBy = o.doneBy, z = o.doneZone, pot = (GK.Pot(o)), share = o.pot and o.pot[me] or nil },
-        o.doneBy == me)
+        o.doneBy == me, o.doneBy == me)
 end
 
 --- Somebody paid you for an order you fulfilled: the poster (their reward) or a backer (their share).
@@ -143,14 +187,15 @@ function GK.KillLetter(v, points, con, today, zone, extra)
         L.more = (L.more or 0) + 1
         L.morePoints = (L.morePoints or 0) + (L.p or 0)
         L.t = time()
+        Hold(L)                                     -- the minute starts again from this kill
     else
-        L = Add("kill", {}, true)
+        L = Add("kill", {}, true, true)
     end
     L.n, L.c, L.r, L.l, L.p, L.con, L.today, L.z = v.key, v.c, v.r, v.l, points, con, today, zone
     L.rank, L.of, L.weekRank, L.total = rank, of, weekRank, GK.char.points
     L.revenge, L.avenged, L.streak = extra.revenge, extra.avenged, extra.streak
     L.title = extra.title or L.title                -- a new title stays news until the letter is read
-    GK.NoticeUpdate(true, true)
+    GK.NoticeUpdate(false)
     GK.Changed()
 end
 
@@ -357,8 +402,10 @@ local function NoteContent(L)
         end
         if L.autoOrder then
             -- posted in your name by this very death: say so, and where to withdraw it
-            p[#p + 1] = "That was one death too many: a kill order on them went out to the guild, in your name. "
-                .. "You can withdraw it on the hitlist."
+            -- Short, and no closing line after it: this is the longest of the small letters, and at eight
+            -- lines its last one met the seal and signature (the preview of 2026-11-04).
+            p[#p + 1] = "A kill order on them went out to the guild, in your name. The hitlist can withdraw it."
+            closing = nil
             action = { "Hitlist", function() GK.OpenWindow(1) end }
         elseif GK.OrderOn(L.n, L.guid) then
             p[#p + 1] = "There's a price on their head already."
@@ -486,7 +533,6 @@ local function BuildScroll()
         b:SetPoint("BOTTOMLEFT", 30, 56 - (i - 1) * 26)
         f.buttons[i] = b
     end
-    Pager(f, c, -40, 8)
 
     -- The rolls sit above the sheet; the bottom one hangs from the sheet's edge, so it travels down as
     -- the sheet unrolls.
@@ -499,11 +545,13 @@ local function BuildScroll()
     local bottom = GK.MakeRoll(rolls, ROLL_H, true)
     bottom:SetWidth(W + 16)
     bottom:SetPoint("TOP", sheet, "BOTTOM", 0, ROLL_H / 2)
-    local close = CreateFrame("Button", nil, rolls, "UIPanelCloseButton")
-    close:SetSize(24, 24)
-    close:SetPoint("TOPRIGHT", -2, 2)
+    -- "1 of 3" and its arrows sit ON the bottom roll, and travel with it. They used to sit on the sheet,
+    -- 8 above its edge - where the roll covers the sheet's last 16, one level higher: hidden behind it
+    -- (seen in the preview of 2026-11-04, art/out/grudgekeeper_preview_2_letters.png).
+    Pager(f, bottom, 0, 10)
     -- Every close path calls our own Hide, so it works in combat too.
-    close:SetScript("OnClick", function() GK.CloseLetters() end)
+    local close = GK.MakeCloseButton(rolls, 20, function() GK.CloseLetters() end, 14)
+    close:SetPoint("CENTER", top, "RIGHT", -18, 0)
 
     -- The stamp comes down hard: big and faint to its size, then the sheet jolts.
     local slam = f.stamp:CreateAnimationGroup()
@@ -574,6 +622,65 @@ end
 -- ---------------------------------------------------------------------------
 -- The note
 -- ---------------------------------------------------------------------------
+--- Grudgekeeper's own close button: the iron X (Media/close), a red glow behind it under the mouse,
+--- a shade darker pressed. Every close path is our own Hide, so it works in combat too. size: the
+--- button's side (what a click can hit); art: the cross's own side, smaller, so it sits inside a
+--- socket rather than over its rim (the preview of 2026-11-04 had it filling the hole). b.cross and
+-- b.glow are kept, for a caller whose socket changes size (the ledger, open and folded).
+function GK.MakeCloseButton(parent, size, onClick, art)
+    art = art or size
+    local b = CreateFrame("Button", nil, parent)
+    b:SetSize(size, size)
+    local glow = b:CreateTexture(nil, "BACKGROUND")
+    glow:SetTexture(MEDIA .. "glow")
+    glow:SetBlendMode("ADD")
+    glow:SetVertexColor(1, 0.2, 0.1)
+    glow:SetSize(art * 1.8, art * 1.8)
+    glow:SetPoint("CENTER")
+    glow:Hide()
+    local x = b:CreateTexture(nil, "ARTWORK")
+    x:SetTexture(MEDIA .. "close")
+    x:SetSize(art, art)
+    x:SetPoint("CENTER")
+    b:SetScript("OnEnter", function() glow:Show() end)
+    b:SetScript("OnLeave", function() glow:Hide() x:SetVertexColor(1, 1, 1) end)
+    b:SetScript("OnMouseDown", function() x:SetVertexColor(0.7, 0.7, 0.7) end)
+    b:SetScript("OnMouseUp", function() x:SetVertexColor(1, 1, 1) end)
+    b:SetScript("OnClick", onClick)
+    b.cross, b.glow = x, glow
+    return b
+end
+
+-- The client's race portraits (raceicon128-<race>-<sex>, in Forever's atlas data) by the race's file
+-- token; Undead is "Scourge" to the client and "undead" to the atlas.
+local RACE_ATLAS = { Scourge = "undead" }
+
+--- Dress a portrait texture for a player: their race's face when we know race and sex, else their
+--- class crest, else the Grudgekeeper's red seal. info = { rf (race file token), sx (2 male, 3
+--- female), c (class) }. Returns "race", "class" or "seal", so the caller knows whether the class
+--- still needs showing (as a badge) beside a face.
+function GK.SetPortrait(tex, info)
+    info = info or {}
+    local rf, sx = info.rf, info.sx
+    if type(rf) == "string" and (sx == 2 or sx == 3) and tex.SetAtlas then
+        local atlas = ("raceicon128-%s-%s"):format(RACE_ATLAS[rf] or rf:lower(), sx == 3 and "female" or "male")
+        local known = not (C_Texture and C_Texture.GetAtlasInfo) or C_Texture.GetAtlasInfo(atlas)
+        if known and pcall(tex.SetAtlas, tex, atlas) then
+            tex:SetTexCoord(0, 1, 0, 1)
+            return "race"
+        end
+    end
+    local coords = info.c and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[info.c]
+    if coords then
+        tex:SetTexture(CLASS_ICONS)
+        tex:SetTexCoord(unpack(coords))
+        return "class"
+    end
+    tex:SetTexture(MEDIA .. "mark")
+    tex:SetTexCoord(0, 1, 0, 1)
+    return "seal"
+end
+
 --- The note's paper, frame, plaque and portrait, for the letters and the profiles (Profile.lua) alike:
 --- f.paper, f.blood, f.portrait (the Grudgekeeper, cut round), f.badge and f.badgeRing (a class
 --- circle on his shoulder), f.disc. Hidden and not yet registered as a window: the caller adds its
@@ -678,6 +785,12 @@ local function BuildNote()
     later:SetText("Later")
     later:SetScript("OnClick", function() GK.CloseLetters() end)
     Pager(f, f, 180, 54)
+    -- The same iron cross as the profile card on this frame (Profile.lua): "Later" alone read as the
+    -- only way out, and the frame looked like it had none (the owner, 2026-11-05).
+    local close = GK.MakeCloseButton(f, 20, function() GK.CloseLetters() end, 14)
+    close:SetFrameLevel(f:GetFrameLevel() + 12)
+    close:SetPoint("TOPRIGHT", -12, -12)
+    f.close = close
 
     -- Arrives with a small drop and a fade, nothing more.
     local arrive = f:CreateAnimationGroup()
@@ -701,7 +814,9 @@ local function FillNote(L)
     local title, paragraphs, closing, seal, blood, action = NoteContent(L)
     f.title:SetText(title)
     local text = table.concat(paragraphs, "\n")
-    if closing then
+    -- The closing line only on a short letter: a long one (a kill with revenge, a streak and a new title)
+    -- would push it into the seal and the signature.
+    if closing and #paragraphs <= 4 then
         local lines = closing
         text = text .. "\n\n" .. lines[(L.id or 1) % #lines + 1]
     end
@@ -732,6 +847,7 @@ function GK.ShowLetter(i)
     index = math.max(1, math.min(i or #list, #list))
     local L = list[index]
     L.read = true
+    holding[L] = nil                                -- read before its minute was up: nothing left to land
     GK.Sound("IG_ABILITY_PAGE_TURN")
     if NOTE[L.kind] then
         if scroll then scroll:Hide() end
@@ -775,6 +891,7 @@ end
 function GK.StartLetters()
     Prune()
     GK.NoticeUpdate(false)
+    LIB.On("PLAYER_REGEN_ENABLED", function() if next(holding) then Release() end end)
     -- An open letter follows changes to its order (taken, paid, closed).
     LIB.Listen("GRUDGEKEEPER_CHANGED", function()
         local L = index and GK.char.letters[index]
