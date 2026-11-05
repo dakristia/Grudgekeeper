@@ -5,7 +5,7 @@ It says what came over from Guild Grudge, every design choice and why, the quest
 exactly where the new code touches Grudgekeeper's own files.
 
 Guild Grudge (github.com/dakristia/GuildGrudge, v0.8.0) was a guild notebook on players: free-text
-notes, a Watch list for same-faction players to be careful with, a Kudos list for good players, a list
+notes, a Shame list for same-faction players to be careful with, a Kudos list for good players, a list
 of funny character names, votes, tags, sorting, a "mine only" filter and group-join warnings. Its
 bounties and bounty hunters are NOT brought over: kill orders and the leaderboard do that better.
 
@@ -24,14 +24,14 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
 - **D2. Each player sends only their own things.** This is Grudgekeeper's rule (Guild.lua header) and the
   notes follow it: your notes, your list marks, your votes, your nice names. Nobody edits or deletes
   another player's note. A client never re-sends someone else's data. See Q2 for what this costs.
-- **D3. Same-faction players are in scope for notes**, Watch, Kudos and Names. Guild Grudge was built
+- **D3. Same-faction players are in scope for notes**, Shame, Kudos and Names. Guild Grudge was built
   for same-faction use (ninja looters, scammers, good healers). Kill orders stay enemy-only. See Q1.
 - **D4. No kill orders on same-faction players.** Guild Grudge allowed bounties on anyone while there
   were few Horde players to test on. That stops here.
-- **D5. Three lists, one mark per author.** A player can be on "Kill on sight", "Watch" or "Kudos". The
-  list is each author's own mark: if Kari puts someone on Watch and Edvard gives them Kudos, they show on
+- **D5. Three lists, one mark per author.** A player can be on "Kill on sight", "Shame" or "Kudos" (the Shame list is stored, sent and named in code as `watch`; only the words a player sees say Shame). The
+  list is each author's own mark: if Kari puts someone on Shame and Edvard gives them Kudos, they show on
   both lists, each with who put them there. Moving a player only moves your own mark.
-- **D6. Tags.** A note can carry one tag. Watch has preset tags (Ninja looter, Scammer, Toxic, Griefer,
+- **D6. Tags.** A note can carry one tag. Shame has preset tags (Ninja looter, Scammer, Toxic, Griefer,
   Leaver), Kudos has its own (Helpful, Kind, Skilled, Great healer, Great tank, Fair looter, Fun to group
   with), and a player can type a custom one (at most 24 characters). Every preset has an icon (Ninja looter a
   rogue's stealth, Scammer a coin, Helpful a renew, and so on) and a custom tag gets a note. The data is in
@@ -47,11 +47,11 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
   rows you wrote, posted, took, fulfilled or voted on.
 - **D10. Noted players are highlighted quietly, and alert only if asked.** A player with notes and no
   kill order gets a small, dim mark on their nameplate (left of where a kill order's seal sits: a cross
-  for Kill on sight, an exclamation for Watch, a tick for Kudos) and a tooltip line. An enemy's existing
+  for Kill on sight, an exclamation for Shame, a tick for Kudos) and a tooltip line. An enemy's existing
   Grudge line gets the list and the note count added; anyone else gets a line of their own. They raise
-  the "is near" warning only when a setting turns that on (off by default); a Watch player nearby is one
+  the "is near" warning only when a setting turns that on (off by default); a Shame player nearby is one
   chat line, also off by default; Kudos is never announced. At most one warning per player every 90 seconds.
-- **D11. Group-join warnings.** When someone on your Watch list joins your group you get a warning, the
+- **D11. Group-join warnings.** When someone on your Shame list joins your group you get a warning, the
   same way Grudgekeeper warns about a target nearby. A Kudos player joining gets one friendly chat line.
   Both are settings.
 - **D12. Two looks, Ledger and Classic.** The Classic look is Guild Grudge's own: Blizzard's standard
@@ -72,15 +72,15 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
 - **D17. Tests.** A Lua 5.1 test harness (`tests/`) runs the data layer outside the game. It is not
   packaged (`.pkgmeta` ignores `tests/`). See Q5.
 - **D18. The four lists are four tabs, in two groups.** The enemy's pages sit over the left page in the
-  open book - the owner's four and **Kill on sight** - and the friendly ones (**Watch**, **Kudos**,
+  open book - the owner's four and **Kill on sight** - and the friendly ones (**Shame**, **Kudos**,
   **Names**) over the right page. Kill on sight is for an enemy you want to mark without a bounty or a
   history, e.g. a colleague on Horde. (This was Q7, "one Notes tab with a switch, or elsewhere?"; the
   owner tried it in the game and asked for tabs.) Folded, the row shows the active page's group plus a last tab, Friends or Enemies, that switches to the other group.
 
 ## Questions for the owner
 
-- **Q1. Same-faction players: in scope?** Today: yes, for notes, Watch, Kudos and Names (D3); kill
-  orders stay enemy-only. If no: the menu entries and tooltip line on friendly players go, and Watch,
+- **Q1. Same-faction players: in scope?** Today: yes, for notes, Shame, Kudos and Names (D3); kill
+  orders stay enemy-only. If no: the menu entries and tooltip line on friendly players go, and Shame,
   Kudos and Names become enemy-only or are removed.
 - **Q2. Notes from players who are offline or left the guild.** Under D2 a guildie who installs the addon
   next week never sees a note whose author has stopped playing, because nobody else re-sends it. Today:
@@ -205,8 +205,8 @@ Known gaps:
 
 ## What the list pages show
 
-- Four pages, one per list (D18): Kill on sight, Watch, Kudos and Names. `GK.OpenNotes(list)` opens the
-  right one, and `/grudge notes` (Kill on sight), `/grudge watch`, `/grudge kudos` and `/grudge names`
+- Four pages, one per list (D18): Kill on sight, Shame, Kudos and Names. `GK.OpenNotes(list)` opens the
+  right one, and `/grudge notes` (Kill on sight), `/grudge shame`, `/grudge kudos` and `/grudge names`
   with no name do the same. A row is a player (or a name) with their face, tags and newest note, and the
   score on the right. Every page is sortable and has its own headings and empty text, but no links: the
   list is the tab. The count line is the page's `sub`.

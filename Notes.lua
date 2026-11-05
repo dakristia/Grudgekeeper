@@ -1,5 +1,5 @@
 -- Grudgekeeper - notes on players: what the guild writes down about the people it meets. A free-text
--- note with a tag, a mark that puts a player on one of three lists (Kill on sight, Watch, Kudos),
+-- note with a tag, a mark that puts a player on one of three lists (Kill on sight, Shame, Kudos),
 -- votes on notes, and a guild-shared list of funny character names. This file is the data and the
 -- wire only; it makes no frames. The pages, menus and tooltip lines that show it are elsewhere.
 -- It follows Guild.lua's rule: everyone sends only their OWN things - their notes, their marks, their

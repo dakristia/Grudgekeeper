@@ -1,6 +1,6 @@
 -- Grudgekeeper - the Classic look: the two sheets you write on. The kill order sheet (who, the bounty, a
 -- line about why) decides which of its three cases it is in with GK.PostPlan and sends with GK.PostSubmit
--- (Post.lua), the same as the parchment one. The note sheet (a note on a player, with a tag for the Watch
+-- (Post.lua), the same as the parchment one. The note sheet (a note on a player, with a tag for the Shame
 -- and Kudos lists) saves with GK.AddNote (Notes.lua).
 local ADDON, GK = ...
 local C = GK.Classic
@@ -120,7 +120,7 @@ end
 -- ---------------------------------------------------------------------------
 local LISTS = {
     kos = { "Kill on sight", 1, 0.3, 0.25 },
-    watch = { "Watch", 1, 0.82, 0 },
+    watch = { "Shame", 1, 0.82, 0 },
     kudos = { "Kudos", 0.3, 1, 0.4 },
 }
 
@@ -182,7 +182,7 @@ local function BuildNote()
 end
 
 --- A note on a player. t = { key, c, r, rf, sx, l, unit }; list: "kos", "watch" or "kudos" - the list the
---- player is put on with it. Only the Watch and Kudos lists have tags.
+--- player is put on with it. Only the Shame and Kudos lists have tags.
 C.Wraps.OpenNoteSheet = function(_, t, list)
     if not (t and t.key) then return end
     if not sheet then BuildNote() end

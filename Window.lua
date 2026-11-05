@@ -1,6 +1,6 @@
 -- Grudgekeeper - the window (/grudge, the minimap button): the Grudgekeeper's ledger, an open book.
 --   Leather tabs on top, one per page of GK.LedgerPages: Kill orders, Leaderboard, Grudges, News and
---   Kill on sight over the left page; Watch, Kudos and Names over the right page (NotesUI.lua).
+--   Kill on sight over the left page; Shame, Kudos and Names over the right page (NotesUI.lua).
 --   The left page is that page's table; the right page is the row you clicked - an enemy's wanted
 --   poster, a guildie's record (Profile.lua writes both, for the small cards and for here).
 -- Folded by the bookmark on its right edge, the ledger is one page: the table, and a click on a row

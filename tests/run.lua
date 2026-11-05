@@ -244,7 +244,7 @@ test("PeopleOn gathers a list with the latest time, the score, the tags and whet
     local watch = GK.PeopleOn("watch")
     eq(#watch, 1)
     eq(watch[1].key, GANK)
-    eq(watch[1].ts, B + 12, "Edvard's later kudos note isn't the Watch list's news")
+    eq(watch[1].ts, B + 12, "Edvard's later kudos note isn't the Shame list's news")
     eq(watch[1].score, 1)
     eq(#watch[1].tags, 1)
     eq(watch[1].tags[1], "Scammer")
@@ -1235,7 +1235,7 @@ test("classic: the note sheet saves through AddNote with the list and the tag", 
     GK.OpenNoteSheet({ key = GANK, c = "MAGE", r = "Orc", l = 60 }, "watch")
     local f = _G.GrudgekeeperClassicNote
     eq(f.shown, true)
-    eq(f.list.text, "Watch")
+    eq(f.list.text, "Shame")
     f.tag.text = "Toxic"
     f.text.text = "rude in chat"
     F.click(f.save)
@@ -1351,7 +1351,7 @@ end
 test("the four list pages: Kill on sight with the owner's, the rest on the right, none with links", function()
     local GK = bootUI()
     eq(#GK.LedgerPages, 8)
-    local want = { { "Kill on sight", nil }, { "Watch", "right" }, { "Kudos", "right" }, { "Names", "right" } }
+    local want = { { "Kill on sight", nil }, { "Shame", "right" }, { "Kudos", "right" }, { "Names", "right" } }
     for i, w in ipairs(want) do
         local page = GK.LedgerPages[4 + i]
         eq(page.name, w[1])
@@ -1381,6 +1381,17 @@ test("GK.OpenNotes opens the page of the list", function()
     eq(W2.opened, 5, "an unknown list is kos")
 end)
 
+test("/grudge shame and /grudge watch open the same page", function()
+    local GK = bootUI()
+    local W2 = require("wow_mock")
+    GK.RunNotesCommand("shame", "")
+    eq(W2.opened, 6)
+    GK.RunNotesCommand("kudos", "")
+    GK.RunNotesCommand("watch", "")
+    eq(W2.opened, 6)
+    eq(GK.ParseNotesCommand("shame", "Gank Ster", nil, function() return false end).list, "watch")
+end)
+
 test("the page's rows: newest first, with tags, the newest note, the score and my own", function()
     local GK = bootUI()
     W.receive(GK, KARI, msg("N", 1, GANK, 1, B + 10, "", "Scammer", "ROGUE", "Orc", 60, "took my gold"))
@@ -1388,7 +1399,7 @@ test("the page's rows: newest first, with tags, the newest note, the score and m
     W.receive(GK, EDVARD, msg("V", 1, GANK, KARI, 1, 1, B + 12))
     W.receive(GK, KARI, msg("N", 1, "Older Foe-Realm", 1, B + 5, "", "", "", "", "", "ganked me"))
     local items, empty = GK.LedgerPages[5].items()
-    eq(#items, 1, "Gank is on Watch, not on kos")
+    eq(#items, 1, "Gank is on Shame, not on kos")
     eq(items[1].name, "Older Foe")
     eq(items[1].sub, '"ganked me"')
     eq(items[1].right, "")
@@ -1416,7 +1427,7 @@ test("the page's rows: newest first, with tags, the newest note, the score and m
     eq(#rows, 2)
     eq(rows[1].name, "Older Foe", "the newest news first")
     eq(GK.LedgerPages[5].sub({ 1 }), "1 player on Kill on sight")
-    eq(GK.LedgerPages[6].sub(rows), "2 players on Watch")
+    eq(GK.LedgerPages[6].sub(rows), "2 players on Shame")
     eq(#GK.LedgerPages[6].items(), 2)
 end)
 
@@ -1459,13 +1470,13 @@ test("a noted player's card: title, who put them where, the notes with their vot
     eq(d.caption, "votes")
     eq(d.c, "ROGUE")
     eq(d.lines[1], "Kill on sight: Edvard")
-    eq(d.lines[2], "Watch: Kari - " .. GK.TagText("Ninja looter", 12))
+    eq(d.lines[2], "Shame: Kari - " .. GK.TagText("Ninja looter", 12))
     eq(#d.lines, 4)
     eq(d.lines[3], '"agreed" - Edvard, 3 days ago')
     assert(d.lines[4]:find('^"took the chest:\194\160twice" %- Kari, 3 days ago %(%+1%)$'), d.lines[4])
     assert(not d.lines[4]:find("^[^:,]+: "), "the ledger would read that as a label")
     -- the page's list wins when they are on it; my own mark wins over that
-    eq(GK.NoteCard(GANK, "watch").title, "WATCH")
+    eq(GK.NoteCard(GANK, "watch").title, "SHAME")
     eq(GK.NoteCard(GANK, "kudos").title, "KILL ON SIGHT", "not on that list")
     GK.SetMark(GANK, "kudos")
     eq(GK.NoteCard(GANK, "watch").title, "KUDOS")
@@ -1579,12 +1590,12 @@ test("the poster and the record get at most two lines about notes, and never mor
     W.receive(GK, KARI, msg("L", 1, GANK, "watch", B + 12))
     local d = GK.PosterCard({ key = GANK })
     eq(#d.lines, 2)
-    eq(d.lines[1], "Notes: 2, on Watch (" .. GK.TagText("Ninja looter", 12) .. ")")
+    eq(d.lines[1], "Notes: 2, on Shame (" .. GK.TagText("Ninja looter", 12) .. ")")
     eq(d.lines[2], 'Newest: "again" - Kari, 3 days ago')
     W2.posterLines = { 1, 2, 3, 4, 5, 6, 7, 8 }
     d = GK.PosterCard({ key = GANK })
     eq(#d.lines, 9, "one fits")
-    eq(d.lines[9], "Notes: 2, on Watch (" .. GK.TagText("Ninja looter", 12) .. ")")
+    eq(d.lines[9], "Notes: 2, on Shame (" .. GK.TagText("Ninja looter", 12) .. ")")
     W2.posterLines = { 1, 2, 3, 4, 5, 6, 7, 8, 9 }
     eq(#GK.PosterCard({ key = GANK }).lines, 9)
     W2.recordLines = {}
@@ -1760,10 +1771,10 @@ test("the tooltip: an enemy's Grudge line gets the notes, anyone else gets a lin
     W.receive(GK, KARI, msg("N", 1, GANK, 1, B + 10, "", "Ninja looter", "", "", "", "x"))
     W.receive(GK, KARI, msg("N", 1, GANK, 2, B + 11, "", "", "", "", "", "y"))
     W.receive(GK, KARI, msg("L", 1, GANK, "watch", B + 12))
-    eq(GK.TooltipLine(GANK, nil), W2.tipLine .. "  -  Watch, 2 notes")
+    eq(GK.TooltipLine(GANK, nil), W2.tipLine .. "  -  Shame, 2 notes")
     W2.tipLine = nil
-    eq(GK.TooltipLine(GANK, nil), "|cffc8281eGrudge|r  Watch, 2 notes")
-    eq(GK.NoteTipLine(GANK), "|cffffcc00Watch|r  " .. GK.TagText("Ninja looter", 12) .. " - 2 notes")
+    eq(GK.TooltipLine(GANK, nil), "|cffc8281eGrudge|r  Shame, 2 notes")
+    eq(GK.NoteTipLine(GANK), "|cffffcc00Shame|r  " .. GK.TagText("Ninja looter", 12) .. " - 2 notes")
     W.receive(GK, EDVARD, msg("L", 1, NICE, "kudos", B))
     eq(GK.NoteTipLine(NICE), "|cff4dff66Kudos|r")
     eq(GK.NoteTipLine("Stranger-Realm"), nil)
@@ -1773,7 +1784,7 @@ test("the tooltip: an enemy's Grudge line gets the notes, anyone else gets a lin
     eq(GK.NoteTipLine(NICE), "|cffc8281eKill on sight|r")
 end)
 
-test("a noted player in sight: Kill on sight warns when asked, Watch says a line, both at most every 90 seconds", function()
+test("a noted player in sight: Kill on sight warns when asked, Shame says a line, both at most every 90 seconds", function()
     local GK, LIB = bootUI()
     local W2 = require("wow_mock")
     W.receive(GK, KARI, msg("N", 1, GANK, 1, B, "", "", "ROGUE", "Orc", 60, "x"))
@@ -1798,13 +1809,13 @@ test("a noted player in sight: Kill on sight warns when asked, Watch says a line
     LIB.fire("UPDATE_MOUSEOVER_UNIT")
     eq(#W2.warned, 2, "Sightings.lua warns about that one")
     W2.order = nil
-    -- Watch: a line in chat
+    -- Shame: a line in chat
     W.units.mouseover = NICE
     LIB.fire("UPDATE_MOUSEOVER_UNIT")
     eq(#W2.warned, 2)
     GK.db.watchNearby = true
     LIB.fire("UPDATE_MOUSEOVER_UNIT")
-    assert(W.printed[#W.printed]:find("Nina Nice from your Watch list is near [" .. GK.TagText("Ninja looter") .. "]", 1, true), W.printed[#W.printed])
+    assert(W.printed[#W.printed]:find("Nina Nice from your Shame list is near [" .. GK.TagText("Ninja looter") .. "]", 1, true), W.printed[#W.printed])
     eq(#W2.warned, 2, "a line, not a warning")
     local lines = #W.printed
     LIB.fire("UPDATE_MOUSEOVER_UNIT")
@@ -1826,7 +1837,7 @@ test("a noted player in sight: Kill on sight warns when asked, Watch says a line
     eq(GK.Person(GANK).l, 60)
 end)
 
-test("joining the group: Watch warns with the tag, Kudos says one green line, each once", function()
+test("joining the group: Shame warns with the tag, Kudos says one green line, each once", function()
     local GK, LIB = bootUI()
     local W2 = require("wow_mock")
     W.receive(GK, KARI, msg("N", 1, GANK, 1, B, "", "Ninja looter", "", "", "", "x"))
@@ -1835,7 +1846,7 @@ test("joining the group: Watch warns with the tag, Kudos says one green line, ea
     W.units.party1 = GANK
     LIB.fire("GROUP_ROSTER_UPDATE")
     eq(#W2.warned, 1)
-    eq(W2.warned[1].text, "Watch list: Gank Master joined your group [" .. GK.TagText("Ninja looter") .. "]")
+    eq(W2.warned[1].text, "Shame list: Gank Master joined your group [" .. GK.TagText("Ninja looter") .. "]")
     eq(W2.warned[1].urgent, true)
     LIB.fire("GROUP_ROSTER_UPDATE")
     eq(#W2.warned, 1, "once")
@@ -1881,13 +1892,13 @@ test("the right-click menu: a submenu for any player but a mob or myself, with t
     menu(nil, root, { unit = "mouseover" })
     local sub = kid(root, "Grudgekeeper notes")
     assert(sub)
-    eq(labels(sub), "Add a note|Watch list|Kudos|Add to nice names", "no Their notes: nobody wrote about them")
-    eq(#kid(sub, "Watch list").kids, #GK.TAGS.watch + 1)
-    eq(kid(sub, "Watch list").kids[1].label, GK.TagText("Ninja looter"))
-    eq(kid(sub, "Watch list").kids[#GK.TAGS.watch + 1].label, "No tag")
+    eq(labels(sub), "Add a note|Shame list|Kudos|Add to nice names", "no Their notes: nobody wrote about them")
+    eq(#kid(sub, "Shame list").kids, #GK.TAGS.watch + 1)
+    eq(kid(sub, "Shame list").kids[1].label, GK.TagText("Ninja looter"))
+    eq(kid(sub, "Shame list").kids[#GK.TAGS.watch + 1].label, "No tag")
     eq(kid(sub, "Kudos").kids[1].label, GK.TagText("Helpful"))
     -- a tag puts them on the list with that tag
-    kid(sub, "Watch list").kids[1].fn()
+    kid(sub, "Shame list").kids[1].fn()
     eq(GK.MyMark(GANK), "watch")
     eq(GK.NotesOf(GANK)[1].tag, "Ninja looter")
     eq(GK.Person(GANK).c, "ROGUE", "learned from the unit")
