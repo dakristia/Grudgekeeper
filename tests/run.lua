@@ -1333,6 +1333,36 @@ test("classic: the window's card follows the search, and goes when nothing match
     eq(win.detail.view.name.text, "Card Alpha3")
 end)
 
+test("classic: a page's own default row is shown in a search only if the search leaves it", function()
+    local GK = bootClassic("classic")
+    local page = GK.LedgerPages[1]
+    local items = page.items
+    page.items = function()
+        local rows = items()
+        for _, it in ipairs(rows) do
+            local name = it.name
+            it.select = { kind = "card", make = function() return { title = "T", name = "Card " .. name, lines = {} } end }
+        end
+        return rows, "Nothing here."
+    end
+    -- like Grudges' record of me: a row of its own, not one of the list
+    page.default = function()
+        return { key = "me", select = { kind = "card", make = function() return { title = "T", name = "Me", lines = {} } end } }
+    end
+    GK.OpenWindow(1)
+    local win = _G.GrudgekeeperClassicWindow
+    eq(win.detail.view.name.text, "Me", "no search: the page's own pick")
+    win.search.text = "beta"
+    win.search.hooks.OnTextChanged()
+    eq(win.detail.view.name.text, "Card Beta2", "the default is not among the matches")
+    win.search.text = "nobody"
+    win.search.hooks.OnTextChanged()
+    eq(win.detail.view.shown, false, "and nothing at all when nothing matches")
+    win.search.text = ""
+    win.search.hooks.OnTextChanged()
+    eq(win.detail.view.name.text, "Me")
+end)
+
 test("classic: an Inspect page built before the look was on gets its cover when it is filled", function()
     local GK = bootClassic("classic")
     local page = CreateFrame("Frame")
@@ -1547,14 +1577,22 @@ test("sync: a broadcast while one is waiting is the same stream", function()
     for i = 1, 6 do GK.AddNote("Player" .. i .. "-Realm", "note " .. i) end
     W.advance(10)
     W.takeSent()
+    -- a live change keeps the line busy, so the broadcast waits unsent: a second ask is the same one
+    GK.AddNote("Player 7-Realm", "note 7")
+    W.takeSent()
     eq(GK.NotesBroadcast(), true)
-    W.advance(1)
     eq(GK.NotesBroadcast(), true, "merged")
     W.advance(30)
-    eq(#W.takeSent(), 6, "each record once")
-    eq(GK.NotesBroadcast(), true, "and a new one once the first is done")
-    W.advance(30)
-    eq(#W.takeSent(), 6)
+    eq(#W.takeSent(), 7, "each record once")
+    -- asked again once it is partly gone: the newcomer missed the start, so one more follows, shared
+    eq(GK.NotesBroadcast(), true)
+    W.advance(2)
+    eq(GK.NotesBroadcast(), true)
+    eq(GK.NotesBroadcast(), true)
+    W.advance(60)
+    eq(#W.takeSent(), 14, "the first again, and one follow-up for both asks")
+    W.advance(60)
+    eq(#W.takeSent(), 0)
 end)
 
 test("sync: what waits for the old guild is not sent to the new one", function()
@@ -1720,6 +1758,175 @@ test("votes that beat their note or name wait for it, a few and for ten minutes"
         applied = applied + GK.NoteScore("Held" .. i .. "-Realm", KARI, 7)
     end
     eq(applied, 200)
+end)
+
+test("nice names: every author's part is their own, and a backdated one takes nothing", function()
+    local GK = boot()
+    W.receive(GK, EDVARD, msg("M", 1, NICE, B + 10, "", "PRIEST"))
+    -- Kari sends an addition from before Edvard's, then removes hers
+    W.receive(GK, KARI, msg("M", 1, NICE, B + 1, "", "MAGE"))
+    eq(GK.Store().names[NICE].by, KARI, "the earliest part is the one shown")
+    W.receive(GK, KARI, msg("M", 1, NICE, B + 2, 1))
+    local n = GK.Store().names[NICE]
+    eq(n.del, nil, "Edvard's part is untouched")
+    eq(n.by, EDVARD)
+    eq(n.c, "PRIEST")
+    -- a stale addition can't undo a later one: Kari adds at 10, removes at 20, Edvard adds at 30
+    local GK2 = boot()
+    W.receive(GK2, KARI, msg("M", 1, NICE, B + 10))
+    W.receive(GK2, KARI, msg("M", 1, NICE, B + 20, 1))
+    W.receive(GK2, EDVARD, msg("M", 1, NICE, B + 30))
+    W.receive(GK2, KARI, msg("M", 1, NICE, B + 10))
+    eq(GK2.Store().names[NICE].by, EDVARD)
+    eq(GK2.Store().names[NICE].adds[KARI].del, true)
+    -- removing mine leaves hers
+    local GK3 = boot()
+    W.advance(11)
+    GK3.AddNiceName(NICE)
+    W.receive(GK3, KARI, msg("M", 1, NICE, B + 500))
+    W.takeSent()
+    eq(GK3.RemoveNiceName(NICE), true)
+    eq(GK3.Store().names[NICE].del, nil)
+    eq(GK3.Store().names[NICE].by, KARI)
+    eq(GK3.RemoveNiceName(NICE), false, "nothing of mine left to remove")
+    eq(#GK3.NiceNames(), 1)
+end)
+
+test("nice names: a store from before (one owner in `by`) is read as that author's part", function()
+    local GK = boot()
+    local s = GK.Store()
+    s.names = s.names or {}
+    s.names[NICE] = { by = KARI, ts = B + 5, c = "PRIEST" }
+    s.namesByAuthor = nil
+    local rows = GK.NiceNames()
+    eq(#rows, 1)
+    eq(rows[1].by, KARI)
+    eq(GK.Store().names[NICE].adds[KARI].ts, B + 5)
+    eq(GK.Store().names[NICE].adds[KARI].c, "PRIEST")
+    s.names["Gone-Realm"] = { by = KARI, ts = B, del = true }
+    s.namesByAuthor = nil
+    eq(#GK.NiceNames(), 1)
+    eq(GK.Store().names["Gone-Realm"].adds[KARI].del, true)
+end)
+
+test("held votes keep the newest per voter, and an old copy does not keep them alive", function()
+    local GK = boot()
+    W.receive(GK, EDVARD, msg("V", 1, GANK, KARI, 7, 1, B + 200))
+    W.receive(GK, EDVARD, msg("V", 1, GANK, KARI, 7, -1, B + 100))
+    W.receive(GK, KARI, msg("N", 1, GANK, 7, B + 1, "", "", "", "", "", "ninja"))
+    eq(GK.NoteScore(GANK, KARI, 7), 1, "the later vote, not the older copy")
+    W.receive(GK, EDVARD, msg("G", 1, NICE, 1, B + 200))
+    W.receive(GK, EDVARD, msg("G", 1, NICE, -1, B + 100))
+    W.receive(GK, KARI, msg("M", 1, NICE, B + 1))
+    eq(GK.NameScore(NICE), 1)
+    -- an older copy later on doesn't renew the wait
+    W.receive(GK, EDVARD, msg("V", 1, "Slow-Realm", KARI, 7, 1, B + 200))
+    W.advance(9 * 60)
+    W.receive(GK, EDVARD, msg("V", 1, "Slow-Realm", KARI, 7, 1, B + 100))
+    W.advance(2 * 60)
+    W.receive(GK, KARI, msg("N", 1, "Slow-Realm", 7, B + 1, "", "", "", "", "", "ninja"))
+    eq(GK.NoteScore("Slow-Realm", KARI, 7), 0, "it expired ten minutes after the first")
+end)
+
+test("held votes are applied when the player or name is made here or by the import", function()
+    local GK = boot()
+    W.receive(GK, EDVARD, msg("V", 1, GANK, KARI, 7, 1, B + 3))
+    W.receive(GK, EDVARD, msg("G", 1, NICE, -1, B + 3))
+    GK.AddNote(GANK, "my own note")
+    eq(GK.NoteScore(GANK, KARI, 7), 1, "a note of mine made the player")
+    GK.AddNiceName(NICE)
+    eq(GK.NameScore(NICE), -1, "a name of mine made the name")
+    -- the import
+    local IM = "Meyer Self-Realm"
+    local GK2 = boot({ me = IM, guildGrudge = sampleDB() })
+    W.receive(GK2, EDVARD, msg("V", 1, "Wanda Watch-Realm", KARI, 7, 1, B + 3))
+    GK2.ImportGuildGrudge()
+    eq(GK2.NoteScore("Wanda Watch-Realm", KARI, 7), 1, "the import made the player")
+end)
+
+test("sync: a change still waiting is replaced by a newer one to the same record", function()
+    local GK = boot()
+    W.advance(11)
+    W.receive(GK, KARI, msg("N", 1, GANK, 1, B, "", "", "", "", "", "hers"))
+    GK.AddNote("Busy-Realm", "keeps the line busy")
+    W.takeSent()
+    for i = 1, 31 do GK.VoteNote(GANK, KARI, 1, i % 2 == 1 and 1 or -1) end
+    W.advance(10)
+    local votes = {}
+    for _, m in ipairs(W.takeSent()) do
+        if m.text:sub(1, 1) == "V" then votes[#votes + 1] = m.text end
+    end
+    eq(#votes, 1, "one message, the latest")
+    assert(votes[1]:find(";1;", 1, true), "the last of 31 toggles was a vote up: " .. votes[1])
+    eq(GK.MyNoteVote(GANK, KARI, 1), 1)
+end)
+
+test("sync: past 400 waiting, the live changes give way to a fresh broadcast", function()
+    local GK = boot()
+    W.advance(11)
+    for i = 1, 450 do GK.AddNote("Many" .. i .. "-Realm", "note " .. i) end
+    W.advance(1000)
+    local sent = W.takeSent()
+    assert(#sent < 450, "not every intermediate message was kept, sent " .. #sent)
+    assert(#sent >= 150, "the broadcast stood in, sent " .. #sent)
+    local per = {}
+    for _, m in ipairs(sent) do per[m.at] = (per[m.at] or 0) + 1 end
+    for at, n in pairs(per) do assert(n <= 2, "at most 2 in a second, got " .. n) end
+end)
+
+test("sync: nothing is queued or sent while the guild's name is unknown", function()
+    local GK, LIB = boot()
+    W.advance(11)
+    W.takeSent()
+    W.guildKey = false
+    eq(GK.NotesBroadcast(), false)
+    GK.AddNote(GANK, "written in between")
+    W.advance(5)
+    eq(#W.takeSent(), 0)
+    W.guildKey = nil
+    W.advance(20)
+    eq(#W.takeSent(), 0, "and it was not held for later either")
+    -- the question at login waits for the name
+    local GK2 = boot()
+    W.guildKey = false
+    W.advance(12)
+    eq(#W.sent, 0)
+    W.guildKey = nil
+    W.advance(10)
+    eq(W.sent[1] and W.sent[1].text, "Q;1")
+end)
+
+test("import: notes of one second get ids from their order by text, whatever the walk order", function()
+    local function ids(reverse)
+        local db = sampleDB()
+        local notes = {}
+        db.entries["id test"] = { name = "Id Test", notes = notes }
+        local t = B - 50
+        local list = {
+            { author = "Kari Hansen", ts = t, text = "gamma", id = "Aa" },
+            { author = "Kari Hansen", ts = t, text = "alpha", id = "BB" },
+            { author = "Kari Hansen", ts = t, text = "beta", id = "Cc" },
+            { author = "Kari Hansen", ts = t, text = "beta", tag = "Toxic", id = "Dd" },
+        }
+        if reverse then
+            for i = #list, 1, -1 do notes["n" .. i] = list[i] end
+        else
+            for i = 1, #list do notes["n" .. i] = list[i] end
+        end
+        local GK = boot({ me = IME, guildGrudge = db })
+        GK.ImportGuildGrudge()
+        local out = {}
+        for _, n in ipairs(GK.NotesOf("Id Test-Realm")) do
+            out[(n.text or "") .. "/" .. (n.tag or "")] = n.id
+        end
+        return out
+    end
+    local one, two = ids(false), ids(true)
+    eq(one["alpha/"], (B - 50) * 100)
+    eq(one["beta/"], (B - 50) * 100 + 1)
+    eq(one["beta/Toxic"], (B - 50) * 100 + 2)
+    eq(one["gamma/"], (B - 50) * 100 + 3)
+    for k, id in pairs(one) do eq(two[k], id, k) end
 end)
 
 test("a vote on an imported note is kept here and never sent", function()

@@ -133,6 +133,19 @@ local function Tables()
     s.people = s.people or {}
     s.names = s.names or {}
     s.nameVotes = s.nameVotes or {}
+    -- Names used to have one owner in `by`; each author's part is kept apart now (see Put.Name). A name
+    -- from before is that owner's part.
+    if not s.namesByAuthor then
+        for _, n in pairs(s.names) do
+            if not n.adds then
+                n.adds = {}
+                if n.by then
+                    n.adds[n.by] = { ts = n.ts, del = n.del, c = n.c, r = n.r, rf = n.rf, sx = n.sx, l = n.l }
+                end
+            end
+        end
+        s.namesByAuthor = true
+    end
     return s
 end
 
@@ -194,29 +207,65 @@ end
 -- queue and leaves two a second, so the guild never hears more than LibForever's 30 per 10 seconds
 -- from us however many things are going on. Each entry remembers the guild it was queued in and is
 -- thrown away at send time if we are in another by then.
+-- A guild we can't name yet is no guild: nothing is queued or sent until LIB.GuildKey() says which one,
+-- because the store a snapshot comes from may still be the last guild's.
+-- A live change that is still waiting is replaced by a newer change to the same record (same guild, same
+-- record), keeping its place in the line, so toggling a vote does not pile up messages. If the line grows
+-- past MAX_QUEUE anyway, the live entries are dropped and a fresh broadcast stands in for them.
 local SEND_PER_SECOND = 2
+local MAX_QUEUE = 400
 local outQueue, outHead, outTail = {}, 1, 0
 local outRunning = false
 local bulkQueued = 0                        -- entries of a broadcast still waiting
+local bulkSent = 0                          -- entries of that broadcast already gone
+local followUp = false                      -- someone asked for a broadcast while one was part-sent
+local liveWaiting = {}                      -- guild .. record -> the live entry waiting for it
+local QueueSnapshot                         -- defined with the records it sends
 
 local function ClearQueue()
-    outQueue, outHead, outTail, bulkQueued = {}, 1, 0, 0
+    outQueue, outHead, outTail, bulkQueued, bulkSent, followUp = {}, 1, 0, 0, 0, false
+    liveWaiting = {}
+end
+
+--- Which record a message is about: its letter and key, and for a note, a vote or a mark the ids that
+--- tell it apart. Two messages with the same identity are two versions of one record.
+local function Identity(text)
+    local f = Split(text)
+    local kind = f[1]
+    if kind == "N" then return table.concat({ kind, f[3], f[4] }, ";") end
+    if kind == "V" then return table.concat({ kind, f[3], f[4], f[5] }, ";") end
+    if kind == "Q" then return kind end
+    return table.concat({ kind, f[3] }, ";")
 end
 
 local function Pump()
     local sentNow = 0
+    local current = LIB.GuildKey()
     while sentNow < SEND_PER_SECOND and outHead <= outTail do
         local e = outQueue[outHead]
         outQueue[outHead] = nil
         outHead = outHead + 1
-        if e.bulk then bulkQueued = bulkQueued - 1 end
+        if e.bulk then
+            bulkQueued = bulkQueued - 1
+            bulkSent = bulkSent + 1
+        elseif liveWaiting[e.ident] == e then
+            liveWaiting[e.ident] = nil
+        end
         -- The test panel (Debug.lua) is open: what its buttons do stays on this client.
-        if not GK.testMode and IsInGuild() and e.guild == LIB.GuildKey() then
+        if not GK.testMode and IsInGuild() and current and e.guild == current then
             LIB.Send(PREFIX, e.text, "GUILD")
             sentNow = sentNow + 1
         end
     end
     if outHead > outTail then outQueue, outHead, outTail = {}, 1, 0 end
+    if bulkQueued == 0 then
+        bulkSent = 0
+        -- asked for again in the middle of the last one: the newcomer missed its start
+        if followUp then
+            followUp = false
+            QueueSnapshot()
+        end
+    end
     -- keep ticking for a second after a send, so a change made right after one still waits its turn
     if sentNow > 0 or outHead <= outTail then
         C_Timer.After(1, Pump)
@@ -225,10 +274,41 @@ local function Pump()
     end
 end
 
-local function Enqueue(text, bulk)
+--- Drop the live entries still waiting, keeping a broadcast that is on its way.
+local function DropLive()
+    local kept, n = {}, 0
+    for i = outHead, outTail do
+        if outQueue[i].bulk then
+            n = n + 1
+            kept[n] = outQueue[i]
+        end
+    end
+    outQueue, outHead, outTail = kept, 1, n
+    liveWaiting = {}
+end
+
+local function Enqueue(text, guild, bulk)
+    if bulk then
+        outTail = outTail + 1
+        outQueue[outTail] = { text = text, guild = guild, bulk = true }
+        bulkQueued = bulkQueued + 1
+        return
+    end
+    local ident = guild .. "\0" .. Identity(text)
+    local waiting = liveWaiting[ident]
+    if waiting then
+        waiting.text = text
+        return
+    end
+    if outTail - outHead + 1 >= MAX_QUEUE then
+        DropLive()
+        if bulkQueued > 0 then followUp = true else QueueSnapshot() end
+        return
+    end
+    local e = { text = text, guild = guild, ident = ident }
     outTail = outTail + 1
-    outQueue[outTail] = { text = text, guild = LIB.GuildKey(), bulk = bulk or nil }
-    if bulk then bulkQueued = bulkQueued + 1 end
+    outQueue[outTail] = e
+    liveWaiting[ident] = e
 end
 
 local function Kick()
@@ -238,8 +318,9 @@ local function Kick()
 end
 
 local function Send(text)
-    if GK.testMode or not IsInGuild() then return false end
-    Enqueue(text)
+    local guild = LIB.GuildKey()
+    if GK.testMode or not IsInGuild() or not guild then return false end
+    Enqueue(text, guild)
     Kick()
     return true
 end
@@ -264,9 +345,9 @@ function Encode.V(key, author, id, v, ts)
     return Msg("V", PROTO, key, author, id, v, ts)
 end
 
---- My nice name; n is the record in store.names.
-function Encode.M(key, n)
-    return Msg("M", PROTO, key, n.ts, n.del and 1 or nil, n.c, n.r, n.rf, n.sx, n.l)
+--- My part of a nice name: the record in store.names[key].adds[me].
+function Encode.M(key, part)
+    return Msg("M", PROTO, key, part.ts, part.del and 1 or nil, part.c, part.r, part.rf, part.sx, part.l)
 end
 
 function Encode.G(key, v, ts)
@@ -389,6 +470,50 @@ function GK.LearnPerson(key, info)
     return p
 end
 
+-- A vote can beat what it is about: another guildie's reply lands before the note's author's does, and
+-- a vote on a player we don't know is turned away. So those wait here, a few of them and not for long,
+-- and are tried again whenever the player or the name comes into being - by a message, by something I
+-- did, or by the import (every one of them ends in a Put below). Not saved: a reload starts clean.
+local pending = {}
+
+--- Keep a vote that has no target yet. Per voter and target only the newest is kept: an older or equal
+--- copy is ignored, and does not keep the entry alive any longer.
+local function Hold(v)
+    local now = GetTime()
+    for i = #pending, 1, -1 do
+        local h = pending[i]
+        if now - h.at > PENDING_FOR then
+            table.remove(pending, i)
+        elseif h.kind == v.kind and h.key == v.key and h.author == v.author and h.id == v.id
+                and h.voter == v.voter then
+            if h.ts >= v.ts then return end
+            table.remove(pending, i)
+        end
+    end
+    while #pending >= MAX_PENDING do table.remove(pending, 1) end
+    v.at = now
+    pending[#pending + 1] = v
+end
+
+--- The player (kind "V") or the name (kind "N") `key` now exists: apply the votes that were waiting.
+local function ReplayPending(key, kind)
+    if #pending == 0 then return end
+    local now = GetTime()
+    for i = #pending, 1, -1 do
+        local h = pending[i]
+        if now - h.at > PENDING_FOR then
+            table.remove(pending, i)
+        elseif h.key == key and h.kind == kind then
+            table.remove(pending, i)
+            if kind == "V" then
+                Put.Vote(h.key, h.author, h.id, h.voter, h.v, h.ts)
+            else
+                Put.NameVote(h.key, h.voter, h.v, h.ts)
+            end
+        end
+    end
+end
+
 --- rec = { text, tag, ts, del, imp }. imp marks a note the Guild Grudge import wrote for someone else:
 --- its id is ours, not theirs, so a vote on it is never sent.
 function Put.Note(key, author, id, rec)
@@ -412,6 +537,7 @@ function Put.Note(key, author, id, rec)
         p.notes[author] = byId
     end
     byId[id] = { text = rec.text, tag = rec.tag, ts = rec.ts, del = rec.del or nil, imp = rec.imp or nil }
+    ReplayPending(key, "V")
     return true
 end
 
@@ -422,6 +548,7 @@ function Put.Mark(key, author, rec)
     local old = p.marks[author]
     if old and rec.ts <= old.ts then return false end
     p.marks[author] = { list = (not rec.del) and rec.list or nil, ts = rec.ts, del = rec.del or nil }
+    ReplayPending(key, "V")
     return true
 end
 
@@ -443,38 +570,58 @@ function Put.Vote(key, author, id, voter, v, ts)
     return true
 end
 
---- Does an addition at ts by `by` come before one at oldTs by oldBy? The earlier time does, and at the
---- same second the lower key, so every client picks the same owner whatever order the messages came in.
-local function AddedFirst(ts, by, oldTs, oldBy)
-    if ts ~= oldTs then return ts < oldTs end
-    return by < oldBy
+--- Work out what a nice name shows from the contributions in n.adds ({ [author] = { ts, del, c, r, rf, sx,
+--- l } }): it is live while any author's is, and its owner ("added by") is the earliest live one, the lower
+--- key at the same second. With none live it shows the latest removal. The result sits in n.by, n.ts,
+--- n.del and the class, race and level fields, which is where everything else reads them.
+local function DeriveName(n)
+    local best, bestAuthor
+    for author, c in pairs(n.adds) do
+        if not c.del and (not best or c.ts < best.ts or (c.ts == best.ts and author < bestAuthor)) then
+            best, bestAuthor = c, author
+        end
+    end
+    if not best then
+        for author, c in pairs(n.adds) do
+            if not best or c.ts > best.ts or (c.ts == best.ts and author < bestAuthor) then best, bestAuthor = c, author end
+        end
+    end
+    n.by, n.ts, n.del = bestAuthor, best and best.ts or 0, (not best or best.del) and true or nil
+    n.c, n.r, n.rf, n.sx, n.l = nil, nil, nil, nil, nil
+    if best then n.c, n.r, n.rf, n.sx, n.l = best.c, best.r, best.rf, best.sx, best.l end
 end
 
---- A nice name added by `by`. rec = { ts, del, c, r, rf, sx, l }. A live name belongs to whoever added
---- it first (D2): another player's version of it is ignored, unless it was added earlier still - two
---- players who added the same name before hearing of each other settle on the earlier one (the lower
---- key at a tie), and only that owner can remove it. A removed one can be added again by anyone.
+--- A nice name added or removed by `by`; rec = { ts, del, c, r, rf, sx, l }. Each author's part is their own
+--- record (D2): nobody's message changes anyone else's, so there is nothing to take over, and a late
+--- stale message from one author can't undo another's. Two players who added the same name before
+--- hearing of each other both stand, and the name shows the earlier as its owner, the same on every client.
+--- Removing a name removes only the part of whoever sends it; the name is gone when no part is left.
 function Put.Name(key, by, rec)
     local s = Tables()
     local names = s.names
-    local old = names[key]
-    if old and old.by and old.by ~= by and not old.del then
-        if rec.del or not AddedFirst(rec.ts, by, old.ts, old.by) then return false end
-        -- a new owner: their own vote on it, if we held one, is no vote on their own name
-        if s.nameVotes[key] then s.nameVotes[key][by] = nil end
-    elseif old and rec.ts <= old.ts then
+    local n = names[key]
+    local mine = n and n.adds[by]
+    if mine and rec.ts <= mine.ts then return false end
+    if not n then
+        if Count(names) >= MAX_NAMES then return false end
+        n = { adds = {} }
+        names[key] = n
+    elseif not mine and Count(n.adds) >= MAX_VOTERS then
         return false
     end
-    if not old and Count(names) >= MAX_NAMES then return false end
-    names[key] = { by = by, ts = rec.ts, del = rec.del or nil, hidden = old and old.hidden,
-        c = rec.c, r = rec.r, rf = rec.rf, sx = rec.sx, l = rec.l }
+    n.adds[by] = { ts = rec.ts, del = rec.del or nil, c = rec.c, r = rec.r, rf = rec.rf, sx = rec.sx, l = rec.l }
+    -- someone who adds a name has no vote on it: one they cast before is dropped
+    if not rec.del and s.nameVotes[key] then s.nameVotes[key][by] = nil end
+    DeriveName(n)
+    ReplayPending(key, "N")
     return true
 end
 
 function Put.NameVote(key, voter, v, ts)
     local s = Tables()
     local n = s.names[key]
-    if not n or n.by == voter then return false end
+    local part = n and n.adds[voter]
+    if not n or (part and not part.del) then return false end
     local votes = s.nameVotes[key]
     local old = votes and votes[voter]
     if old and ts <= old.ts then return false end
@@ -494,8 +641,9 @@ function Put.Hide(key, by, on, ts)
     local n = names[key]
     if not n then
         if Count(names) >= MAX_NAMES then return false end
-        n = { ts = 0, del = true }
+        n = { adds = {}, ts = 0, del = true }
         names[key] = n
+        ReplayPending(key, "N")
     end
     -- two officers in the same second: the higher key's word stands, on every client
     if n.hidden and (ts < n.hidden.ts or (ts == n.hidden.ts and by <= (n.hidden.by or ""))) then return false end
@@ -769,9 +917,9 @@ function GK.AddNiceName(key, info)
     local old = names[key]
     if old and not old.del then return nil, "That name is on the list already." end
     local i = ParseInfo(info and info.c, info and info.r, info and info.rf, info and info.sx, info and info.l)
-    i.ts = NextTs(old)
+    i.ts = NextTs(old and old.adds[me])
     if not Put.Name(key, me, i) then return nil, "The list is full - " .. MAX_NAMES .. " names." end
-    Send(Encode.M(key, names[key]))
+    Send(Encode.M(key, names[key].adds[me]))
     GK.Changed()
     return true
 end
@@ -780,9 +928,10 @@ end
 function GK.RemoveNiceName(key)
     local me = LIB.Me()
     local n = Tables().names[key]
-    if not (me and n) or n.del or n.by ~= me then return false end
-    Put.Name(key, me, { ts = NextTs(n), del = true })
-    Send(Encode.M(key, Tables().names[key]))
+    local mine = me and n and n.adds[me]
+    if not mine or mine.del then return false end
+    Put.Name(key, me, { ts = NextTs(mine), del = true })
+    Send(Encode.M(key, n.adds[me]))
     GK.Changed()
     return true
 end
@@ -800,8 +949,9 @@ function GK.NiceNames(showHidden)
                 score = score + vote.v
                 if voter == me then mine = vote.v end
             end
-            out[#out + 1] = { key = key, by = n.by, ts = n.ts, score = score, myVote = mine, mine = n.by == me,
-                hidden = hidden }
+            local part = me and n.adds[me]
+            out[#out + 1] = { key = key, by = n.by, ts = n.ts, score = score, myVote = mine,
+                mine = (part ~= nil and not part.del), hidden = hidden }
         end
     end
     table.sort(out, function(a, b)
@@ -816,7 +966,8 @@ function GK.VoteName(key, v)
     local me, s = LIB.Me(), Tables()
     local n = s.names[key]
     v = Vote(v)
-    if not (me and v and n) or n.del or n.by == me then return false end
+    local part = me and n and n.adds[me]
+    if not (me and v and n) or n.del or (part and not part.del) then return false end
     local votes = s.nameVotes[key]
     if not Put.NameVote(key, me, v, NextTs(votes and votes[me])) then return false end
     Send(Encode.G(key, v, s.nameVotes[key][me].ts))
@@ -850,43 +1001,6 @@ local function LearnWire(key, c, r, l)
     if p then Learn(p, ParseInfo(c, r, nil, nil, l), true) end
 end
 
--- A vote can beat what it is about: another guildie's reply lands before the note's author's does, and
--- a vote on a player we don't know is turned away. So those wait here, a few of them and not for long,
--- and are tried again when the player or the name turns up. Not saved: a reload starts clean.
-local pending = {}
-
-local function Hold(v)
-    local now = GetTime()
-    for i = #pending, 1, -1 do
-        local h = pending[i]
-        if now - h.at > PENDING_FOR or (h.kind == v.kind and h.key == v.key and h.author == v.author
-                and h.id == v.id and h.voter == v.voter) then
-            table.remove(pending, i)
-        end
-    end
-    while #pending >= MAX_PENDING do table.remove(pending, 1) end
-    v.at = now
-    pending[#pending + 1] = v
-end
-
---- The player or the name `key` has arrived: apply the votes that were waiting for it.
-local function ReplayPending(key, kind)
-    local now = GetTime()
-    for i = #pending, 1, -1 do
-        local h = pending[i]
-        if now - h.at > PENDING_FOR then
-            table.remove(pending, i)
-        elseif h.key == key and h.kind == kind then
-            table.remove(pending, i)
-            if kind == "V" then
-                Put.Vote(h.key, h.author, h.id, h.voter, h.v, h.ts)
-            else
-                Put.NameVote(h.key, h.voter, h.v, h.ts)
-            end
-        end
-    end
-end
-
 local function OnNote(sender, f)
     local key, id, ts = ValidKey(f[3]), Int(f[4], 1, MAX_ID), Ts(f[5])
     if not (key and id and ts) then return false end
@@ -899,7 +1013,6 @@ local function OnNote(sender, f)
     end
     if not Put.Note(key, sender, id, { text = text, tag = tag, ts = ts, del = del }) then return false end
     LearnWire(key, f[8], f[9], f[10])
-    ReplayPending(key, "V")
     return true
 end
 
@@ -910,7 +1023,6 @@ local function OnMark(sender, f)
     if not (key and ts) or (not del and not list) then return false end
     if not Put.Mark(key, sender, { list = list, ts = ts, del = del }) then return false end
     LearnWire(key, f[7], f[8], f[9])
-    ReplayPending(key, "V")
     return true
 end
 
@@ -930,9 +1042,7 @@ local function OnName(sender, f)
     if not (key and ts) then return false end
     local i = ParseInfo(f[6], f[7], f[8], f[9], f[10])
     i.ts, i.del = ts, f[5] == "1"
-    if not Put.Name(key, sender, i) then return false end
-    ReplayPending(key, "N")
-    return true
+    return Put.Name(key, sender, i)
 end
 
 local function OnNameVote(sender, f)
@@ -977,7 +1087,8 @@ local function OwnRecords()
         end
     end
     for key, n in pairs(s.names) do
-        if n.by == me then add(n.ts, Encode.M(key, n)) end
+        local part = n.adds[me]
+        if part then add(part.ts, Encode.M(key, part)) end
         if n.hidden and n.hidden.by == me then add(n.hidden.ts, Encode.H(key, n.hidden.on, n.hidden.ts)) end
         local mine = s.nameVotes[key] and s.nameVotes[key][me]
         if mine then add(mine.ts, Encode.G(key, mine.v, mine.ts)) end
@@ -996,16 +1107,28 @@ local function OwnRecords()
 end
 GK.NotesOwnRecords = OwnRecords
 
+--- Queue a snapshot of my own records, bound to the guild we are in now. false when we can't say which.
+QueueSnapshot = function()
+    local guild = LIB.GuildKey()
+    if GK.testMode or not IsInGuild() or not guild then return false end
+    for _, rec in ipairs(OwnRecords()) do Enqueue(rec.text, guild, true) end
+    Kick()
+    return true
+end
+
 --- Send all my own records, through the queue like everything else (two a second, well inside
 --- LibForever's 30 messages per sender per 10 seconds, for the other end). For after the import, which
 --- makes records the rest of the guild has not heard, and for the answer to a Q. One that is asked for
---- while another is still waiting is that other: it is not queued twice. false when nothing can be sent.
+--- while another is still waiting, none of it sent yet, is that other: it is not queued twice. Asked for
+--- when part of one has gone, the one who asks missed its start: one more snapshot follows the first,
+--- and any number of asks share it. false when nothing can be sent.
 function GK.NotesBroadcast()
-    if GK.testMode or not IsInGuild() then return false end
-    if bulkQueued > 0 then return true end
-    for _, rec in ipairs(OwnRecords()) do Enqueue(rec.text, true) end
-    Kick()
-    return true
+    if GK.testMode or not IsInGuild() or not LIB.GuildKey() then return false end
+    if bulkQueued > 0 then
+        if bulkSent > 0 then followUp = true end
+        return true
+    end
+    return QueueSnapshot()
 end
 
 local replyAfter = 0
@@ -1074,6 +1197,13 @@ function GK.PruneNotes()
     end
     for key, n in pairs(s.names) do
         if n.hidden and n.hidden.ts < cutoff and not n.hidden.on then n.hidden = nil end
+        for author, part in pairs(n.adds) do
+            if part.del and part.ts < cutoff then
+                n.adds[author] = nil
+                gone = gone + 1
+            end
+        end
+        DeriveName(n)
         if (n.del and n.ts < cutoff) and not (n.hidden and n.hidden.ts >= cutoff) then
             s.names[key] = nil
             s.nameVotes[key] = nil
@@ -1112,6 +1242,12 @@ LIB.On("PLAYER_LOGIN", function()
     if not (GK.db and GK.char) then return end
     queueGuild = LIB.GuildKey()
     LIB.RegisterComm(PREFIX, OnMessage)
-    C_Timer.After(10, function() Send(Encode.Q()) end)
+    -- the question waits for the guild's name, which can come a little after login
+    local function Ask(tries)
+        if not Send(Encode.Q()) and IsInGuild() and not GK.testMode and tries < 6 then
+            C_Timer.After(10, function() Ask(tries + 1) end)
+        end
+    end
+    C_Timer.After(10, function() Ask(1) end)
     C_Timer.After(20, GK.PruneNotes)
 end)

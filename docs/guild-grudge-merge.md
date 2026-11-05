@@ -68,8 +68,9 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
   claims are not imported (D4). Afterwards the player disables Guild Grudge. The import waits while the
   test panel is open, and in a guild until the client has said which one (a few tries, then it gives up
   quietly and tries again at the next login); the guildless store is used only without a guild. An imported
-  note's id comes from the note itself (`ts * 100` plus a number from its own id, else from its text), so
-  every client gives the same note the same id.
+  note's id is `ts * 100` plus its place (0, 1, 2...) among that author's notes of the same second on that
+  player, the notes put in order by text, tag and Guild Grudge's own id, so every client derives the same
+  ids from the same Guild Grudge data.
 - **D16. A separate addon-message prefix, `GrudgeNotes`.** The notes travel on their own prefix with
   their own small protocol. Grudgekeeper's protocol and Guild.lua are not touched, and an old
   Grudgekeeper client ignores the new messages completely. See Q3.
@@ -240,7 +241,9 @@ store.people[key] = {
   notes = { [author] = { [id] = { text, tag, ts, del } } },
   votes = { [author .. "#" .. id] = { [voter] = { v = 1 | -1 | 0, ts } } },
 }
-store.names[key] = { by, ts, del, c, r, rf, sx, l, hidden = { by, ts, on } }
+store.names[key] = { adds = { [author] = { ts, del, c, r, rf, sx, l } },
+  by, ts, del, c, r, rf, sx, l,      -- worked out from adds: the earliest live part, else the latest removal
+  hidden = { by, ts, on } }
 store.nameVotes[key] = { [voter] = { v, ts } }
 ```
 
@@ -256,13 +259,20 @@ store.nameVotes[key] = { [voter] = { v, ts } }
   that doesn't fit makes room by dropping the oldest deletion record older than 30 days; if there is none
   it is refused. The same goes for a new person at 500: only someone whose every record (mark, note, vote)
   is a deletion or vote older than 30 days is forgotten, otherwise the new person is refused.
-- A nice name belongs to whoever added it first. When two players added the same name before hearing of
-  each other, the earliest `ts` is the owner and, at the same second, the lower key; every client
-  settles on the same one whatever order the messages came in. A later `M` from the other player is
-  ignored, and only the owner's removal counts.
+- A nice name is made of one part per author, `adds[author] = { ts, del, c, r, rf, sx, l }`, and nobody's
+  message changes anyone else's part (D2). It is live while any author's part is; the "added by" shown
+  (`by`, with `ts` and the class, race and level beside it) is the earliest live part, the lower key at
+  the same second, the same on every client whatever order the messages came in. A player's remove (an
+  `M` with `del`) deletes only their own part, so a backdated `M` from someone else takes nothing over
+  and a stale one can't undo a later part. The top-level `by`, `ts` and `del` are worked out from the
+  parts after every change. A store from before (one owner in `by`) is read as that author's part, once.
+  A deleted part is pruned after 30 days like any tombstone. Someone who adds a name loses any vote of
+  theirs on it, and a part's author can't vote on the name.
 - Hide and show are ordered by `ts`, then by the officer's key (the higher key wins a tie).
 - A vote that arrives before the player or the nice name it is about is held (at most 200, for 10
-  minutes, in memory only) and applied when that player or name arrives.
+  minutes, in memory only) and applied as soon as that player or name comes into being, whether a message,
+  a local action or the import made it. Of several held votes by one voter on one target the newest is
+  kept; an older or equal copy is ignored and does not renew the wait.
 
 ## Wire: the `GrudgeNotes` prefix
 
@@ -274,23 +284,30 @@ rest. The second field is the protocol version, `1`.
 N;1;key;id;ts;del;tag;c;r;l;text        my note (del: 1 or empty)
 L;1;key;list;ts;del;c;r;l               my mark: which list I put them on
 V;1;key;author;id;v;ts                  my vote on author's note id (v: 1, -1 or 0 to take it back)
-M;1;key;ts;del;c;r;rf;sx;l              my nice name
+M;1;key;ts;del;c;r;rf;sx;l              my part of a nice name
 G;1;key;v;ts                            my vote on a nice name
 H;1;key;on;ts                           I hide (1) or show (0) a nice name - officers only (Q6)
 Q;1                                     tell me yours (at login)
 ```
 
-- Note ids run from 1 to 2^40: a note written here uses the time, an imported one `ts * 100` plus a small
-  number (see Import.lua).
+- Note ids run from 1 to 2^40: a note written here uses the time, an imported one `ts * 100` plus its
+  place among that author's notes of the same second on that player (see Import.lua).
 - On Q, a client answers after 2-6 seconds, at most once per 30 seconds, with its own records only,
   newest first, at most 150.
 - Everything sent on the prefix - live changes, the answer to a Q, the broadcast after an import - goes
   through one outbound queue, at most 2 messages a second in total, so we stay inside LibForever's
-  receive budget (30 per sender per 10 seconds) however many things are going on. A broadcast asked for
-  while another is still waiting is merged into it. Each entry remembers `LIB.GuildKey()` from when it was
-  queued and is dropped at send time if the guild is another by then; the queue is also cleared on
-  `GUILD_ROSTER_UPDATE` / `PLAYER_GUILD_UPDATE` when the guild key changed. Nothing is sent while
-  `GK.testMode` is on, or outside a guild; both are checked again at send time.
+  receive budget (30 per sender per 10 seconds) however many things are going on.
+  - A broadcast asked for while another is waiting with none of it sent is that other. Asked for after part
+    of one has gone, the newcomer missed its start, so one fresh snapshot follows when the batch has
+    drained; any number of asks share that one follow-up.
+  - A live change still waiting is replaced by a newer change to the same record (same guild, same note,
+    mark, vote or name), keeping its place in the line. Past 400 entries waiting, the live ones are dropped
+    and a fresh broadcast stands in for them.
+  - Nothing is queued, snapshotted or sent until `LIB.GuildKey()` names the guild (a nil key never
+    matches), and the login Q waits for it, trying every 10 seconds up to 6 times. Each entry remembers
+    the key from when it was queued and is dropped at send time if the guild is another by then; the queue
+    is also cleared on `GUILD_ROSTER_UPDATE` / `PLAYER_GUILD_UPDATE` when the guild key changed. Nothing
+    is sent while `GK.testMode` is on, or outside a guild; both are checked again at send time.
 - A vote on an imported note is never sent, live or in a reply (that id is only ours).
 - After the import (D15) the same reply goes out unasked, once (`GK.NotesBroadcast`): the notes it made as
   mine are news to everyone else.

@@ -279,7 +279,7 @@ end
 -- ---------------------------------------------------------------------------
 --- The row whose card shows: the chosen one if it is still there, else the page's own default - the same
 --- rule as the ledger's.
-local function Chosen(items)
+local function Chosen(items, searching)
     local key = selected[tab]
     if key then
         for _, it in ipairs(items) do
@@ -288,6 +288,15 @@ local function Chosen(items)
     end
     local def = GK.LedgerPages[tab]
     local first = def.default and def.default(items)
+    if first and searching then
+        -- a page's pick can be a row of its own that is no part of the list (Grudges' record of me): during
+        -- a search it counts only if it is one of the rows left
+        local listed = false
+        for _, it in ipairs(items) do
+            listed = listed or it.key == first.key
+        end
+        if not listed then first = nil end
+    end
     if first then return first end
     for _, it in ipairs(items) do
         if not it.header and not it.faded then return it end
@@ -325,7 +334,7 @@ Refresh = function()
     local list = filter == "" and all or Matching(all, filter)
     -- The card belongs to a row the list shows: the chosen one only while the search leaves it in, else
     -- the page's own pick from what is left, and none at all when nothing matches.
-    local chosen = Chosen(list)
+    local chosen = Chosen(list, filter ~= "")
     chosenKey = chosen and chosen.key
 
     -- the strip under the toolbar
