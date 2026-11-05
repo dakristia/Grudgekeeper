@@ -930,11 +930,26 @@ local function Layout()
     win.detail:ClearAllPoints()
     win.detail:SetPoint("TOPLEFT", folded and b.x or b.x2, -b.y)
     -- Two groups in the open book: the enemy's pages over the left page, the friendly ones (side = "right")
-    -- over the right page, from just inside its left edge to the iron. Folded there is one page, one row.
+    -- over the right page, from just inside its left edge to the iron. Folded there is one page and one
+    -- row, too short for all of them: only the active page's group shows, with a last tab that switches to
+    -- the other group.
     local left, right = {}, {}
+    local current = GK.LedgerPages[tab]
+    local friends = current ~= nil and current.side == "right"
     for _, t in ipairs(win.tabs) do
-        local into = (not folded and t.side == "right") and right or left
-        into[#into + 1] = t
+        if folded then
+            t:SetShown((t.side == "right") == friends)
+            if t:IsShown() then left[#left + 1] = t end
+        else
+            t:Show()
+            local into = t.side == "right" and right or left
+            into[#into + 1] = t
+        end
+    end
+    win.swap:SetShown(folded)
+    if folded then
+        win.swap.label:SetText(friends and "Enemies" or "Friends")
+        left[#left + 1] = win.swap
     end
     PlaceTabs(left, b.x + 12, 8, b.stop, b.cover)
     if b.stopRight then PlaceTabs(right, b.x2 + 12, b.x2 + 4, b.stopRight, b.cover) end
@@ -965,6 +980,7 @@ end
 
 local function SelectTab(i)
     tab, offset, turned = i, 0, false
+    if Folded() then Layout() end                  -- the row shows the group of the page
     for j, t in ipairs(win.tabs) do
         local on = j == i
         t:SetHeight(on and TAB_H_ON or TAB_H)
@@ -1028,6 +1044,27 @@ local function Build()
         win.tabs[i] = t
         x = x + w + 4
     end
+    -- folded: the last tab of the row, which switches to the other group of pages
+    local swap = CreateFrame("Button", nil, win)
+    swap:SetFrameLevel(level + 1)
+    swap.label = swap:CreateFontString(nil, "OVERLAY")
+    swap.label:SetFont(TITLE_FONT, TAB_FONT, "")
+    swap.label:SetShadowOffset(1, -1)
+    swap.label:SetTextColor(0.95, 0.86, 0.68)
+    swap.label:SetText("Friends")
+    swap.label:SetPoint("CENTER", 0, 4)
+    swap:SetHeight(TAB_H)
+    swap.art = TabArt(swap, TAB_H_ON)
+    for _, piece in ipairs(swap.art) do Tone(piece, 0.78, 0.62, 0.5) end
+    swap.dx, swap.w = 0, 60
+    swap:SetScript("OnClick", function()
+        local toRight = not (GK.LedgerPages[tab] and GK.LedgerPages[tab].side == "right")
+        for i, def in ipairs(GK.LedgerPages) do
+            if (def.side == "right") == toRight then return SelectTab(i) end
+        end
+    end)
+    swap:Hide()
+    win.swap = swap
     -- the bookmark that folds the book: a tab like the ones on top, standing 20 out of the right-hand
     -- edge (both covers end ~4 inside the window's edge, so 10 of its 30 are behind the cover)
     local fold = CreateFrame("Button", nil, win)

@@ -72,7 +72,7 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
   open book - the owner's four and **Kill on sight** - and the friendly ones (**Watch**, **Kudos**,
   **Names**) over the right page. Kill on sight is for an enemy you want to mark without a bounty or a
   history, e.g. a colleague on Horde. (This was Q7, "one Notes tab with a switch, or elsewhere?"; the
-  owner tried it in the game and asked for tabs.) Folded, all the tabs share one row.
+  owner tried it in the game and asked for tabs.) Folded, the row shows the active page's group plus a last tab, Friends or Enemies, that switches to the other group.
 
 ## Questions for the owner
 
