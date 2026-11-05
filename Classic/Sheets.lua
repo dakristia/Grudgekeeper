@@ -119,7 +119,7 @@ end
 -- The note sheet
 -- ---------------------------------------------------------------------------
 local LISTS = {
-    kos = { "Kill on sight", 1, 0.3, 0.25 },
+    kos = { "Marked", 1, 0.3, 0.25 },
     watch = { "Shame", 1, 0.82, 0 },
     kudos = { "Kudos", 0.3, 1, 0.4 },
 }
@@ -191,7 +191,7 @@ C.Wraps.OpenNoteSheet = function(_, t, list)
     local info = LISTS[list] or LISTS.kos
     sheet.list:SetText(info[1])
     sheet.list:SetTextColor(info[2], info[3], info[4])
-    sheet.hint:SetText(list == "kos" and "Goes on the Kill on sight list." or ("Puts them on the " .. info[1] .. " list."))
+    sheet.hint:SetText(list == "kos" and "Goes on the Marked list." or ("Puts them on the " .. info[1] .. " list."))
     local tagged = list == "watch" or list == "kudos"
     sheet.tagLabel:SetShown(tagged)
     sheet.tag:SetShown(tagged)

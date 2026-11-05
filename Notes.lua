@@ -1,5 +1,5 @@
 -- Grudgekeeper - notes on players: what the guild writes down about the people it meets. A free-text
--- note with a tag, a mark that puts a player on one of three lists (Kill on sight, Shame, Kudos),
+-- note with a tag, a mark that puts a player on one of three lists (Marked, Shame, Kudos),
 -- votes on notes, and a guild-shared list of funny character names. This file is the data and the
 -- wire only; it makes no frames. The pages, menus and tooltip lines that show it are elsewhere.
 -- It follows Guild.lua's rule: everyone sends only their OWN things - their notes, their marks, their
@@ -38,7 +38,7 @@ local LISTS = { kos = true, watch = true, kudos = true }
 local NONE = {}                             -- the usual answer, shared: callers only ever read it
 
 GK.MAX_TAG = 24
--- Suggested tags per list; a player can type their own. Kill on sight has none: its notes say why.
+-- Suggested tags per list; a player can type their own. Marked has none: its notes say why.
 GK.TAGS = {
     watch = { "Ninja looter", "Scammer", "Toxic", "Griefer", "Leaver" },
     kudos = { "Helpful", "Kind", "Skilled", "Great healer", "Great tank", "Fair looter", "Fun to group with" },

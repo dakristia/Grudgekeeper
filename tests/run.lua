@@ -1348,20 +1348,23 @@ local function labels(node)
     return table.concat(out, "|")
 end
 
-test("the four list pages: Kill on sight with the owner's, the rest on the right, none with links", function()
+test("the four list pages: Marked between Grudges and News, the rest on the right, none with links", function()
     local GK = bootUI()
     eq(#GK.LedgerPages, 8)
-    local want = { { "Kill on sight", nil }, { "Shame", "right" }, { "Kudos", "right" }, { "Names", "right" } }
-    for i, w in ipairs(want) do
-        local page = GK.LedgerPages[4 + i]
+    local want = { { "Marked", nil, 4 }, { "Shame", "right", 6 }, { "Kudos", "right", 7 }, { "Names", "right", 8 } }
+    local order = {}
+    for i, page in ipairs(GK.LedgerPages) do order[i] = page.name end
+    eq(table.concat(order, "|"), "Kill orders|Leaderboard|Grudges|Marked|News|Shame|Kudos|Names")
+    for _, w in ipairs(want) do
+        local page = GK.LedgerPages[w[3]]
         eq(page.name, w[1])
         eq(page.side, w[2])
         eq(page.sortable, true)
         eq(page.links, nil, "the list is the tab")
         eq(#page.headings, 2)
     end
-    for i = 1, 4 do eq(GK.LedgerPages[i].side, nil) end
-    eq(GK.LedgerPages[5].headings[1][1], "Player")
+    for i = 1, 5 do eq(GK.LedgerPages[i].side, nil) end
+    eq(GK.LedgerPages[4].headings[1][1], "Player")
     eq(GK.LedgerPages[8].headings[1][1], "Nice name")
     eq(GK.db.notesList, nil, "the list is not a setting any more")
 end)
@@ -1370,7 +1373,7 @@ test("GK.OpenNotes opens the page of the list", function()
     local GK = bootUI()
     local W2 = require("wow_mock")
     GK.OpenNotes("kos")
-    eq(W2.opened, 5)
+    eq(W2.opened, 4)
     GK.OpenNotes("watch")
     eq(W2.opened, 6)
     GK.OpenNotes("kudos")
@@ -1378,7 +1381,15 @@ test("GK.OpenNotes opens the page of the list", function()
     GK.OpenNotes("names")
     eq(W2.opened, 8)
     GK.OpenNotes("somewhere")
-    eq(W2.opened, 5, "an unknown list is kos")
+    eq(W2.opened, 4, "an unknown list is kos")
+end)
+
+test("/grudge move accepts marked next to kos and shame next to watch", function()
+    local GK = bootUI()
+    local known = function() return true end
+    eq(GK.ParseNotesCommand("move", "Gank Master marked", nil, known).list, "kos")
+    eq(GK.ParseNotesCommand("move", "Gank Master kos", nil, known).list, "kos")
+    eq(GK.ParseNotesCommand("move", "Gank Master shame", nil, known).list, "watch")
 end)
 
 test("/grudge shame and /grudge watch open the same page", function()
@@ -1398,13 +1409,13 @@ test("the page's rows: newest first, with tags, the newest note, the score and m
     W.receive(GK, KARI, msg("L", 1, GANK, "watch", B + 11))
     W.receive(GK, EDVARD, msg("V", 1, GANK, KARI, 1, 1, B + 12))
     W.receive(GK, KARI, msg("N", 1, "Older Foe-Realm", 1, B + 5, "", "", "", "", "", "ganked me"))
-    local items, empty = GK.LedgerPages[5].items()
+    local items, empty = GK.LedgerPages[4].items()
     eq(#items, 1, "Gank is on Shame, not on kos")
     eq(items[1].name, "Older Foe")
     eq(items[1].sub, '"ganked me"')
     eq(items[1].right, "")
     eq(items[1].own, nil)
-    assert(empty:find("Nobody is on Kill on sight"), empty)
+    assert(empty:find("Nobody is marked"), empty)
     items, empty = GK.NotesItems("watch")
     eq(#items, 1)
     local it = items[1]
@@ -1426,7 +1437,7 @@ test("the page's rows: newest first, with tags, the newest note, the score and m
     local rows = GK.NotesItems("watch")
     eq(#rows, 2)
     eq(rows[1].name, "Older Foe", "the newest news first")
-    eq(GK.LedgerPages[5].sub({ 1 }), "1 player on Kill on sight")
+    eq(GK.LedgerPages[4].sub({ 1 }), "1 player marked")
     eq(GK.LedgerPages[6].sub(rows), "2 players on Shame")
     eq(#GK.LedgerPages[6].items(), 2)
 end)
@@ -1463,13 +1474,13 @@ test("a noted player's card: title, who put them where, the notes with their vot
     W.receive(GK, EDVARD, msg("N", 1, GANK, 1, B + 20, "", "", "", "", "", "agreed"))
     W.receive(GK, EDVARD, msg("V", 1, GANK, KARI, 1, 1, B + 21))
     local d = GK.NoteCard(GANK)
-    eq(d.title, "KILL ON SIGHT", "Edvard's note without a mark counts as kos, and no list of mine is chosen")
+    eq(d.title, "MARKED", "Edvard's note without a mark counts as kos, and no list of mine is chosen")
     eq(d.name, "Gank Master")
     eq(d.info, "Level 60 Orc")
     eq(d.big, "+1")
     eq(d.caption, "votes")
     eq(d.c, "ROGUE")
-    eq(d.lines[1], "Kill on sight: Edvard")
+    eq(d.lines[1], "Marked: Edvard")
     eq(d.lines[2], "Shame: Kari - " .. GK.TagText("Ninja looter", 12))
     eq(#d.lines, 4)
     eq(d.lines[3], '"agreed" - Edvard, 3 days ago')
@@ -1477,7 +1488,7 @@ test("a noted player's card: title, who put them where, the notes with their vot
     assert(not d.lines[4]:find("^[^:,]+: "), "the ledger would read that as a label")
     -- the page's list wins when they are on it; my own mark wins over that
     eq(GK.NoteCard(GANK, "watch").title, "SHAME")
-    eq(GK.NoteCard(GANK, "kudos").title, "KILL ON SIGHT", "not on that list")
+    eq(GK.NoteCard(GANK, "kudos").title, "MARKED", "not on that list")
     GK.SetMark(GANK, "kudos")
     eq(GK.NoteCard(GANK, "watch").title, "KUDOS")
     eq(GK.NoteCard(GANK).lines[3], "Kudos: you")
@@ -1515,7 +1526,7 @@ test("the More menu: move or remove my mark, vote on others' notes, delete mine,
     GK.NoteMenu(root, GANK)
     eq(labels(root), "Move my mark to|Remove my mark|Vote on a note|Delete my note|Open their poster",
         "we have seen them as an enemy")
-    eq(labels(kid(root, "Move my mark to")), "Kill on sight|Kudos", "not the list I am on")
+    eq(labels(kid(root, "Move my mark to")), "Marked|Kudos", "not the list I am on")
     kid(kid(root, "Move my mark to"), "Kudos").fn()
     eq(GK.MyMark(GANK), "kudos")
     local vote = kid(root, "Vote on a note")
@@ -1705,7 +1716,7 @@ test("/grudge: our subcommands act, everything else is Core's, and the help grow
     slash("nice Funny Name")
     assert(W.printed[#W.printed]:find("already"), W.printed[#W.printed])
     slash("notes")
-    eq(W2.opened, 5, "Kill on sight")
+    eq(W2.opened, 4, "Marked")
     slash("watch")
     eq(W2.opened, 6)
     slash("kudos")
@@ -1781,10 +1792,10 @@ test("the tooltip: an enemy's Grudge line gets the notes, anyone else gets a lin
     -- the answer follows the data
     GK.SetMark(NICE, "kos")
     W.receive(GK, EDVARD, msg("L", 1, NICE, "", B + 1, 1))
-    eq(GK.NoteTipLine(NICE), "|cffc8281eKill on sight|r")
+    eq(GK.NoteTipLine(NICE), "|cffc8281eMarked|r")
 end)
 
-test("a noted player in sight: Kill on sight warns when asked, Shame says a line, both at most every 90 seconds", function()
+test("a noted player in sight: Marked warns when asked, Shame says a line, both at most every 90 seconds", function()
     local GK, LIB = bootUI()
     local W2 = require("wow_mock")
     W.receive(GK, KARI, msg("N", 1, GANK, 1, B, "", "", "ROGUE", "Orc", 60, "x"))
@@ -1796,7 +1807,7 @@ test("a noted player in sight: Kill on sight warns when asked, Shame says a line
     GK.db.noteAlerts = true
     LIB.fire("UPDATE_MOUSEOVER_UNIT")
     eq(#W2.warned, 1)
-    eq(W2.warned[1].text, "Kill on sight: Gank Master is near!")
+    eq(W2.warned[1].text, "Marked: Gank Master is near!")
     eq(W2.warned[1].urgent, true)
     LIB.fire("UPDATE_MOUSEOVER_UNIT")
     eq(#W2.warned, 1, "within 90 seconds")

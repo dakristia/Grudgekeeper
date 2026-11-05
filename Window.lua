@@ -1,6 +1,6 @@
 -- Grudgekeeper - the window (/grudge, the minimap button): the Grudgekeeper's ledger, an open book.
---   Leather tabs on top, one per page of GK.LedgerPages: Kill orders, Leaderboard, Grudges, News and
---   Kill on sight over the left page; Shame, Kudos and Names over the right page (NotesUI.lua).
+--   Leather tabs on top, one per page of GK.LedgerPages: Kill orders, Leaderboard, Grudges, Marked, News and
+--   Marked over the left page; Shame, Kudos and Names over the right page (NotesUI.lua).
 --   The left page is that page's table; the right page is the row you clicked - an enemy's wanted
 --   poster, a guildie's record (Profile.lua writes both, for the small cards and for here).
 -- Folded by the bookmark on its right edge, the ledger is one page: the table, and a click on a row
@@ -273,9 +273,18 @@ GK.LedgerPages = {
       sub = function() return "What the guild has been up to" end },
 }
 
---- Adds a page after the ledger's own. Only before the book is first built: the tabs are made then.
+--- Adds a page, after the ledger's own unless def.before names the page (by its name) to sit in front of;
+--- a name nobody has goes last. Only before the book is first built: the tabs are made then. Pages are
+--- opened by number only for the first two (GK.OpenWindow(1), (2): Kill orders and Leaderboard), so a
+--- page put at 4 or later moves nothing that is opened by number - find a page by its def, not its index.
 function GK.AddLedgerPage(def)
     assert(not win, "GK.AddLedgerPage: the ledger is already built")
+    for i, page in ipairs(GK.LedgerPages) do
+        if def.before and page.name == def.before then
+            table.insert(GK.LedgerPages, i, def)
+            return
+        end
+    end
     table.insert(GK.LedgerPages, def)
 end
 
@@ -577,7 +586,7 @@ local function BuildList(page)
             self.text:SetText(text)
             Ink(self.text, on and BLOOD or FADED, TEXT_FONT, 11)
             self.line:SetShown(on and true or false)
-            -- at least the 70 the leaderboard's links always had; a longer label ("Kill on sight") gets
+            -- at least the 70 the leaderboard's links always had; a longer label ("Marked") gets
             -- its own width, or it ran into the link after it
             self:SetWidth(math.max(70, math.ceil(TextWidth(self.text)) + 2))
         end

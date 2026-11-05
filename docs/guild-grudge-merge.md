@@ -28,7 +28,7 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
   for same-faction use (ninja looters, scammers, good healers). Kill orders stay enemy-only. See Q1.
 - **D4. No kill orders on same-faction players.** Guild Grudge allowed bounties on anyone while there
   were few Horde players to test on. That stops here.
-- **D5. Three lists, one mark per author.** A player can be on "Kill on sight", "Shame" or "Kudos" (the Shame list is stored, sent and named in code as `watch`; only the words a player sees say Shame). The
+- **D5. Three lists, one mark per author.** A player can be on "Marked", "Shame" or "Kudos" (the Marked list is stored, sent and named in code as `kos`, and Shame as `watch`; only the words a player sees say Marked and Shame). The
   list is each author's own mark: if Kari puts someone on Shame and Edvard gives them Kudos, they show on
   both lists, each with who put them there. Moving a player only moves your own mark.
 - **D6. Tags.** A note can carry one tag. Shame has preset tags (Ninja looter, Scammer, Toxic, Griefer,
@@ -47,7 +47,7 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
   rows you wrote, posted, took, fulfilled or voted on.
 - **D10. Noted players are highlighted quietly, and alert only if asked.** A player with notes and no
   kill order gets a small, dim mark on their nameplate (left of where a kill order's seal sits: a cross
-  for Kill on sight, an exclamation for Shame, a tick for Kudos) and a tooltip line. An enemy's existing
+  for Marked, an exclamation for Shame, a tick for Kudos) and a tooltip line. An enemy's existing
   Grudge line gets the list and the note count added; anyone else gets a line of their own. They raise
   the "is near" warning only when a setting turns that on (off by default); a Shame player nearby is one
   chat line, also off by default; Kudos is never announced. At most one warning per player every 90 seconds.
@@ -72,8 +72,8 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
 - **D17. Tests.** A Lua 5.1 test harness (`tests/`) runs the data layer outside the game. It is not
   packaged (`.pkgmeta` ignores `tests/`). See Q5.
 - **D18. The four lists are four tabs, in two groups.** The enemy's pages sit over the left page in the
-  open book - the owner's four and **Kill on sight** - and the friendly ones (**Shame**, **Kudos**,
-  **Names**) over the right page. Kill on sight is for an enemy you want to mark without a bounty or a
+  open book - the owner's three, **Marked**, and News: Kill orders, Leaderboard, Grudges, Marked, News - and
+  the friendly ones (**Shame**, **Kudos**, **Names**) over the right page. Marked is for an enemy you want to mark without a bounty or a
   history, e.g. a colleague on Horde. (This was Q7, "one Notes tab with a switch, or elsewhere?"; the
   owner tried it in the game and asked for tabs.) Folded, the row shows the active page's group plus a last tab, Friends or Enemies, that switches to the other group.
 
@@ -118,8 +118,10 @@ Every hook is small and named here, so a merge conflict is easy to resolve by re
   `Layout` fits each of the two groups of tabs to its own span (the left group to the left page, the
   right group from the right page's left edge to the top-right iron), one font size per group. A page
   with both `links` and `sub` shows the sub text after the links, on their line. The four existing pages move into it unchanged in behaviour; the leaderboard's
-  This week / All time links become its `links`. `GK.AddLedgerPage(def)` appends a page before the book
-  is built. The Classic window reads the same list.
+  This week / All time links become its `links`. `GK.AddLedgerPage(def)` adds a page before the book
+  is built: after the others, or in front of the page named by `def.before` (Marked uses `before = "News"`).
+  Only `GK.OpenWindow(1)` and `(2)` are used by number, so a page at 4 moves nothing; `GK.OpenNotes(list)`
+  finds its page by the def's `list` field. The Classic window reads the same list.
 - **H2. Window.lua: a generic card.** `DetailCard` also accepts `{ kind = "card", make = fn }`, where `make`
   returns a card table in Profile.lua's shape.
 - **H3. Window.lua: sort and mine only.** `Refresh` passes each page's items through `GK.SortItems(items,
@@ -205,8 +207,8 @@ Known gaps:
 
 ## What the list pages show
 
-- Four pages, one per list (D18): Kill on sight, Shame, Kudos and Names. `GK.OpenNotes(list)` opens the
-  right one, and `/grudge notes` (Kill on sight), `/grudge shame`, `/grudge kudos` and `/grudge names`
+- Four pages, one per list (D18): Marked, Shame, Kudos and Names. `GK.OpenNotes(list)` opens the
+  right one, and `/grudge notes` (Marked), `/grudge shame`, `/grudge kudos` and `/grudge names`
   with no name do the same. A row is a player (or a name) with their face, tags and newest note, and the
   score on the right. Every page is sortable and has its own headings and empty text, but no links: the
   list is the tab. The count line is the page's `sub`.

@@ -1,12 +1,12 @@
 -- Grudgekeeper - the notes, as the ledger shows them (the data is Notes.lua). What you see of them:
---   the list pages      four tabs in the ledger: Kill on sight (with the owner's four), then Shame, Kudos and
+--   the list pages      four tabs in the ledger: Marked (after Grudges, among the owner's), then Shame, Kudos and
 --                       Names over the right page
 --   cards               the small card for a noted player or a nice name, and a line or two on the
 --                       wanted poster and the record when there are notes on that player
 --   the note sheet      a small parchment like the kill order's: the list, a tag, a few words, Write it
 --   the right-click menu   a Grudgekeeper notes submenu on any player, friend or foe
 --   quiet marks         a line on the tooltip, a dim mark on the nameplate. They never open anything
---   warnings            only when asked: a Kill on sight player near (off by default), a Shame player
+--   warnings            only when asked: a Marked player near (off by default), a Shame player
 --                       near (off), a Shame or Kudos player joining your group (on)
 -- It also wraps a few functions of the other files (docs/guild-grudge-merge.md, H7): the poster and
 -- record cards, the tooltip line, GK.Warn (the alert style) and /grudge. Each wrapper calls the
@@ -24,8 +24,8 @@ local BLOOD = { 0.47, 0.06, 0.04 }
 local COL_RIGHT = 332                    -- Window.lua's right-hand column: the page's width less 36
 
 local ORDER = { "kos", "watch", "kudos" }
-local WORD = { kos = "Kill on sight", watch = "Shame", kudos = "Kudos" }
-local CARD_TITLE = { kos = "KILL ON SIGHT", watch = "SHAME", kudos = "KUDOS" }
+local WORD = { kos = "Marked", watch = "Shame", kudos = "Kudos" }
+local CARD_TITLE = { kos = "MARKED", watch = "SHAME", kudos = "KUDOS" }
 local COLOUR = { kos = "c8281e", watch = "ffcc00", kudos = "4dff66" }
 local NEAR_GAP = 90                      -- the same player warns you at most this often
 local MAX_CARD_LINES = 9                 -- what the ledger's card has room for
@@ -262,11 +262,10 @@ end
 -- ---------------------------------------------------------------------------
 -- The four list pages
 -- ---------------------------------------------------------------------------
--- A page each, because the list is the tab: Kill on sight is the enemy's page, on the left with the
--- owner's four; Shame, Kudos and Names are the friendly ones, over the right page (side = "right").
-local PAGE_WORD = { kos = "Kill on sight", watch = "Shame", kudos = "Kudos", names = "Names" }
+-- A page each, because the list is the tab: Marked is the enemy's page, on the left between Grudges and News; Shame, Kudos and Names are the friendly ones, over the right page (side = "right").
+local PAGE_WORD = { kos = "Marked", watch = "Shame", kudos = "Kudos", names = "Names" }
 local EMPTY = {
-    kos = "Nobody is on Kill on sight. It is for an enemy you want to mark without a bounty or a history. "
+    kos = "Nobody is marked. It is for an enemy you want to mark without a bounty or a history. "
         .. "Right-click a player and pick Grudgekeeper notes, or write /grudge note <first> <surname> <what they did>.",
     watch = "Nobody is on your Shame list. It is for players to be careful with - a ninja looter, a scammer. "
         .. "Right-click one and pick Grudgekeeper notes, or write /grudge shame <first> <surname>.",
@@ -315,23 +314,28 @@ function GK.NotesItems(list)
     return items, EMPTY[list]
 end
 
-local TAB_OF = {}                          -- [list] = its index in GK.LedgerPages
 for _, list in ipairs({ "kos", "watch", "kudos", "names" }) do
     GK.AddLedgerPage({
-        name = PAGE_WORD[list], sortable = true, side = list ~= "kos" and "right" or nil,
+        name = PAGE_WORD[list], list = list, sortable = true, side = list ~= "kos" and "right" or nil,
+        before = list == "kos" and "News" or nil,
         items = function() return GK.NotesItems(list) end,
         headings = { { list == "names" and "Nice name" or "Player", 48 }, { "Votes", COL_RIGHT, "RIGHT" } },
         sub = function(items)
             if list == "names" then return Plural(#items, "nice name") .. " in the guild's list" end
+            if list == "kos" then return Plural(#items, "player") .. " marked" end
             return ("%s on %s"):format(Plural(#items, "player"), PAGE_WORD[list])
         end,
     })
-    TAB_OF[list] = #GK.LedgerPages
 end
 
---- Open the ledger at the page of a list: "kos", "watch", "kudos" or "names" (Kill on sight for anything else).
+--- Open the ledger at the page of a list: "kos", "watch", "kudos" or "names" (Marked for anything else).
 function GK.OpenNotes(list)
-    GK.OpenWindow(TAB_OF[list] or TAB_OF.kos)
+    local kos
+    for i, def in ipairs(GK.LedgerPages) do
+        if def.list == list then return GK.OpenWindow(i) end
+        if def.list == "kos" then kos = i end
+    end
+    GK.OpenWindow(kos)
 end
 
 -- ---------------------------------------------------------------------------
@@ -709,7 +713,7 @@ local function Unmark(unit)
     marked[unit] = nil
 end
 
---- The picture for a list: red-ish for Kill on sight, the game's alert for Shame, a tick for Kudos.
+--- The picture for a list: red-ish for Marked, the game's alert for Shame, a tick for Kudos.
 local function MarkArt(tex, list)
     tex:SetTexCoord(0, 1, 0, 1)
     tex:SetVertexColor(1, 1, 1)
@@ -754,7 +758,7 @@ local function PruneNear(now)
     end
 end
 
---- A noted player is in sight: Kill on sight warns (when asked), Shame says one line (when asked). Never
+--- A noted player is in sight: Marked warns (when asked), Shame says one line (when asked). Never
 --- twice within NEAR_GAP, and Kudos is never announced.
 local function Nearby(key, s)
     local kos, watch = #s.lists.kos > 0, #s.lists.watch > 0
@@ -767,7 +771,7 @@ local function Nearby(key, s)
     nearAt[key] = now
     local name = GK.Show(key)
     if warn then
-        GK.Warn(("Kill on sight: %s is near!%s"):format(name, TagSuffix(s.tags.kos)), true)
+        GK.Warn(("Marked: %s is near!%s"):format(name, TagSuffix(s.tags.kos)), true)
     else
         print(("%s: %s from your Shame list is near%s"):format(GK.TAG, name, TagSuffix(s.tags.watch)))
     end
@@ -869,7 +873,7 @@ end
 GK.OptionSections = GK.OptionSections or {}
 GK.OptionSections[#GK.OptionSections + 1] = function(f, anchor, h)
     local head = h.Section(anchor, "Notes")
-    local alerts = h.Check(head, "Warn me when a Kill on sight player is near", "noteAlerts",
+    local alerts = h.Check(head, "Warn me when a Marked player is near", "noteAlerts",
         "Off by default. A player you or a guildie wrote a note on, with no kill order on them, near you: the "
         .. "same warning as for a kill order's target, at most every 90 seconds per player.")
     local nearby = h.Check(alerts, "A chat line when a Shame list player is near", "watchNearby",
@@ -879,7 +883,7 @@ GK.OptionSections[#GK.OptionSections + 1] = function(f, anchor, h)
     local kudos = h.Check(group, "A chat line when a Kudos player joins my group", "kudosGroup",
         "On by default. One friendly line in chat, no sound.")
     local plate = h.Check(kudos, "Mark the nameplates of players I have notes on", "plateNotes",
-        "On by default. A small dim mark beside the nameplate: a cross for Kill on sight, an exclamation for "
+        "On by default. A small dim mark beside the nameplate: a cross for Marked, an exclamation for "
         .. "Shame, a tick for Kudos. Needs nameplates on (V).")
     local style = h.Box(plate, "Raid warning instead of the scroll's glow", "Off by default. Every warning, "
         .. "Grudgekeeper's own \"is near\" included, shows as a raid warning in the middle of the screen, with "
@@ -894,7 +898,7 @@ GK.OptionSections[#GK.OptionSections + 1] = function(f, anchor, h)
     local note = h.Note(f, "|cffffd100/grudge note|r [first surname] <text> writes a note (no name: your target).  "
         .. "|cffffd100/grudge shame|r and |cffffd100/grudge kudos|r <first> <surname> [text] put a player on a list.\n"
         .. "|cffffd100/grudge nice|r <first> <surname> adds a funny name.  |cffffd100/grudge move|r <first> "
-        .. "<surname> kos|shame|kudos|none moves your mark.\n|cffffd100/grudge notes|r, |cffffd100shame|r, "
+        .. "<surname> marked|shame|kudos|none moves your mark.\n|cffffd100/grudge notes|r, |cffffd100shame|r, "
         .. "|cffffd100kudos|r and |cffffd100names|r with no name open their pages.  "
         .. "|cffffd100/grudge import|r takes over Guild Grudge's notes (import force: again).")
     note:SetPoint("TOPLEFT", style, "BOTTOMLEFT", 4, -10)
@@ -909,9 +913,9 @@ local USAGE = {
     watch = "Usage: /grudge shame <first> <surname> [text] - or just a note, for your target.",
     kudos = "Usage: /grudge kudos <first> <surname> [text] - or just a note, for your target.",
     nice = "Usage: /grudge nice <first> <surname> - or with no name, your target.",
-    move = "Usage: /grudge move <first> <surname> kos|shame|kudos|none - or without a name, your target.",
+    move = "Usage: /grudge move <first> <surname> marked|shame|kudos|none - or without a name, your target.",
 }
-local MOVES = { kos = "kos", watch = "watch", shame = "watch", kudos = "kudos", none = false, off = false, remove = false }
+local MOVES = { kos = "kos", marked = "kos", watch = "watch", shame = "watch", kudos = "kudos", none = false, off = false, remove = false }
 
 local function Words(s)
     local words = {}
@@ -1022,8 +1026,8 @@ local function PrintHelp()
     print("  /grudge shame <first> <surname> [text]  - put a player on your Shame list")
     print("  /grudge kudos <first> <surname> [text]  - put a player on your Kudos list")
     print("  /grudge nice <first> <surname>  - add a funny character name to the guild's list")
-    print("  /grudge move <first> <surname> kos|shame|kudos|none  - move your mark on a player")
-    print("  /grudge notes  - open the Kill on sight page (/grudge shame, kudos and names open theirs)")
+    print("  /grudge move <first> <surname> marked|shame|kudos|none  - move your mark on a player")
+    print("  /grudge notes  - open the Marked page (/grudge shame, kudos and names open theirs)")
     print("  /grudge import  - take over Guild Grudge's notes (import force: again)")
 end
 
