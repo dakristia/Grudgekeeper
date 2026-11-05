@@ -183,10 +183,10 @@ after `Options.lua`.
 |---|---|
 | `Classic/Classic.lua` | The setting, `GK.IsClassic()`, the wrapping (`C.Wraps`, `C.Always`), `/grudge classic`, and the shared pieces: `C.Frame` (a `ButtonFrameTemplate` frame), `C.Face` (a round portrait with a class badge), `C.Button`, `C.Tip`, `C.FormatLines`. |
 | `Classic/Cards.lua` | `C.CardView`, which draws any card table (title, name, info, big and caption, lines, up to two buttons); the small card that `GK.ShowPoster`, `GK.ShowRecord` and `GK.ShowCard` open; the Inspect tab's page. |
-| `Classic/Window.lua` | The window as Guild Grudge's is made: tabs from `GK.LedgerPages` (the pages with `side = "right"` in a group on the right, the rest on the left), search box (name and sub line), a sort menu and Mine only on the sortable pages (`GK.db.sortMode`, `GK.db.mineOnly`), the page's links and sub line in a strip under the toolbar, a scrolling list and the chosen row's card in a panel. It reads each page's `items()`, passes them through `GK.SortItems`, and gets the card from `GK.LedgerCard`, with the ledger's rule for which row is chosen (`page.default`). |
-| `Classic/Letters.lua` | The pile in one standard frame, drawn from `GK.LetterContent`, with a pager. |
+| `Classic/Window.lua` | The window as Guild Grudge's is made: tabs from `GK.LedgerPages` (the pages with `side = "right"` in a group on the right, the rest on the left), search box (name and sub line), a sort menu and Mine only on the sortable pages (`GK.db.sortMode`, `GK.db.mineOnly`), the page's links and sub line in a strip under the toolbar, a scrolling list and the chosen row's card in a panel. It reads each page's `items()`, passes them through `GK.SortItems`, and gets the card from `GK.LedgerCard`, with the ledger's rule for which row is chosen (`page.default`), applied to the rows the search leaves: the chosen row stays only while it matches, and with no match there is no card. |
+| `Classic/Letters.lua` | The pile in one standard frame, drawn from `GK.LetterContent`, with a pager. The letter on show is tracked by its id; if it drops out of the pile, the one in its place is shown the ordinary way (and so read). |
 | `Classic/Notice.lua` | The letter icon: an envelope button with the unread count, draggable (`GK.db.classicNotice`), blinking when a letter lands. A warning is a red glow and a line of chat. The parchment notice stays hidden. |
-| `Classic/Sheets.lua` | The kill order sheet (from `GK.PostPlan`, sealing through `GK.PostSubmit`) and the note sheet (`GK.OpenNoteSheet(t, list)`: a tag box with a menu of `GK.KnownTags(list)`, a note, saved with `GK.AddNote`). |
+| `Classic/Sheets.lua` | The kill order sheet (from `GK.PostPlan`, sealing through `GK.PostSubmit`) and the note sheet (`GK.OpenNoteSheet(t, list)`: a tag box with a menu of `GK.KnownTags(list)`, a note, saved with `GK.WriteNote` like the ledger's sheet, so a list alone is a mark too). |
 
 Known gaps:
 
@@ -207,7 +207,9 @@ Known gaps:
   uses `LIB.RegisterWindow` for that; the Classic frames open at the middle of the screen.
 - **The Inspect page is covered, not rebuilt.** The ledger's page is built as ever and hidden under a
   Classic card with its own background while the look is classic; switching the look with the Inspect window
-  open takes effect at its next update.
+  open takes effect at its next update. A page that was built before the wrappers went on gets its cover
+  the first time it is filled.
+- **`C.Apply` runs once.** A second call does nothing, so the wrappers never stack.
 
 ## What the list pages show
 
@@ -218,7 +220,8 @@ Known gaps:
   list is the tab. The count line is the page's `sub`.
 - A click opens a card on the right page: for a player, who put them on which list (with tags), up to five
   notes as `"text" - Author, 3 days ago (+2)`, the score, and Add a note / More... (move or remove my mark,
-  vote on a note, delete one of mine, open the wanted poster for an enemy). For a nice name, who added it
+  vote on a note, delete one of mine, open the wanted poster for an enemy; every note can be reached: past
+  ten they are split into submenus "Notes 1-10", "Notes 11-20" and so on). For a nice name, who added it
   and the score, with Vote up (Take back once voted) and More... (Vote down, Remove for my own, and Hide /
   Show for everyone for officers).
 - The wanted poster and the record get up to two lines of their own about notes, never past nine lines.

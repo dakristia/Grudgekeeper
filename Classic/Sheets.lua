@@ -167,9 +167,9 @@ local function BuildNote()
     f.save:SetPoint("BOTTOMLEFT", 14, 12)
     f.save:SetScript("OnClick", function()
         local text, tag = strtrim(f.text:GetText() or ""), strtrim(f.tag:GetText() or "")
-        local row, why = GK.AddNote(noteTarget.key, text, tag ~= "" and tag or nil, noteList,
-            { c = noteTarget.c, r = noteTarget.r, rf = noteTarget.rf, sx = noteTarget.sx, l = noteTarget.l })
-        if not row then
+        -- the ledger's sheet saves the same way, so a list alone (no words, no tag) is a mark here too
+        local ok, why = GK.WriteNote(noteTarget, noteList, text, tag)
+        if not ok then
             print(GK.TAG .. ": " .. (why or "the note couldn't be saved."))
             return
         end
@@ -186,9 +186,11 @@ end
 C.Wraps.OpenNoteSheet = function(_, t, list)
     if not (t and t.key) then return end
     if not sheet then BuildNote() end
+    -- anything but a known list is Marked, as in the ledger's sheet
+    list = LISTS[list] and list or "kos"
     noteTarget, noteList = t, list
     sheet.head:Set(t)
-    local info = LISTS[list] or LISTS.kos
+    local info = LISTS[list]
     sheet.list:SetText(info[1])
     sheet.list:SetTextColor(info[2], info[3], info[4])
     sheet.hint:SetText(list == "kos" and "Goes on the Marked list." or ("Puts them on the " .. info[1] .. " list."))

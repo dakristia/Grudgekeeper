@@ -9,7 +9,8 @@ local C = GK.Classic
 local STAMPS = { stamp_fulfilled = "FULFILLED", stamp_paid = "PAID" }
 
 local frame
-local index                -- which letter in the pile is showing
+local index                -- where in the pile the showing letter is
+local shownId              -- and which letter it is: the pile shifts when an old letter is dropped
 
 local function Build()
     frame = C.Frame("GrudgekeeperClassicLetter", 420, 380, "Letters", true)
@@ -105,6 +106,7 @@ C.Wraps.ShowLetter = function(_, i)
     if not frame then Build() end
     index = math.max(1, math.min(i or #list, #list))
     local L = list[index]
+    shownId = L.id
     L.read = true
     GK.Sound("IG_ABILITY_PAGE_TURN")
     Fill(L)
@@ -129,9 +131,19 @@ C.Wraps.CloseLetters = function()
     if frame then frame:Hide() end
 end
 
--- An open letter follows changes to its order (taken, paid, closed).
+-- An open letter follows changes to its order (taken, paid, closed). The pile can change under it: a new
+-- letter drops the oldest, so the letter is looked up again by its id. If it is gone, the one that has
+-- taken its place is shown the ordinary way, which also marks it read.
 LIB.Listen("GRUDGEKEEPER_CHANGED", function()
     if not (GK.IsClassic() and frame and frame:IsShown() and index) then return end
-    local L = GK.char.letters[index]
-    if L then Fill(L) end
+    local list = GK.char.letters
+    for i, L in ipairs(list) do
+        -- a letter with no id can only be told by its place
+        if (shownId ~= nil and L.id == shownId) or (shownId == nil and i == index) then
+            index = i
+            Fill(L)
+            return
+        end
+    end
+    GK.ShowLetter(index)
 end)

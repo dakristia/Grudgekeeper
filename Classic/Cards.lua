@@ -137,8 +137,7 @@ LIB.Listen("GRUDGEKEEPER_CHANGED", Refill)
 -- The Inspect window's page (Inspect.lua): its own card laid over the ledger's, for as long as the look
 -- is classic. The ledger's page is built as ever (BuildCardPage) and hidden under ours.
 -- ---------------------------------------------------------------------------
-C.Always.BuildCardPage = function(original, page, layout, refill)
-    original(page, layout, refill)
+local function MakeCover(page, refill)
     local cover = CreateFrame("Frame", nil, page)
     cover:SetAllPoints()
     cover:SetFrameLevel(page:GetFrameLevel() + 20)
@@ -151,10 +150,19 @@ C.Always.BuildCardPage = function(original, page, layout, refill)
     cover.refill = refill
     cover:Hide()
     page.classic = cover
+    return cover
+end
+
+C.Always.BuildCardPage = function(original, page, layout, refill)
+    original(page, layout, refill)
+    MakeCover(page, refill)
 end
 
 C.Always.FillCardPage = function(original, page, d)
     local cover = page.classic
+    -- A page built before these wrappers went on (Inspect can be up before the login handlers have all
+    -- run) has no cover yet: make it now, from the refill the ledger kept.
+    if not cover and GK.IsClassic() then cover = MakeCover(page, page.refill) end
     if cover and GK.IsClassic() then
         cover:Show()
         cover.view:Fill(d, cover.refill)

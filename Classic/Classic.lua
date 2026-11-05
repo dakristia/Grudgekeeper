@@ -162,8 +162,12 @@ function C.SetLook(look)
     if GK.char then GK.NoticeUpdate(false) end
 end
 
---- Wrap every GK.Name that has a classic version. Once, at login, after every file has loaded.
+--- Wrap every GK.Name that has a classic version. Once, at login, after every file has loaded; a second
+--- call would put a second wrapper on top of each, so it does nothing.
+local applied = false
 local function Apply()
+    if applied then return end
+    applied = true
     for name, fn in pairs(C.Wraps) do
         local original = GK[name]
         if original then

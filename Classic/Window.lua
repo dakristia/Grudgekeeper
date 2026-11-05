@@ -321,10 +321,12 @@ Refresh = function()
     local def = GK.LedgerPages[tab]
     local all, empty = def.items()
     if def.sortable then all = GK.SortItems(all, def) end
-    local chosen = Chosen(all)
-    chosenKey = chosen and chosen.key
     local filter = (win.search:GetText() or ""):lower():match("^%s*(.-)%s*$")
     local list = filter == "" and all or Matching(all, filter)
+    -- The card belongs to a row the list shows: the chosen one only while the search leaves it in, else
+    -- the page's own pick from what is left, and none at all when nothing matches.
+    local chosen = Chosen(list)
+    chosenKey = chosen and chosen.key
 
     -- the strip under the toolbar
     win.sub:SetText(def.sub and def.sub(all) or "")
@@ -371,7 +373,7 @@ Refresh = function()
     -- the card
     local d = chosen and GK.LedgerCard(chosen.select)
     win.detail.view:SetShown(d ~= nil)
-    win.detail.hint:SetText((d == nil and #all > 0) and "Choose a row on the left." or "")
+    win.detail.hint:SetText((d == nil and #list > 0) and "Choose a row on the left." or "")
     if d then win.detail.view:Fill(d, Refresh) end
 end
 

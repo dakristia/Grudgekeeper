@@ -1276,6 +1276,96 @@ test("classic: a letter shows its content, buttons and place in the pile", funct
     eq(f.shown, false)
 end)
 
+test("classic: the letter on show stays the same letter when the pile shifts, and a gone one is read the usual way", function()
+    local GK = bootClassic("classic")
+    for id = 1, 3 do
+        table.insert(GK.char.letters, { id = id, kind = "expired", n = GANK, t = W.base, read = false })
+    end
+    GK.ShowLetter(2)
+    local f = _G.GrudgekeeperClassicLetter
+    eq(f.page.text, "2 of 3")
+    -- a new letter pushes the oldest out: the one on show moves from second place to first
+    table.remove(GK.char.letters, 1)
+    table.insert(GK.char.letters, { id = 4, kind = "expired", n = GANK, t = W.base, read = false })
+    W.LIB.Fire("GRUDGEKEEPER_CHANGED")
+    eq(f.page.text, "1 of 3", "letter 2 is first in the pile now")
+    eq(GK.char.letters[3].read, false, "the new letter was not shown, so not read")
+    -- the letter on show itself drops out: what takes its place is shown and read
+    table.remove(GK.char.letters, 1)
+    W.LIB.Fire("GRUDGEKEEPER_CHANGED")
+    eq(f.page.text, "1 of 2")
+    eq(GK.char.letters[1].read, true, "the replacement is read")
+    eq(GK.char.letters[2].read, false)
+    -- an empty pile closes the window
+    GK.char.letters = {}
+    W.LIB.Fire("GRUDGEKEEPER_CHANGED")
+    eq(f.shown, false)
+end)
+
+test("classic: the window's card follows the search, and goes when nothing matches", function()
+    local GK = bootClassic("classic")
+    GK.LedgerPages[1].items = function()
+        local items = { { header = true, name = "Group" } }
+        for n = 1, 3 do
+            local name = (n == 2 and "Beta" or "Alpha") .. n
+            items[#items + 1] = { key = "k" .. n, name = name, sub = "sub" .. n, face = { c = "MAGE" }, ts = n,
+                select = { kind = "card", make = function() return { title = "T", name = "Card " .. name, lines = {} } end } }
+        end
+        return items, "Nothing here."
+    end
+    GK.OpenWindow(1)
+    local win = _G.GrudgekeeperClassicWindow
+    eq(win.detail.view.name.text, "Card Alpha1", "the page's pick")
+    F.click(win.box.rows[4])
+    eq(win.detail.view.name.text, "Card Alpha3")
+    win.search.text = "beta"
+    win.search.hooks.OnTextChanged()
+    eq(win.box.rows[1].name.text, "Beta2")
+    eq(win.detail.view.name.text, "Card Beta2", "Alpha3 is not in the list: its card is not on show")
+    win.search.text = "nobody"
+    win.search.hooks.OnTextChanged()
+    eq(win.detail.view.shown, false, "no card without a row")
+    win.search.text = "alpha"
+    win.search.hooks.OnTextChanged()
+    eq(win.detail.view.name.text, "Card Alpha3", "the choice survives a search that keeps it")
+    win.search.text = ""
+    win.search.hooks.OnTextChanged()
+    eq(win.detail.view.name.text, "Card Alpha3")
+end)
+
+test("classic: an Inspect page built before the look was on gets its cover when it is filled", function()
+    local GK = bootClassic("classic")
+    local page = CreateFrame("Frame")
+    local refilled = function() end
+    page.refill = refilled                  -- as the ledger's BuildCardPage leaves it; ours never saw it built
+    eq(page.classic, nil)
+    GK.FillCardPage(page, CARD)
+    eq(GK.filled, 0)
+    assert(page.classic, "the cover was made")
+    eq(page.classic.shown, true)
+    eq(page.classic.refill, refilled)
+    eq(page.classic.view.title.text, "WANTED")
+    -- the ledger look leaves a page alone
+    GK.db.look = "ledger"
+    local other = CreateFrame("Frame")
+    GK.FillCardPage(other, CARD)
+    eq(other.classic, nil)
+    eq(GK.filled, 1)
+end)
+
+test("classic: Apply wraps once however often it runs", function()
+    local GK = bootClassic("classic")
+    local before = GK.OpenWindow
+    GK.Classic.Apply()
+    GK.Classic.Apply()
+    eq(GK.OpenWindow, before, "no second wrapper")
+    GK.OpenWindow(1)
+    eq(#GK.called, 0, "the classic version ran once and not the original")
+    GK.db.look = "ledger"
+    GK.OpenWindow(1)
+    eq(#GK.called, 1)
+end)
+
 test("classic: the letter icon shows the unread count, in place of the parchment one", function()
     local GK = bootClassic("classic")
     local old = CreateFrame("Button", "GrudgekeeperNotice")
@@ -1326,31 +1416,43 @@ test("classic: the kill order sheet is filled from the plan and seals through Po
     eq(_G.GrudgekeeperClassicWindow.shown, true, "sealing opens the hitlist, in this look")
 end)
 
-test("classic: the note sheet saves through AddNote with the list and the tag", function()
+test("classic: the note sheet saves through WriteNote with the list and the tag", function()
     local GK = bootClassic("classic")
-    local added
-    GK.AddNote = function(key, text, tag, list, info) added = { key, text, tag, list, info } return {} end
+    local written
+    -- NotesUI.lua's, which loads before the Classic files in the TOC; its own tests cover what it does
+    GK.WriteNote = function(t, list, text, tag) written = { t, list, text, tag } return true end
     GK.KnownTags = function() return { "Toxic" } end
-    GK.OpenNoteSheet({ key = GANK, c = "MAGE", r = "Orc", l = 60 }, "watch")
+    local target = { key = GANK, c = "MAGE", r = "Orc", l = 60 }
+    GK.OpenNoteSheet(target, "watch")
     local f = _G.GrudgekeeperClassicNote
     eq(f.shown, true)
     eq(f.list.text, "Shame")
     f.tag.text = "Toxic"
     f.text.text = "rude in chat"
     F.click(f.save)
-    eq(added[1], GANK)
-    eq(added[2], "rude in chat")
-    eq(added[3], "Toxic")
-    eq(added[4], "watch")
-    eq(added[5].c, "MAGE")
+    eq(written[1], target)
+    eq(written[2], "watch")
+    eq(written[3], "rude in chat")
+    eq(written[4], "Toxic")
     eq(f.shown, false)
-    GK.AddNote = function() return nil, "Write something first." end
-    GK.OpenNoteSheet({ key = GANK }, "kos")
+    -- a list alone is something to write: the sheet doesn't stop it, WriteNote decides
+    GK.OpenNoteSheet({ key = GANK }, "kudos")
     f.text.text = ""
+    F.click(f.save)
+    eq(written[2], "kudos")
+    eq(written[3], "")
+    eq(f.shown, false)
+    -- a list that isn't one is Marked, as in the ledger's sheet
+    GK.OpenNoteSheet({ key = GANK }, "bogus")
+    F.click(f.save)
+    eq(written[2], "kos")
+    -- and a refusal keeps the sheet open and says why
+    GK.WriteNote = function() return nil, "Write something, pick a tag or pick a list." end
+    GK.OpenNoteSheet({ key = GANK }, "kos")
     W.printed = {}
     F.click(f.save)
     eq(f.shown, true, "it stays open when the note was refused")
-    assert(W.printed[1]:find("Write something first.", 1, true), "said why")
+    assert(W.printed[1]:find("Write something", 1, true), "said why")
 end)
 
 test("classic: the setting and /grudge classic switch the look", function()
@@ -1895,6 +1997,68 @@ test("the More menu: move or remove my mark, vote on others' notes, delete mine,
     eq(labels(root), "Move my mark to|Vote on a note")
 end)
 
+local function LiveMine(GK)
+    local n = 0
+    for _, note in ipairs(GK.NotesOf(GANK)) do
+        if note.mine then n = n + 1 end
+    end
+    return n
+end
+
+test("the More menu reaches every note, in submenus of ten past ten", function()
+    local GK = bootUI()
+    for i = 1, 15 do W.receive(GK, KARI, msg("N", 1, GANK, i, B + i, "", "", "", "", "", "kari " .. i)) end
+    for i = 1, 10 do W.receive(GK, EDVARD, msg("N", 1, GANK, i, B + 20 + i, "", "", "", "", "", "edvard " .. i)) end
+    for i = 1, 20 do GK.AddNote(GANK, "mine " .. i) end
+    local root = fakeNode("root")
+    GK.NoteMenu(root, GANK)
+    local vote, del = kid(root, "Vote on a note"), kid(root, "Delete my note")
+    eq(labels(vote), "Notes 1-10|Notes 11-20|Notes 21-25")
+    eq(labels(del), "Notes 1-10|Notes 11-20")
+    eq(#kid(vote, "Notes 21-25").kids, 5)
+    eq(#kid(del, "Notes 11-20").kids, 10)
+    -- the oldest note is in the last page, and works
+    local last = kid(vote, "Notes 21-25").kids[5]
+    eq(last.label, "Kari: kari 1")
+    kid(last, "Up").fn()
+    eq(GK.NoteScore(GANK, KARI, 1), 1)
+    kid(del, "Notes 11-20").kids[10].fn()
+    eq(LiveMine(GK), 19)
+    -- ten or fewer need no pages
+    local GK2 = bootUI()
+    for i = 1, 10 do W.receive(GK2, KARI, msg("N", 1, GANK, i, B + i, "", "", "", "", "", "kari " .. i)) end
+    root = fakeNode("root")
+    GK2.NoteMenu(root, GANK)
+    eq(#kid(root, "Vote on a note").kids, 10)
+    eq(kid(kid(root, "Vote on a note"), "Notes 1-10"), nil)
+end)
+
+test("Mine only keeps a row I voted on, and a vote taken back lets it go", function()
+    local GK = bootUI()
+    W.receive(GK, KARI, msg("N", 1, GANK, 1, B + 10, "", "", "ROGUE", "Orc", 60, "hers"))
+    W.receive(GK, KARI, msg("M", 1, NICE, B + 1))
+    eq(GK.NotesItems("kos")[1].own, nil)
+    eq(GK.NotesItems("names")[1].own, nil)
+    GK.VoteNote(GANK, KARI, 1, 1)
+    GK.VoteName(NICE, -1)
+    eq(GK.NotesItems("kos")[1].own, true, "voted on the note")
+    eq(GK.NotesItems("names")[1].own, true, "voted on the name")
+    eq(GK.NotesItems("kos")[1].mine, nil, "the tint is for what I wrote")
+    GK.VoteNote(GANK, KARI, 1, 0)
+    GK.VoteName(NICE, 0)
+    eq(GK.NotesItems("kos")[1].own, nil)
+    eq(GK.NotesItems("names")[1].own, nil)
+end)
+
+test("the note sheet and the small letter have frames of their own names", function()
+    local file = assert(io.open(W.dir .. "NotesUI.lua"))
+    local source = file:read("*a")
+    file:close()
+    assert(not source:find('"GrudgekeeperNote"', 1, true), "that name is the small letter's (Letters.lua)")
+    local _, n = source:gsub('"GrudgekeeperNoteSheet"', "")
+    eq(n, 2, "the frame and its Escape entry")
+end)
+
 test("a nice name's card: who added it, the vote buttons, and the officer's hide", function()
     local GK, LIB = bootUI()
     W.receive(GK, KARI, msg("M", 1, NICE, B + 1, "", "PRIEST", "Human", "Human", 3, 40))
@@ -2189,6 +2353,27 @@ test("a noted player in sight: Marked warns when asked, Shame says a line, both 
     GK.db.noteAlerts = false
     LIB.fire("UPDATE_MOUSEOVER_UNIT")
     eq(GK.Person(GANK).l, 60)
+end)
+
+test("a player on both Marked and Shame: the Shame line is not lost when the Marked warning is off", function()
+    local GK, LIB = bootUI()
+    local W2 = require("wow_mock")
+    W.receive(GK, KARI, msg("N", 1, GANK, 1, B, "", "", "ROGUE", "Orc", 60, "x"))
+    W.receive(GK, EDVARD, msg("L", 1, GANK, "watch", B))
+    W.units.mouseover = GANK
+    GK.db.noteAlerts = false
+    GK.db.watchNearby = true
+    local lines = #W.printed
+    LIB.fire("UPDATE_MOUSEOVER_UNIT")
+    eq(#W2.warned, 0)
+    eq(#W.printed, lines + 1, "the Shame line, as the Marked warning does not run")
+    assert(W.printed[#W.printed]:find("from your Shame list is near", 1, true))
+    -- with the Marked warning on, it is that one alone
+    W.advance(91)
+    GK.db.noteAlerts = true
+    LIB.fire("UPDATE_MOUSEOVER_UNIT")
+    eq(#W2.warned, 1)
+    eq(#W.printed, lines + 1, "no second line")
 end)
 
 test("joining the group: Shame warns with the tag, Kudos says one green line, each once", function()
