@@ -33,6 +33,8 @@ local defaults = {
     mapPins = true,          -- where an order's target was last seen, on the world map
     unitMenu = true,         -- our lines in the game's right-click menu on a player: profile, and kill order on an enemy
     inspectTab = true,       -- a tab of ours on the game's Inspect window: a guildie's record, an enemy's poster
+    sortMode = "default",    -- how the ledger's sortable pages order their rows: default, newest, oldest, name, votes
+    mineOnly = false,        -- ...and whether they list only the rows that are yours
     guilds = {},             -- [guild key] = { board, orders, wanted, slain, feed, nextId } (Guild.lua)
 }
 -- This character's own record.

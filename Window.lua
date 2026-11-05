@@ -1,5 +1,5 @@
 -- Grudgekeeper - the window (/grudge, the minimap button): the Grudgekeeper's ledger, an open book.
---   Four leather tabs on top: Kill orders, Leaderboard, Grudges, News.
+--   Leather tabs on top, one per page of GK.LedgerPages: Kill orders, Leaderboard, Grudges, News.
 --   The left page is that page's table; the right page is the row you clicked - an enemy's wanted
 --   poster, a guildie's record (Profile.lua writes both, for the small cards and for here).
 -- Folded by the bookmark on its right edge, the ledger is one page: the table, and a click on a row
@@ -66,7 +66,7 @@ local TAB_V0, TAB_V1, TAB_CAP = 16 / 128, 112 / 128, 0.08   -- ledger_tab: the t
 -- The tabs' height, 8 of it behind the book's top edge, so they come out of the pages (laid on the
 -- cover they looked loose); 24/30 in 13pt was too big, 20/24 in 12pt read small in the game.
 local TAB_H, TAB_H_ON, TAB_FONT = 22, 26, 14
-local TABS = { "Kill orders", "Leaderboard", "Grudges", "News" }
+local TAB_PAD, TAB_FONT_MIN = 22, 10                 -- a tab's width beyond its label; the smallest type FitTabs goes to
 
 local win
 local tab = 1
@@ -103,8 +103,10 @@ local function Folded() return GK.db and GK.db.ledgerFolded == true end
 
 -- ---------------------------------------------------------------------------
 -- What each page lists. An item: { key, name, sub, rank, seal, face = { rf, sx, c }, c1, c2, wide,
--- right, rightColour, faded, mine, header, select = { kind = "poster", t, order } or
--- { kind = "record", key } }
+-- right, rightColour, faded, mine, own, ts, votes, header, select = { kind = "poster", t, order } or
+-- { kind = "record", key } or { kind = "card", make } }
+-- mine tints the row; own only says the row is yours, for Mine only; ts and votes are what the sort
+-- menu orders by (GK.SortItems).
 -- ---------------------------------------------------------------------------
 local STATE_WORD = { d = "FULFILLED", p = "PAID", x = "WITHDRAWN", e = "EXPIRED" }
 
@@ -114,10 +116,11 @@ local function PosterSpec(key, x, order)
 end
 
 local function OrderItems()
-    local items = {}
+    local items, me = {}, LIB.Me()
     for _, o in ipairs(GK.AllOrders()) do
         local pot, backers = GK.Pot(o)
-        local it = { key = "o:" .. o.key, name = GK.Show(o.n), face = { c = o.c }, select = PosterSpec(o.n, o, o) }
+        local it = { key = "o:" .. o.key, name = GK.Show(o.n), face = { c = o.c }, select = PosterSpec(o.n, o, o),
+            ts = o.t, own = GK.char.accepted[o.key] or (me and (o.by == me or o.doneBy == me or (o.pot and o.pot[me]))) or nil }
         if o.state == "o" then
             it.right = pot > 0 and GK.MoneyText(pot) or "honour"
             local hunting = 0
@@ -172,11 +175,12 @@ local function GrudgeItems()
         local e = foes[i]
         items[#items + 1] = { key = "f:" .. e.key, name = GK.Show(e.key), face = { c = e.f.c },
             sub = GK.Describe(e.f.l, e.f.c, e.f.r) .. " - last met " .. GK.Ago(e.f.last),
-            c1 = tostring(e.f.k or 0), c2 = tostring(e.f.d or 0), select = PosterSpec(e.key, e.f) }
+            c1 = tostring(e.f.k or 0), c2 = tostring(e.f.d or 0), select = PosterSpec(e.key, e.f),
+            ts = e.f.last, own = true }
     end
     if #c.log > 0 then items[#items + 1] = { header = true, name = "Lately" } end
     for i, e in ipairs(c.log) do
-        local it = { key = "l:" .. i, face = { c = e.c }, select = PosterSpec(e.n, e),
+        local it = { key = "l:" .. i, face = { c = e.c }, select = PosterSpec(e.n, e), ts = e.t, own = true,
             sub = table.concat({ e.z or "", GK.Ago(e.t) }, e.z and " - " or "") }
         if e.k == "K" then
             it.name = "Killed " .. GK.Show(e.n)
@@ -212,21 +216,93 @@ local function NewsItems()
         end
         if line then
             items[#items + 1] = { key = "n:" .. i, name = line, face = { c = e.c }, right = right,
-                sub = table.concat({ e.z or "", GK.Ago(e.t) }, e.z and " - " or ""), select = PosterSpec(e.n, e) }
+                sub = table.concat({ e.z or "", GK.Ago(e.t) }, e.z and " - " or ""), select = PosterSpec(e.n, e),
+                ts = e.t, own = e.who and LIB.IsMyStoredName(e.who) or nil }
         end
     end
     return items, "Nothing yet. Kills, deaths and kill orders from everyone in your guild who runs Grudgekeeper "
         .. "show up here."
 end
 
-local PAGES = { OrderItems, BoardItems, GrudgeItems, NewsItems }
--- The column headings over each table: { text, x, justify }.
-local HEADINGS = {
-    { { "Name", 48 }, { "Bounty", COL_RIGHT, "RIGHT" } },
-    { { "#", 12 }, { "Name", 48 }, { "K", COL1, "CENTER" }, { "D", COL2, "CENTER" }, { "Points", COL_RIGHT, "RIGHT" } },
-    { { "Name", 48 }, { "You", COL1, "CENTER" }, { "They", COL2, "CENTER" } },
-    { { "What happened", 48 } },
+--- The leaderboard's resets-in text, after its links.
+local function ResetText()
+    local get = C_DateAndTime and C_DateAndTime.GetSecondsUntilWeeklyReset
+    local ok, secs = false, nil
+    if get then ok, secs = pcall(get) end
+    local days = ok and type(secs) == "number" and not GK.Secret(secs) and math.ceil(secs / 86400) or nil
+    return days and ("-  resets in " .. Plural(days, "day")) or ""
+end
+
+--- The ledger's pages, in tab order; other files add theirs with GK.AddLedgerPage. A page is
+--- { name, items = fn -> items, empty text, headings, sub = fn(items) -> text, links = fn -> { { text, on,
+--- click } }, linksTail = fn -> text, sortable, default = fn(items) -> the row chosen when none is }.
+--- headings: the column headings over the table, { text, x, justify }. links: ink links under the title.
+GK.LedgerPages = {
+    { name = "Kill orders", items = OrderItems,
+      headings = { { "Name", 48 }, { "Bounty", COL_RIGHT, "RIGHT" } }, sortable = true,
+      sub = function()
+          local rank, of = GK.MyRank()
+          return ("%s  -  you: %s, #%d of %d"):format(Plural(#GK.OpenOrders(), "open order"),
+              Plural(GK.char.points, "point"), rank, of)
+      end },
+    { name = "Leaderboard", items = BoardItems,
+      headings = { { "#", 12 }, { "Name", 48 }, { "K", COL1, "CENTER" }, { "D", COL2, "CENTER" },
+          { "Points", COL_RIGHT, "RIGHT" } },
+      links = function()
+          return { { text = "This week", on = weekly, click = function() weekly = true end },
+                   { text = "All time", on = not weekly, click = function() weekly = false end } }
+      end,
+      linksTail = ResetText,
+      default = function(items)
+          for _, it in ipairs(items) do
+              if it.mine then return it end
+          end
+      end },
+    { name = "Grudges", items = GrudgeItems, sortable = true,
+      headings = { { "Name", 48 }, { "You", COL1, "CENTER" }, { "They", COL2, "CENTER" } },
+      sub = function() return "Everyone you have a history with" end,
+      default = function() return { key = "me", select = { kind = "record", key = LIB.Me() } } end },
+    { name = "News", items = NewsItems, sortable = true,
+      headings = { { "What happened", 48 } },
+      sub = function() return "What the guild has been up to" end },
 }
+
+--- Adds a page after the ledger's own. Only before the book is first built: the tabs are made then.
+function GK.AddLedgerPage(def)
+    assert(not win, "GK.AddLedgerPage: the ledger is already built")
+    table.insert(GK.LedgerPages, def)
+end
+
+local SORTS = { { "default", "Default" }, { "newest", "Newest" }, { "oldest", "Oldest" }, { "name", "A-Z" },
+    { "votes", "Votes" } }
+
+--- A page's rows in the order GK.db.sortMode asks for, and only yours with GK.db.mineOnly. Sorting or
+--- filtering drops the header rows and sorts the rest together; the page's own order, without Mine only,
+--- is left alone. Ties go A-Z. Returns a new list, or the same one untouched.
+function GK.SortItems(items, page)
+    local mode, mineOnly = GK.db.sortMode or "default", GK.db.mineOnly == true
+    if not (page and page.sortable) or (mode == "default" and not mineOnly) then return items end
+    local out, at = {}, {}
+    for _, it in ipairs(items) do
+        if not it.header and (not mineOnly or it.own or it.mine) then
+            out[#out + 1] = it
+            at[it] = #out
+        end
+    end
+    if mode == "default" then return out end
+    local function Name(it) return (it.name or ""):lower() end
+    table.sort(out, function(a, b)
+        local x, y
+        if mode == "newest" then x, y = b.ts or 0, a.ts or 0
+        elseif mode == "oldest" then x, y = a.ts or 0, b.ts or 0
+        elseif mode == "votes" then x, y = b.votes or 0, a.votes or 0 end
+        if x and x ~= y then return x < y end
+        local na, nb = Name(a), Name(b)
+        if na ~= nb then return na < nb end
+        return at[a] < at[b]                   -- table.sort needs a strict order, or it can error
+    end)
+    return out
+end
 
 -- ---------------------------------------------------------------------------
 -- The detail: what the right page (or the turned page) shows
@@ -234,6 +310,7 @@ local HEADINGS = {
 --- The card for a selected row. A closed order says so, and what you still owe on it.
 local function DetailCard(spec)
     if not spec then return nil end
+    if spec.kind == "card" then return spec.make() end
     if spec.kind == "record" then
         local d = GK.RecordCard(spec.key)
         if d then d.buttons = {} end            -- its one button opens the leaderboard: we are in it
@@ -470,32 +547,52 @@ local function BuildList(page)
     page.sub = page:CreateFontString(nil, "ARTWORK")
     Ink(page.sub, FADED, TEXT_FONT, 11)
     page.sub:SetPoint("TOPLEFT", 48, -52)
-    -- the leaderboard's two ink links, this week and all time
-    local function Link(text, isWeekly)
+    -- An ink link: faded, or in blood and underlined when it is the one chosen. Refresh fills and places them.
+    local function Link(click)
         local b = CreateFrame("Button", nil, page)
         b.text = b:CreateFontString(nil, "ARTWORK")
         Ink(b.text, FADED, TEXT_FONT, 11)
         b.text:SetPoint("LEFT")
-        b.text:SetText(text)
         b.line = b:CreateTexture(nil, "ARTWORK")
         b.line:SetColorTexture(BLOOD[1], BLOOD[2], BLOOD[3], 0.7)
         b.line:SetHeight(1)
         b.line:SetPoint("BOTTOMLEFT", 0, 0)
         b.line:SetPoint("BOTTOMRIGHT", 0, 0)
         b:SetSize(70, 16)
-        b:SetScript("OnClick", function()
-            weekly, offset = isWeekly, 0
+        function b:Set(text, on)
+            self.text:SetText(text)
+            Ink(self.text, on and BLOOD or FADED, TEXT_FONT, 11)
+            self.line:SetShown(on and true or false)
+        end
+        b:SetScript("OnClick", function(self)
+            click(self)
+            offset = 0
             Refresh()
         end)
         return b
     end
-    page.week = Link("This week", true)
-    page.week:SetPoint("TOPLEFT", 48, -50)
-    page.all = Link("All time", false)
-    page.all:SetPoint("LEFT", page.week, "RIGHT", 6, 0)
-    page.reset = page:CreateFontString(nil, "ARTWORK")
+    -- the page's own links (the leaderboard's this week and all time), laid out from its links()
+    page.links = {}
+    for i = 1, 4 do page.links[i] = Link(function(self) self.click() end) end
+    -- the sort links and Mine only, on a row of their own under the sub line, right-aligned
+    local function SortLink(text, click)
+        local b = Link(click)
+        b.label = text
+        b:Set(text, false)
+        b:SetWidth(math.ceil(b.text:GetStringWidth() or 40) + 2)
+        return b
+    end
+    page.mine = SortLink("Mine only", function() GK.db.mineOnly = not GK.db.mineOnly end)
+    page.mine:SetPoint("TOPRIGHT", -40, -70)
+    page.sorts = {}
+    for i = #SORTS, 1, -1 do                      -- from the right, each to the left of the one after
+        local s = SORTS[i]
+        page.sorts[i] = SortLink(s[2], function() GK.db.sortMode = s[1] end)
+        page.sorts[i].mode = s[1]
+        page.sorts[i]:SetPoint("RIGHT", i == #SORTS and page.mine or page.sorts[i + 1], "LEFT", -8, 0)
+    end
+    page.reset = page:CreateFontString(nil, "ARTWORK")    -- the links' tail, anchored after the last one shown
     Ink(page.reset, FADED, TEXT_FONT, 11)
-    page.reset:SetPoint("LEFT", page.all, "RIGHT", 4, 0)
     page.heads = {}
     for i = 1, 5 do
         local fs = page:CreateFontString(nil, "ARTWORK")
@@ -749,6 +846,26 @@ local function BuildFrame()
     win.frame = f
 end
 
+--- Sizes the tabs to fit left of `stop`. The row is only so wide (the page, short of the top-right iron),
+--- and every page another file adds makes it longer, so the labels step down a point at a time, with
+--- their padding, until it fits (or reach TAB_FONT_MIN).
+local function FitTabs(stop)
+    local size = TAB_FONT
+    while true do
+        local x = 0
+        local pad = math.floor(TAB_PAD * size / TAB_FONT + 0.5)
+        for _, t in ipairs(win.tabs) do
+            t.label:SetFont(TITLE_FONT, size, "")
+            t.w = math.ceil(t.label:GetStringWidth() or 60) + pad
+            t.dx = x
+            t:SetWidth(t.w)
+            x = x + t.w + 4
+        end
+        if size <= TAB_FONT_MIN or 8 + x - 4 <= stop then return end
+        size = size - 1
+    end
+end
+
 local function Layout()
     local folded, framed = Folded(), GK.db.ledgerLook == "frame"
     local b
@@ -768,6 +885,7 @@ local function Layout()
     win.detail:SetPoint("TOPLEFT", folded and b.x or b.x2, -b.y)
     -- over the (left) page, as far in as they fit, coming out from under the cover's top edge; the
     -- labels' real widths decide (in the preview's stand-in font, News ran under the iron)
+    FitTabs(b.stop)
     local last = win.tabs[#win.tabs]
     local x = math.max(8, math.min(b.x + 12, b.stop - last.dx - last.w))
     for _, t in ipairs(win.tabs) do
@@ -846,15 +964,15 @@ local function Build()
     -- Layout places the tabs, over the left page as far in as they fit
     win.tabs = {}
     local x = 0
-    for i, name in ipairs(TABS) do
+    for i, def in ipairs(GK.LedgerPages) do
         local t = CreateFrame("Button", nil, win)
         t:SetFrameLevel(level + 1)
         t.label = t:CreateFontString(nil, "OVERLAY")
         t.label:SetFont(TITLE_FONT, TAB_FONT, "")
         t.label:SetShadowOffset(1, -1)
-        t.label:SetText(name)
+        t.label:SetText(def.name)
         t.label:SetPoint("CENTER", 0, 4)
-        local w = math.ceil(t.label:GetStringWidth() or 60) + 22
+        local w = math.ceil(t.label:GetStringWidth() or 60) + TAB_PAD
         t:SetWidth(w)
         t:SetHeight(TAB_H)
         t.art = TabArt(t, TAB_H_ON)
@@ -906,12 +1024,9 @@ local function Chosen(items)
             if it.key == key then return it end
         end
     end
-    if tab == 2 then
-        for _, it in ipairs(items) do
-            if it.mine then return it end
-        end
-    end
-    if tab == 3 then return { key = "me", select = { kind = "record", key = LIB.Me() } } end
+    local def = GK.LedgerPages[tab]
+    local first = def.default and def.default(items)
+    if first then return first end
     for _, it in ipairs(items) do
         if not it.header and not it.faded then return it end
     end
@@ -921,37 +1036,39 @@ end
 Refresh = function()
     if not (win and win:IsShown()) then return end
     local folded = Folded()
-    local items, empty = PAGES[tab]()
+    local def = GK.LedgerPages[tab]
+    local items, empty = def.items()
+    if def.sortable then items = GK.SortItems(items, def) end
     local list, detail = win.list, win.detail
     local chosen = Chosen(items)
     -- the list page
-    list.title:SetText(TABS[tab])
-    local onBoard = tab == 2
-    list.week:SetShown(onBoard)
-    list.all:SetShown(onBoard)
-    list.reset:SetShown(onBoard)
-    if onBoard then
-        Ink(list.week.text, weekly and BLOOD or FADED, TEXT_FONT, 11)
-        Ink(list.all.text, weekly and FADED or BLOOD, TEXT_FONT, 11)
-        list.week.line:SetShown(weekly)
-        list.all.line:SetShown(not weekly)
-        local get = C_DateAndTime and C_DateAndTime.GetSecondsUntilWeeklyReset
-        local ok, secs = false, nil
-        if get then ok, secs = pcall(get) end
-        local days = ok and type(secs) == "number" and not GK.Secret(secs) and math.ceil(secs / 86400) or nil
-        list.reset:SetText(days and ("-  resets in " .. Plural(days, "day")) or "")
-        list.sub:SetText("")
-    elseif tab == 1 then
-        local rank, of = GK.MyRank()
-        list.sub:SetText(("%s  -  you: %s, #%d of %d"):format(Plural(#GK.OpenOrders(), "open order"),
-            Plural(GK.char.points, "point"), rank, of))
-    elseif tab == 3 then
-        list.sub:SetText("Everyone you have a history with")
-    else
-        list.sub:SetText("What the guild has been up to")
+    list.title:SetText(def.name)
+    local links = def.links and def.links() or {}
+    local last
+    for i, b in ipairs(list.links) do
+        local l = links[i]
+        b:SetShown(l ~= nil)
+        if l then
+            b:Set(l.text, l.on)
+            b.click = l.click
+            b:ClearAllPoints()
+            if last then b:SetPoint("LEFT", last, "RIGHT", 6, 0) else b:SetPoint("TOPLEFT", 48, -50) end
+            last = b
+        end
     end
+    list.reset:ClearAllPoints()
+    if last then list.reset:SetPoint("LEFT", last, "RIGHT", 4, 0) end
+    list.reset:SetText(last and def.linksTail and def.linksTail() or "")
+    list.sub:SetText(def.sub and def.sub(items) or "")
+    local sortable, mode = def.sortable == true, GK.db.sortMode or "default"
+    for _, b in ipairs(list.sorts) do
+        b:SetShown(sortable)
+        b:Set(b.label, b.mode == mode)
+    end
+    list.mine:SetShown(sortable)
+    list.mine:Set("Mine only", GK.db.mineOnly == true)
     for i, fs in ipairs(list.heads) do
-        local h = HEADINGS[tab][i]
+        local h = def.headings[i]
         fs:ClearAllPoints()
         if h then
             fs:SetText(h[1]:upper())
@@ -988,7 +1105,7 @@ Refresh = function()
     list:SetShown(not folded or not turned)
     detail:SetShown(showDetail)
     detail.back:SetShown(folded)
-    detail.back.text:SetText("\194\171 Back to " .. TABS[tab]:lower())
+    detail.back.text:SetText("\194\171 Back to " .. def.name:lower())
     if showDetail then FillDetail(detail, DetailCard(chosen and chosen.select), #items > 0) end
 end
 
