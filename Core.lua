@@ -33,15 +33,13 @@ local defaults = {
     mapPins = true,          -- where an order's target was last seen, on the world map
     unitMenu = true,         -- our lines in the game's right-click menu on a player: profile, and kill order on an enemy
     inspectTab = true,       -- a tab of ours on the game's Inspect window: a guildie's record, an enemy's poster
-    sortMode = "default",    -- how the ledger's sortable pages order their rows: default, newest, oldest, name, votes
-    mineOnly = false,        -- ...and whether they list only the rows that are yours
-    look = "ledger",         -- "ledger" (the book) or "classic" (Guild Grudge's standard game frames, Classic/)
+    sortBy = {},             -- [ledger page name] = the column heading its rows are sorted by (none: the page's own order)
+    mineOnly = false,        -- whether the ledger's sortable pages list only the rows that are yours
     noteAlerts = false,      -- warn when a player on your Marked list is near
     watchNearby = false,     -- one chat line when a player on your Shame list is near
     watchGroup = true,       -- warn when a Shame list player joins your group
-    kudosGroup = true,       -- one friendly chat line when a Kudos player joins your group
+    kudosGroup = false,      -- one friendly chat line when a Kudos player joins your group (chat: off, the owner doesn't read it)
     plateNotes = true,       -- a small dim mark on the nameplate of a player you have notes on
-    alertStyle = "scroll",   -- every warning: "scroll" (the notice's red glow) or "raid" (a raid warning)
     guilds = {},             -- [guild key] = { board, orders, wanted, slain, feed, nextId } (Guild.lua)
 }
 -- This character's own record.
@@ -225,6 +223,31 @@ function GK.SameName(a, b)
     return a == fa or b == fb
 end
 
+--- A guildie's name as another client wrote it into a message, in OUR spelling of it. On Forever's live
+--- servers one guild spans several of the server's internal realms (CAMWOWEU4Realm4PvP, ...Realm8PvP,
+--- CAMWOWEU5Realm2PvP), and the client gives us every guildie WITHOUT a realm - the sender of an addon
+--- message is "Edvard" - so we file them under our own realm. A name a guildie writes into a message is
+--- filed the same way on THEIR side, under THEIR realm: Lars, on another realm, names Edvard's order
+--- "Edvard-CAMWOWEU4Realm8PvP" and us "Vebjorn-CAMWOWEU4Realm8PvP". Guildhall found it in the game
+--- (2026-11-06, GH.LocalKey). A name from the wire whose realm is not ours becomes ours - but only when
+--- that spelling is someone we know (ourselves, a guildie we have heard or seen on the roster or the
+--- board, or what known(spelling) says, for a record that only its owner can have made), and never when
+--- the name as written is known already. The client can't tell two such names apart either: it shows
+--- them without a realm.
+function GK.LocalKey(full, known)
+    if type(full) ~= "string" then return full end
+    local me = LIB.Me()
+    local function Known(k)
+        return k == me or LIB.KnownGuildie(k) or GK.Store().board[k] ~= nil or (known ~= nil and known(k) == true)
+    end
+    if Known(full) then return full end
+    local name = full:match("^(.-)%-[^%-]+$")
+    if not name or name == "" then return full end
+    local ours = name .. "-" .. LIB.Realm()
+    if ours ~= full and Known(ours) then return ours end
+    return full
+end
+
 --- "Level 35 Orc Rogue", from whatever we know.
 function GK.Describe(l, c, r)
     local parts = {}
@@ -321,10 +344,13 @@ function GK.Store()
     key = key or "-"
     local g = GK.db.guilds[key]
     if not g then
-        g = { board = {}, orders = {}, wanted = {}, slain = {}, feed = {}, nextId = 1 }
+        g = { board = {}, orders = {}, wanted = {}, slain = {}, feed = {}, people = {}, nextId = 1 }
         GK.db.guilds[key] = g
     end
     if not g.slain then g.slain = {} end      -- a store from before the guild kept its tally
+    -- the notes (Notes.lua), here from the start: made by the first read instead, an empty one turned up
+    -- after the test panel had put the store back (smoke_grudgekeeper, 2026-11-05)
+    if not g.people then g.people = {} end
     return g
 end
 
@@ -458,7 +484,7 @@ end
 local function Help()
     print(TAG .. " v" .. GK.version .. " commands:")
     print("  /grudge  - open the window: kill orders, the guild's leaderboard, your grudges")
-    print("  /grudge post  - write a kill order on your target")
+    print("  /grudge post  - write a kill order on your target (no enemy targeted: it asks who)")
     print("  /grudge letters  - read your letters")
     print("  /grudge test  - four sample letters, to see what they look like")
     print("  /grudge notice  - show the letter icon to drag it where you want it (notice reset: back to start)")
@@ -510,11 +536,101 @@ function GK.Debug()
 end
 
 -- ---------------------------------------------------------------------------
+-- The two skins (GK.db.look): the Grudgekeeper's parchment, and the game's own classic dark panels in gold
+-- and white, as Guild Grudge had them ("lage en classic stil som setter bakgrunner osv til classic
+-- fargene og ikke parchments" - "vi vil ha 2 skins", the owner, 2026-11-06). They dress the windows in the
+-- game's frame: the ledger, the note and the who-picker. The letters, the kill order's scroll and the
+-- profile cards are the Grudgekeeper's own paper in both.
+-- Whatever a skin dresses is drawn in GK.INK, GK.FADED or GK.BLOOD, through GK.Ink and GK.Paint, which
+-- remember what they drew: a skin writes its colours into those three tables (every file holds the same
+-- tables) and GK.SetLook draws it all again, then calls what GK.OnLook registered - a window's
+-- background, its layout - so the switch needs no /reload.
+--   title, titleScale: the face and size titles and names are set in (Morpheus on parchment; the game's
+--   own Friz Quadrata, a little smaller, in classic). shadow: classic text has the game's drop shadow.
+--   wash: the chosen, hovered and own rows' tint. stripe, rule: every other row, the ruled lines.
+-- ---------------------------------------------------------------------------
+GK.TITLE_FONT, GK.TEXT_FONT = "Fonts\\MORPHEUS.ttf", "Fonts\\FRIZQT__.TTF"
+GK.LOOKS = {
+    -- faded: 0.35/0.25/0.15 read too light on the toned parchment in a list (2026-11-06)
+    parchment = { ink = { 0.2, 0.12, 0.05 }, faded = { 0.29, 0.2, 0.11 }, blood = { 0.47, 0.06, 0.04 },
+        title = GK.TITLE_FONT, titleScale = 1, shadow = false, wash = { 0.6, 0.12, 0.05 },
+        stripe = { 0.35, 0.2, 0.05, 0.07 }, rule = { 0.42, 0.33, 0.22, 0.6 } },
+    classic = { ink = { 1, 1, 1 }, faded = { 0.66, 0.66, 0.66 }, blood = { 1, 0.82, 0 },
+        title = GK.TEXT_FONT, titleScale = 0.85, shadow = true, wash = { 1, 0.82, 0 },
+        stripe = { 1, 1, 1, 0.035 }, rule = { 0.62, 0.52, 0.32, 0.55 } },
+}
+GK.LOOK = GK.LOOKS.parchment
+GK.INK, GK.FADED, GK.BLOOD = { 0.2, 0.12, 0.05 }, { 0.29, 0.2, 0.11 }, { 0.47, 0.06, 0.04 }
+
+--- Put a skin's colours in place, without drawing anything again (at login, before any window is built).
+function GK.UseLook(name)
+    GK.LOOK = GK.LOOKS[name] or GK.LOOKS.parchment
+    for i = 1, 3 do
+        GK.INK[i], GK.FADED[i], GK.BLOOD[i] = GK.LOOK.ink[i], GK.LOOK.faded[i], GK.LOOK.blood[i]
+    end
+end
+
+function GK.Classic() return GK.LOOK == GK.LOOKS.classic end
+
+-- What GK.Ink and GK.Paint drew, to draw again in the other skin (weak: a thing let go is forgotten).
+local inked = setmetatable({}, { __mode = "k" })
+local painted = setmetatable({}, { __mode = "k" })
+local onLook = {}
+
+--- A text in a colour (GK.INK, GK.FADED, GK.BLOOD, or one of its own), in GK.TEXT_FONT or GK.TITLE_FONT
+--- - which in classic is the game's own face, a little smaller.
+function GK.Ink(fs, colour, font, size)
+    inked[fs] = { colour, font, size }
+    local look = GK.LOOK
+    if font == GK.TITLE_FONT then
+        font, size = look.title, math.floor(size * look.titleScale + 0.5)
+    end
+    fs:SetFont(font, size, "")
+    fs:SetTextColor(colour[1], colour[2], colour[3])
+    if look.shadow then
+        fs:SetShadowColor(0, 0, 0, 1)
+        fs:SetShadowOffset(1, -1)
+    else
+        fs:SetShadowOffset(0, 0)
+    end
+end
+
+--- A flat colour from the skin: "stripe", "rule", or "blood" (GK.BLOOD at alpha a).
+function GK.Paint(tex, role, a)
+    painted[tex] = { role, a }
+    if role == "blood" then
+        tex:SetColorTexture(GK.BLOOD[1], GK.BLOOD[2], GK.BLOOD[3], a or 1)
+    else
+        local c = GK.LOOK[role]
+        tex:SetColorTexture(c[1], c[2], c[3], c[4])
+    end
+end
+
+--- A row's tint in the skin's wash colour: the chosen row, a hovered one, your own.
+function GK.Wash(tex, a)
+    local c = GK.LOOK.wash
+    tex:SetColorTexture(c[1], c[2], c[3], a)
+end
+
+--- fn() runs after every switch of skin: a window's background, its layout.
+function GK.OnLook(fn) onLook[#onLook + 1] = fn end
+
+--- Switch skin ("classic", or anything else for parchment) and draw everything again in it.
+function GK.SetLook(name)
+    GK.db.look = (name == "classic") and "classic" or nil
+    GK.UseLook(GK.db.look)
+    for fs, spec in pairs(inked) do GK.Ink(fs, spec[1], spec[2], spec[3]) end
+    for tex, spec in pairs(painted) do GK.Paint(tex, spec[1], spec[2]) end
+    for _, fn in ipairs(onLook) do fn() end
+end
+
+-- ---------------------------------------------------------------------------
 -- Startup
 -- ---------------------------------------------------------------------------
 LIB.On("PLAYER_LOGIN", function()
     GK.db = LIB.PrepareDB(GrudgekeeperDB, defaults, nil, 1)
     GrudgekeeperDB = GK.db
+    GK.UseLook(GK.db.look)
     GK.char = LIB.PrepareDB(GrudgekeeperCharDB, charDefaults, nil, 1)
     GrudgekeeperCharDB = GK.char
     RegisterMinimap()

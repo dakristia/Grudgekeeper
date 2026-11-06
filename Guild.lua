@@ -654,7 +654,7 @@ local function OnKill(sender, f)
     if not name then return end
     local c, r, l = GK.ValidClass(f[4]), GK.Clean(f[5], 20), GK.ValidLevel(f[6])
     AddFeed({ t = time(), who = sender, kind = "K", n = name, c = c, l = l,
-        z = GK.Clean(f[7], 40), p = Int(f[8], 0, 100), av = GK.Clean(f[9], 64) })
+        z = GK.Clean(f[7], 40), p = Int(f[8], 0, 100), av = GK.LocalKey(GK.Clean(f[9], 64)) })
     GK.NoteSlain(sender, name, c, r, l, Int(f[10], 1, 1e6))
 end
 
@@ -701,8 +701,9 @@ local function OnOrder(sender, f)
     local was = o.state
     -- Never backwards: an "open" from a poster who hasn't heard of the kill yet doesn't reopen it.
     if STATES[state] >= STATES[was] then o.state = state end
-    local doneBy = GK.Clean(f[13], 64)
-    if doneBy and o.state ~= "o" then o.doneBy = doneBy end       -- the poster says who was first
+    -- the poster says who was first, in their spelling of them (GK.LocalKey makes it ours)
+    local doneBy = GK.LocalKey(GK.Clean(f[13], 64))
+    if doneBy and o.state ~= "o" then o.doneBy = doneBy end
     if o.state ~= "o" and not o.doneAt then o.doneAt = now end
     Touched()
     Trim(s)
@@ -715,9 +716,20 @@ local function OnOrder(sender, f)
     if o.state ~= "o" then GK.char.accepted[key] = nil end
 end
 
+--- The order a message names by its poster and id. The sender writes the poster as THEY know them, with
+--- their own realm on the live servers (GK.LocalKey); an order is only ever filed under its poster as we
+--- know them, so the one already filed under that name is the one meant.
+local function OrderNamed(poster, id)
+    if not (poster and id) then return nil end
+    local orders = GK.Store().orders
+    local o = orders[poster .. "#" .. id]
+    if o then return o end
+    local ours = GK.LocalKey(poster, function(k) return orders[k .. "#" .. id] ~= nil end)
+    return orders[ours .. "#" .. id]
+end
+
 local function OnAccept(sender, f)
-    local poster, id = GK.Clean(f[3], 64), Int(f[4], 1, 2 ^ 31)
-    local o = poster and id and GK.Store().orders[poster .. "#" .. id]
+    local o = OrderNamed(GK.Clean(f[3], 64), Int(f[4], 1, 2 ^ 31))
     if not o then return end
     o.hunters = o.hunters or {}
     if f[5] == "1" then
@@ -728,8 +740,7 @@ local function OnAccept(sender, f)
 end
 
 local function OnFulfil(sender, f)
-    local poster, id = GK.Clean(f[3], 64), Int(f[4], 1, 2 ^ 31)
-    local o = poster and id and GK.Store().orders[poster .. "#" .. id]
+    local o = OrderNamed(GK.Clean(f[3], 64), Int(f[4], 1, 2 ^ 31))
     if not o or o.state ~= "o" then return end      -- the first one we hear of wins
     o.state, o.doneBy, o.doneAt, o.doneZone = "d", sender, time(), GK.Clean(f[5], 40)
     Touched()
@@ -749,9 +760,8 @@ local function OnFulfil(sender, f)
 end
 
 local function OnPot(sender, f)
-    local poster, id = GK.Clean(f[3], 64), Int(f[4], 1, 2 ^ 31)
     local copper = Int(f[5], 0, MAX_REWARD)
-    local o = poster and id and GK.Store().orders[poster .. "#" .. id]
+    local o = OrderNamed(GK.Clean(f[3], 64), Int(f[4], 1, 2 ^ 31))
     if not (o and copper) or sender == o.by then return end
     -- A share stays as it was promised once the order has closed: the kill was made for that pot.
     if o.state ~= "o" and o.pot and o.pot[sender] then return end
@@ -765,8 +775,7 @@ local function OnPot(sender, f)
 end
 
 local function OnSharePaid(sender, f)
-    local poster, id = GK.Clean(f[3], 64), Int(f[4], 1, 2 ^ 31)
-    local o = poster and id and GK.Store().orders[poster .. "#" .. id]
+    local o = OrderNamed(GK.Clean(f[3], 64), Int(f[4], 1, 2 ^ 31))
     if not (o and o.pot and o.pot[sender]) or (o.paid and o.paid[sender]) then return end
     o.paid = o.paid or {}
     o.paid[sender] = true
@@ -774,8 +783,7 @@ local function OnSharePaid(sender, f)
 end
 
 local function OnSighting(sender, f)
-    local poster, id = GK.Clean(f[3], 64), Int(f[4], 1, 2 ^ 31)
-    local o = poster and id and GK.Store().orders[poster .. "#" .. id]
+    local o = OrderNamed(GK.Clean(f[3], 64), Int(f[4], 1, 2 ^ 31))
     if not o or o.state ~= "o" then return end
     local zone = GK.Clean(f[5], 40)
     -- Where they stood: a map and a spot on it, all three or none. A map id is any positive number the

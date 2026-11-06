@@ -7,7 +7,7 @@ local U = {}
 function U.load(M, GK)
     local env = _G
     M.opened, M.poster, M.card, M.played = nil, nil, nil, {}
-    M.warned, M.raid, M.menus = {}, {}, {}
+    M.warned, M.menus = {}, {}
     M.mobs, M.hostile, M.order, M.tipLine, M.seen = {}, {}, nil, nil, {}
     M.group = { raid = false, size = 0 }
 
@@ -44,8 +44,6 @@ function U.load(M, GK)
     env.IsInInstance = function() return false end
     env.SOUNDKIT = { RAID_WARNING = 8959 }
     env.PlaySound = function(id) table.insert(M.played, id) end
-    env.ChatTypeInfo = { RAID_WARNING = { r = 1, g = 0.5, b = 0 } }
-    env.RaidWarningUtil = { AddMessage = function(text, colour) table.insert(M.raid, { text = text, colour = colour }) end }
     env.UnitExists = function(unit) return M.units[unit] ~= nil end
     env.UnitIsPlayer = function(unit) return M.units[unit] ~= nil and not M.mobs[unit] end
     env.UnitClass = function() return "Rogue", "ROGUE" end

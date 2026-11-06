@@ -1,10 +1,10 @@
--- Grudgekeeper - a one-time import from Guild Grudge. When both addons are on, the notes, lists, tags,
--- nice names and votes Guild Grudge kept (GuildGrudgeDB) are taken over into the guild's store, once
--- per guild. Its bounties and claims are not (kill orders do that job here). Afterwards the player can
--- turn Guild Grudge off.
+-- Grudgekeeper - a one-time import from Guild Grudge. When both addons are on, the notes, lists, tags
+-- and votes Guild Grudge kept (GuildGrudgeDB) are taken over into the guild's store, once
+-- per guild; GuildGrudgeDB itself is only read. Its bounties and claims are not taken (kill orders do
+-- that job here), nor its list of funny names. Afterwards the player can turn Guild Grudge off.
 -- Whose is what: a note keeps its author, so Guild Grudge's notes by OTHER players land under them
 -- and are never sent by us (the wire only sends records whose author is me, Notes.lua); only my own
--- notes, marks, votes and names go on to the guild, and only as other clients ask (a Q). Guild Grudge
+-- notes, marks and votes go on to the guild, and only as other clients ask (a Q). Guild Grudge
 -- gave a player one shared list, not one per author, so the list becomes a mark for each author of a
 -- live note on them, and for me when there is none. Marked (stored as kos) is what a note alone already means,
 -- so only Shame (stored as watch) and Kudos make marks.
@@ -35,8 +35,8 @@ local function ValidSex(sx)
     return (sx == 2 or sx == 3) and sx or nil
 end
 
---- Take over what Guild Grudge kept, once per guild (force: again). Returns { notes, marks, names,
---- votes, skipped }, or nil and why nothing was done.
+--- Take over what Guild Grudge kept, once per guild (force: again). Returns { notes, marks, votes,
+--- skipped }, or nil and why nothing was done. Its list of funny names is left behind (BACKLOG.md).
 function GK.ImportGuildGrudge(force)
     local src = GuildGrudgeDB
     if type(src) ~= "table" or not (GK.db and GK.char) then return nil, "nothing to import" end
@@ -55,7 +55,7 @@ function GK.ImportGuildGrudge(force)
     if GK.db.importedGG[guild] and not force then return nil, "done" end
 
     local Put = GK.NotesPut
-    local counts = { notes = 0, marks = 0, names = 0, votes = 0, skipped = 0 }
+    local counts = { notes = 0, marks = 0, votes = 0, skipped = 0 }
 
     for _, e in pairs(type(src.entries) == "table" and src.entries or {}) do
         local key = type(e) == "table" and Key(e.name)
@@ -101,11 +101,12 @@ function GK.ImportGuildGrudge(force)
                 -- a different note already holds this id (or the limits refused it): left out
                 if not kept then counts.skipped = counts.skipped + 1 end
                 if kept then
-                    for voter, vote in pairs(type(n.votes) == "table" and n.votes or {}) do
+                    for name, vote in pairs(type(n.votes) == "table" and n.votes or {}) do
                         if type(vote) ~= "table" then
                             counts.skipped = counts.skipped + 1
                         else
-                            voter = Key(voter)
+                            -- a new local, not the loop's own variable: Lua 5.2+ refuses that assignment
+                            local voter = Key(name)
                             local v, vts = tonumber(vote.v), When(vote.ts)
                             if voter and vts and (v == 1 or v == -1) and Put.Vote(key, author, id, voter, v, vts) then
                                 counts.votes = counts.votes + 1
@@ -126,30 +127,10 @@ function GK.ImportGuildGrudge(force)
         end
     end
 
-    for _, n in pairs(type(src.names) == "table" and src.names or {}) do
-        local key, by, ts = type(n) == "table" and Key(n.name), type(n) == "table" and Key(n.by), type(n) == "table" and When(n.ts)
-        if key and by and ts and not n.deleted then
-            local rec = { ts = ts, c = GK.ValidClass(n.class), r = GK.Clean(n.race, 20), rf = ValidRaceFile(n.raceFile),
-                sx = ValidSex(n.sex), l = GK.ValidLevel(n.level) }
-            if Put.Name(key, by, rec) then counts.names = counts.names + 1 end
-            for voter, vote in pairs(type(n.votes) == "table" and n.votes or {}) do
-                if type(vote) ~= "table" then
-                    counts.skipped = counts.skipped + 1
-                else
-                    voter = Key(voter)
-                    local v, vts = tonumber(vote.v), When(vote.ts)
-                    if voter and vts and (v == 1 or v == -1) and Put.NameVote(key, voter, v, vts) then
-                        counts.votes = counts.votes + 1
-                    end
-                end
-            end
-        end
-    end
-
     GK.db.importedGG[guild] = time()
     GK.Changed()
-    print(("%s: took over %d notes, %d list marks, %d nice names and %d votes from Guild Grudge."):format(
-        GK.TAG, counts.notes, counts.marks, counts.names, counts.votes))
+    print(("%s: took over %d notes, %d list marks and %d votes from Guild Grudge."):format(
+        GK.TAG, counts.notes, counts.marks, counts.votes))
     return counts
 end
 

@@ -1,26 +1,21 @@
 -- Grudgekeeper - the notes, as the ledger shows them (the data is Notes.lua). What you see of them:
---   the list pages      four tabs in the ledger: Marked (after Grudges, among the owner's), then Shame, Kudos and
---                       Names over the right page
---   cards               the small card for a noted player or a nice name, and a line or two on the
+--   the list pages      three tabs in the ledger: Marked (after Grudges, among the owner's), then Shame and
+--                       Kudos over the right page
+--   cards               the small card for a noted player, and a line or two on the
 --                       wanted poster and the record when there are notes on that player
---   the note sheet      a small parchment like the kill order's: the list, a tag, a few words, Write it
+--   the note sheet      in the game's own frame: whom, the list, a tag, a few words, Save
 --   the right-click menu   a Grudgekeeper notes submenu on any player, friend or foe
 --   quiet marks         a line on the tooltip, a dim mark on the nameplate. They never open anything
 --   warnings            only when asked: a Marked player near (off by default), a Shame player
---                       near (off), a Shame or Kudos player joining your group (on)
+--                       near (off), a Shame player joining your group (on), a Kudos one (a chat line, off)
 -- It also wraps a few functions of the other files (docs/guild-grudge-merge.md, H7): the poster and
--- record cards, the tooltip line, GK.Warn (the alert style) and /grudge. Each wrapper calls the
+-- record cards, the tooltip line and /grudge. Each wrapper calls the
 -- original, and changes nothing unless its own setting or a notes command asks.
 local ADDON, GK = ...
 local LIB = LibStub("LibForever-1.0")
 local Secret = GK.Secret
 
 local MEDIA = "Interface\\AddOns\\Grudgekeeper\\Media\\"
-local TITLE_FONT = "Fonts\\MORPHEUS.ttf"
-local TEXT_FONT = "Fonts\\FRIZQT__.TTF"
-local INK = { 0.22, 0.13, 0.05 }
-local FADED = { 0.35, 0.25, 0.15 }
-local BLOOD = { 0.47, 0.06, 0.04 }
 local COL_RIGHT = 332                    -- Window.lua's right-hand column: the page's width less 36
 
 local ORDER = { "kos", "watch", "kudos" }
@@ -225,66 +220,23 @@ function GK.NoteMenu(root, key)
     end
 end
 
---- The row of a nice name as GK.NiceNames lists it, for the one asking (an officer sees the hidden too).
-local function NameRow(key)
-    for _, row in ipairs(GK.NiceNames(GK.IsOfficer(LIB.Me()))) do
-        if row.key == key then return row end
-    end
-    return nil
-end
-
---- The "More..." menu of a nice name's card: my vote, removing my own, and an officer's hide.
-function GK.NameMenu(root, key)
-    local row = NameRow(key)
-    if not row then return end
-    if row.mine then
-        root:CreateButton("Remove my name", function() GK.RemoveNiceName(key) end)
-    else
-        if row.myVote ~= 1 then root:CreateButton("Vote up", function() GK.VoteName(key, 1) end) end
-        if row.myVote ~= -1 then root:CreateButton("Vote down", function() GK.VoteName(key, -1) end) end
-        if row.myVote ~= 0 then root:CreateButton("Take back my vote", function() GK.VoteName(key, 0) end) end
-    end
-    if GK.IsOfficer(LIB.Me()) then
-        root:CreateButton(row.hidden and "Show for everyone" or "Hide for everyone", function() GK.HideName(key, not row.hidden) end)
-    end
-end
-
---- A nice name's card. Nil for a name that is gone, or hidden from the one looking.
-function GK.NameCard(key)
-    local row = NameRow(key)
-    if not row then return nil end
-    local n = GK.Store().names[key]
-    local officer = GK.IsOfficer(LIB.Me())
-    local d = { key = key, c = n.c, rf = n.rf, sx = n.sx, title = "NICE NAME", name = GK.Show(key),
-        info = GK.Describe(n.l, n.c, n.r), lines = {}, buttons = {}, big = ScoreText(row.score), caption = "votes" }
-    d.lines[1] = "Added by: " .. (row.by and Who(row.by) or "someone")
-    if row.hidden then d.lines[2] = "Hidden: an officer hid it from the list." end
-    if row.mine then
-        d.buttons[1] = { "Remove", function() GK.RemoveNiceName(key) end }
-    else
-        local up = row.myVote == 1
-        d.buttons[1] = { up and "Take back" or "Vote up", function() GK.VoteName(key, up and 0 or 1) end }
-    end
-    if officer or not row.mine then
-        d.buttons[2] = { "More...", function() OpenMenu(function(root) GK.NameMenu(root, key) end) end }
-    end
-    return d
-end
-
 -- ---------------------------------------------------------------------------
--- The four list pages
+-- The three list pages
 -- ---------------------------------------------------------------------------
--- A page each, because the list is the tab: Marked is the enemy's page, on the left between Grudges and News; Shame, Kudos and Names are the friendly ones, over the right page (side = "right").
-local PAGE_WORD = { kos = "Marked", watch = "Shame", kudos = "Kudos", names = "Names" }
+-- A page each, because the list is the tab: Marked is the enemy's page, on the left between Grudges and
+-- News; Shame and Kudos are the friendly ones, over the right page (side = "right").
+local PAGE_WORD = { kos = "Marked", watch = "Shame", kudos = "Kudos" }
 local EMPTY = {
     kos = "Nobody is marked. It is for an enemy you want to mark without a bounty or a history. "
-        .. "Right-click a player and pick Grudgekeeper notes, or write /grudge note <first> <surname> <what they did>.",
+        .. "Use Mark someone, at the top of this page, or right-click a player and pick Grudgekeeper notes.",
     watch = "Nobody is on your Shame list. It is for players to be careful with - a ninja looter, a scammer. "
-        .. "Right-click one and pick Grudgekeeper notes, or write /grudge shame <first> <surname>.",
-    kudos = "Nobody has kudos yet. Right-click a good player and pick Grudgekeeper notes, or write "
-        .. "/grudge kudos <first> <surname>.",
-    names = "No nice names yet. Right-click a player with a funny character name and pick Add to nice names.",
+        .. "Use Put someone on Shame, at the top of this page - someone who just left your group is on its list.",
+    kudos = "Nobody has kudos yet. Use Give someone kudos, at the top of this page, or right-click a good "
+        .. "player and pick Grudgekeeper notes.",
 }
+
+-- each list page's own action, at the top of the page: it opens the who-picker (Pick.lua)
+local ADD = { kos = "Mark someone", watch = "Put someone on Shame", kudos = "Give someone kudos" }
 
 --- Did I vote, one way or the other, on a note of this player's? Mine only keeps such a row (D9).
 local function VotedOn(p)
@@ -296,23 +248,9 @@ local function VotedOn(p)
     return false
 end
 
---- The rows of one list, and the text for when there are none. list: kos, watch, kudos or names.
+--- The rows of one list, and the text for when there are none. list: kos, watch or kudos.
 function GK.NotesItems(list)
     local items = {}
-    if list == "names" then
-        local rows = GK.NiceNames(GK.IsOfficer(LIB.Me()))
-        local names = GK.Store().names
-        for _, r in ipairs(rows) do
-            local n = names[r.key]
-            items[#items + 1] = { key = "nn:" .. r.key, name = GK.Show(r.key), faded = r.hidden or nil,
-                face = { c = n.c, rf = n.rf, sx = n.sx },
-                sub = (r.hidden and "hidden - " or "") .. "added by " .. (r.by and Who(r.by) or "someone"),
-                right = r.score ~= 0 and ScoreText(r.score) or "", ts = r.ts, votes = r.score,
-                own = (r.mine or r.myVote ~= 0) or nil,
-                select = { kind = "card", make = function() return GK.NameCard(r.key) end } }
-        end
-        return items, EMPTY.names
-    end
     for _, e in ipairs(GK.PeopleOn(list)) do
         local p, s = e.person, Summary(e.key)
         local bits = {}
@@ -337,21 +275,20 @@ function GK.NotesItems(list)
     return items, EMPTY[list]
 end
 
-for _, list in ipairs({ "kos", "watch", "kudos", "names" }) do
+for _, list in ipairs({ "kos", "watch", "kudos" }) do
     GK.AddLedgerPage({
         name = PAGE_WORD[list], list = list, sortable = true, side = list ~= "kos" and "right" or nil,
-        before = list == "kos" and "News" or nil,
+        before = list == "kos" and "News" or nil, add = { text = ADD[list], kind = list },
         items = function() return GK.NotesItems(list) end,
-        headings = { { list == "names" and "Nice name" or "Player", 48 }, { "Votes", COL_RIGHT, "RIGHT" } },
+        headings = { { "Player", 48, nil, "name", "name, A to Z" }, { "Votes", COL_RIGHT, "RIGHT", "votes", "votes" } },
         sub = function(items)
-            if list == "names" then return Plural(#items, "nice name") .. " in the guild's list" end
             if list == "kos" then return Plural(#items, "player") .. " marked" end
             return ("%s on %s"):format(Plural(#items, "player"), PAGE_WORD[list])
         end,
     })
 end
 
---- Open the ledger at the page of a list: "kos", "watch", "kudos" or "names" (Marked for anything else).
+--- Open the ledger at the page of a list: "kos", "watch" or "kudos" (Marked for anything else).
 function GK.OpenNotes(list)
     local kos
     for i, def in ipairs(GK.LedgerPages) do
@@ -393,7 +330,7 @@ WrapCard("RecordCard")
 -- ---------------------------------------------------------------------------
 -- Writing a note
 -- ---------------------------------------------------------------------------
---- What the note sheet does with "Write it". t = { key, c, r, rf, sx, l }. A note needs a few words or a
+--- What the note sheet does with "Save". t = { key, c, r, rf, sx, l }. A note needs a few words or a
 --- tag; with neither, a list alone is still something to write down (it moves my mark). Returns true,
 --- or nil and why not.
 function GK.WriteNote(t, list, text, tag)
@@ -415,189 +352,152 @@ end
 
 local sheet                -- the frame, made on first use
 local draft                -- { t, list, tag }: what the sheet is about
-local SHEET_W, SHEET_H = 330, 380
-local TAGS_Y, TAG_ROWS, TAG_GAP = 146, 3, 18
+-- In the game's frame on parchment (Letters.lua, GK.MakeFrameSheet): the head, the list's radio buttons,
+-- the tags in two columns, your own tag, the note, Save and Cancel; the parts named as the kill order's
+-- are, in small capitals over a rule. What comes after the tags moves with how many rows they take, and
+-- the frame's height with it, so no list leaves a hole.
+local SHEET_W = 340
+local LIST_Y, TAG_Y, TAGS_Y, TAG_GAP, TAG_COL = 96, 144, 162, 20, 148
+local MAX_TAGS = 10                      -- two columns of five
+-- Each list's seal beside its name: the black skull for Marked, the red one for Shame, and for Kudos
+-- the gold laurel the leaderboard's first place wears.
+local SEAL = { kos = "seal_black", watch = "seal_red", kudos = "rank_1" }
+local HINT = "Up to 200 letters. A tag or a list is enough on its own."
+-- in the skin's colours (Core.lua), as the sheet is in the game's frame: parchment ink, or classic white
+-- and gold - and drawn again when the skin is switched
+local INK, FADED, BLOOD = GK.INK, GK.FADED, GK.BLOOD
+local function Ink(fs, colour, size) GK.Ink(fs, colour, GK.TEXT_FONT, size) end
 
-local function Ink(fs, colour, font, size)
-    fs:SetFont(font, size, "")
-    fs:SetTextColor(colour[1], colour[2], colour[3])
-    fs:SetShadowOffset(0, 0)
-end
-
---- An ink link: faded, or in blood and underlined when it is the one chosen (the ledger's own).
-local function InkLink(parent, onClick)
-    local b = CreateFrame("Button", nil, parent)
-    b.text = b:CreateFontString(nil, "ARTWORK")
-    Ink(b.text, FADED, TEXT_FONT, 12)
-    b.text:SetPoint("LEFT")
-    b.line = b:CreateTexture(nil, "ARTWORK")
-    b.line:SetColorTexture(BLOOD[1], BLOOD[2], BLOOD[3], 0.7)
-    b.line:SetHeight(1)
-    b.line:SetPoint("BOTTOMLEFT", 0, 0)
-    b.line:SetPoint("BOTTOMRIGHT", 0, 0)
-    b:SetHeight(16)
+--- One of the game's radio buttons, with a picture and words in ink beside it; the words are part of
+--- what you click. Set(text, on).
+local function Choice(parent, size, textSize, onClick)
+    local b = CreateFrame("CheckButton", nil, parent, "UIRadioButtonTemplate")
+    b:SetSize(16, 16)
+    b.icon = b:CreateTexture(nil, "ARTWORK")
+    b.icon:SetSize(size, size)
+    b.icon:SetPoint("LEFT", b, "RIGHT", 4, 0)
+    b.label = b:CreateFontString(nil, "ARTWORK")
+    Ink(b.label, INK, textSize)
+    b.label:SetPoint("LEFT", b.icon, "RIGHT", 4, 0)
     function b:Set(text, on)
-        self.text:SetText(text)
-        Ink(self.text, on and BLOOD or FADED, TEXT_FONT, 12)
-        self.line:SetShown(on and true or false)
-        self:SetWidth(math.ceil(self.text:GetStringWidth() or 40) + 2)
+        self.on = on and true or false
+        self.label:SetText(text)
+        self:SetChecked(self.on)
+        self:SetHitRectInsets(0, -(size + 8 + math.ceil(self.label:GetStringWidth() or 40)), 0, 0)
     end
     b:SetScript("OnClick", onClick)
     return b
 end
 
-local function Box(parent, width, letters)
-    local e = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
-    e:SetSize(width, 20)
-    e:SetAutoFocus(false)
-    e:SetMaxLetters(letters)
-    e:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    e:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
-    return e
-end
-
---- The three list links and the tags of the chosen list, placed and coloured for the draft.
+--- The lists' and tags' radio buttons for the draft, and the rest of the sheet placed under the tags.
 local function LayoutSheet()
     for i, list in ipairs(ORDER) do sheet.lists[i]:Set(WORD[list], draft.list == list) end
     local tags = GK.KnownTags(draft.list)
-    local x, y = 0, 0
+    local shown = math.min(#tags, MAX_TAGS)
     for i, b in ipairs(sheet.tags) do
-        local tag = tags[i]
+        local tag = i <= shown and tags[i] or nil
         b.tag = tag
         b:SetShown(tag ~= nil)
         if tag then
-            b:Set(GK.TagText(tag, 12), draft.tag == tag)
-            if x > 0 and x + b:GetWidth() > SHEET_W - 68 then x, y = 0, y + TAG_GAP end
-            if y >= TAG_ROWS * TAG_GAP then
-                b:Hide()
-            else
-                b:ClearAllPoints()
-                b:SetPoint("TOPLEFT", sheet, "TOPLEFT", 34 + x, -(TAGS_Y + y))
-                x = x + b:GetWidth() + 10
-            end
+            b.icon:SetTexture(GK.TagIcon(tag))
+            b:Set(tag, draft.tag == tag)
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", sheet, "TOPLEFT", 30 + ((i - 1) % 2) * TAG_COL,
+                -(TAGS_Y + math.floor((i - 1) / 2) * TAG_GAP))
         end
     end
+    sheet.noTags:SetShown(shown == 0)
+    local y = TAGS_Y + math.max(1, math.ceil(shown / 2)) * TAG_GAP + 4
+    sheet.custom:ClearAllPoints()
+    sheet.custom:SetPoint("TOPLEFT", 36, -y)
+    sheet.noteLabel:Place(y + 34)
+    sheet.note:ClearAllPoints()
+    sheet.note:SetPoint("TOPLEFT", 36, -(y + 52))
+    sheet:SetHeight(y + 150)         -- the note at y + 52, the line under it (two for a refusal), the buttons
+end
+
+--- The line under the note: what it takes, or in blood why it couldn't be written - on the sheet, where
+--- the eye is, not in chat.
+local function SayOnSheet(why)
+    Ink(sheet.hint, why and BLOOD or FADED, 10)     -- the font first: the game refuses text before it
+    sheet.hint:SetText(why or HINT)
 end
 
 local function BuildSheet()
-    local f = CreateFrame("Frame", "GrudgekeeperNoteSheet", UIParent)
-    f:SetSize(SHEET_W, SHEET_H)
-    f:SetPoint("CENTER", 0, 80)
-    f:SetFrameStrata("DIALOG")
-    f:SetClampedToScreen(true)
-    f:EnableMouse(true)
-    f:SetMovable(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", f.StopMovingOrSizing)
-    local paper = f:CreateTexture(nil, "BACKGROUND")
-    paper:SetAllPoints()
-    paper:SetTexture(MEDIA .. "sheet")
-    local top = GK.MakeRoll(f, 30)
-    top:SetWidth(SHEET_W + 16)
-    top:SetPoint("BOTTOM", f, "TOP", 0, -15)
-    local bottom = GK.MakeRoll(f, 30, true)
-    bottom:SetWidth(SHEET_W + 16)
-    bottom:SetPoint("TOP", f, "BOTTOM", 0, 15)
+    local f = GK.MakeFrameSheet("GrudgekeeperNoteSheet", SHEET_W, 360, "Grudgekeeper notes")
+    sheet = f
+    f.head = GK.FrameHead(f, SHEET_W)
+    f.name, f.info = f.head.name, f.head.info
 
-    local title = f:CreateFontString(nil, "ARTWORK")
-    Ink(title, BLOOD, TITLE_FONT, 24)
-    title:SetPoint("TOP", 0, -22)
-    title:SetText("A NOTE")
-    f.name = f:CreateFontString(nil, "ARTWORK")
-    Ink(f.name, INK, TITLE_FONT, 18)
-    f.name:SetPoint("TOP", title, "BOTTOM", 0, -10)
-    f.info = f:CreateFontString(nil, "ARTWORK")
-    Ink(f.info, INK, TEXT_FONT, 12)
-    f.info:SetPoint("TOP", f.name, "BOTTOM", 0, -4)
-
-    local function Label(text, y)
-        local fs = f:CreateFontString(nil, "ARTWORK")
-        Ink(fs, INK, TEXT_FONT, 13)
-        fs:SetPoint("TOPLEFT", 34, -y)
-        fs:SetText(text)
-        return fs
-    end
-    local listLabel = Label("List", 108)
+    GK.SheetSection(f, "List", LIST_Y)
     f.lists = {}
     for i, list in ipairs(ORDER) do
-        local b = InkLink(f, function()
+        local b = Choice(f, 20, 13, function()
             draft.list, draft.tag = list, nil       -- the tags belong to the list
             LayoutSheet()
         end)
-        if i == 1 then b:SetPoint("LEFT", listLabel, "RIGHT", 18, 0) else b:SetPoint("LEFT", f.lists[i - 1], "RIGHT", 12, 0) end
+        b.icon:SetTexture(MEDIA .. SEAL[list])
+        b:SetPoint("TOPLEFT", 30 + (i - 1) * 98, -(LIST_Y + 20))
         f.lists[i] = b
     end
-    Label("Tag", TAGS_Y - 2)
+
+    GK.SheetSection(f, "Tag", TAG_Y)
     f.tags = {}
-    for i = 1, 12 do
-        f.tags[i] = InkLink(f, function(self)
-            draft.tag = (draft.tag ~= self.tag) and self.tag or nil
+    for i = 1, MAX_TAGS do
+        local b = Choice(f, 14, 12, function(self)
+            draft.tag = (draft.tag ~= self.tag) and self.tag or nil     -- a second click lets it go
             f.custom:SetText("")
             LayoutSheet()
         end)
+        b.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)          -- the icon's own dark border trimmed off
+        f.tags[i] = b
     end
-    local own = Label("Own tag", TAGS_Y + TAG_ROWS * TAG_GAP + 8)
-    f.custom = Box(f, 150, GK.MAX_TAG)
-    f.custom:SetPoint("LEFT", own, "RIGHT", 14, 0)
-    f.custom:SetScript("OnTextChanged", function(_, byHand)
+    f.noTags = f:CreateFontString(nil, "ARTWORK")
+    Ink(f.noTags, FADED, 11)
+    f.noTags:SetPoint("TOPLEFT", 30, -(TAGS_Y + 3))
+    f.noTags:SetText("No ready tags for this list: write your own.")
+    f.custom = GK.FrameBox(f, 200, GK.MAX_TAG, "or write your own tag")
+    f.custom:HookScript("OnTextChanged", function(_, byHand)
         if byHand then
             draft.tag = nil
             LayoutSheet()
         end
     end)
-    local say = Label("Note", TAGS_Y + TAG_ROWS * TAG_GAP + 40)
-    f.note = Box(f, SHEET_W - 68, 200)
-    f.note:SetPoint("TOPLEFT", say, "BOTTOMLEFT", 6, -6)
-    local hint = f:CreateFontString(nil, "ARTWORK")
-    Ink(hint, FADED, TEXT_FONT, 11)
-    hint:SetPoint("TOPLEFT", f.note, "BOTTOMLEFT", -6, -8)
-    hint:SetWidth(SHEET_W - 68)
-    hint:SetJustifyH("LEFT")
-    hint:SetText("Up to 200 letters. A tag or a list is enough on its own.")
 
-    local write = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    write:SetSize(110, 22)
-    write:SetPoint("BOTTOMLEFT", 34, 26)
-    write:SetText("Write it")
-    write:SetScript("OnClick", function()
-        local tag = strtrim(f.custom:GetText())
+    f.noteLabel = GK.SheetSection(f, "Note", 0)
+    f.note = GK.FrameBox(f, SHEET_W - 68, 200, "a few words on what happened")
+    f.hint = f:CreateFontString(nil, "ARTWORK")
+    f.hint:SetPoint("TOPLEFT", f.note, "BOTTOMLEFT", -6, -8)
+    f.hint:SetWidth(SHEET_W - 60)
+    f.hint:SetJustifyH("LEFT")
+    SayOnSheet()
+
+    f.save = GK.FrameButton(f, "Save", 96, function()
+        local tag = strtrim(f.custom:GetText() or "")
         local ok, why = GK.WriteNote(draft.t, draft.list, f.note:GetText(), tag ~= "" and tag or draft.tag)
-        if not ok then
-            print(GK.TAG .. ": " .. (why or "the note couldn't be written."))
-            return
-        end
+        if not ok then return SayOnSheet(why or "The note couldn't be written.") end
         GK.Sound("IG_QUEST_LIST_OPEN")
         f:Hide()
     end)
-    local cancel = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    cancel:SetSize(90, 22)
-    cancel:SetPoint("LEFT", write, "RIGHT", 8, 0)
-    cancel:SetText(CANCEL or "Cancel")
-    cancel:SetScript("OnClick", function() f:Hide() end)
-    local wax = f:CreateTexture(nil, "OVERLAY")
-    wax:SetTexture(MEDIA .. "seal_red")
-    wax:SetSize(56, 56)
-    wax:SetPoint("BOTTOMRIGHT", -20, 12)
-
-    f:Hide()
-    if LIB.RegisterPopup then LIB.RegisterPopup(f) else tinsert(UISpecialFrames, "GrudgekeeperNoteSheet") end
-    sheet = f
+    f.save:SetPoint("BOTTOMRIGHT", -20, 16)
+    local cancel = GK.FrameButton(f, CANCEL or "Cancel", 96, function() f:Hide() end)
+    cancel:SetPoint("RIGHT", f.save, "LEFT", -6, 0)
 end
 
 --- Open the note sheet for a player: t = { key, c, r, rf, sx, l, unit }, list = "kos", "watch" or "kudos"
---- (kos when it is anything else). The Classic look wraps this: keep the signature.
+--- (kos when it is anything else).
 function GK.OpenNoteSheet(t, list)
     if not (t and t.key) then return end
     if not sheet then BuildSheet() end
     local known = false
     for _, l in ipairs(ORDER) do known = known or l == list end
     draft = { t = t, list = known and list or "kos" }
-    sheet.name:SetText(GK.Show(t.key))
-    sheet.info:SetText(GK.Describe(t.l, t.c, t.r))
+    sheet.head:Set(t)
     sheet.custom:SetText("")
     sheet.note:SetText("")
+    SayOnSheet()
     LayoutSheet()
+    GK.PlaceSheet(sheet)
     sheet:Show()
     sheet:Raise()
 end
@@ -635,6 +535,9 @@ local function ReadPlayer(unit)
         l = not Secret(level) and GK.ValidLevel(level) or nil,
     }
 end
+-- the who-picker (Pick.lua) reads the group with them
+GK.UnitPlayerKey = PlayerKey
+GK.ReadPlayer = ReadPlayer
 
 local function ShowNotes(key)
     GK.ShowCard(function() return GK.NoteCard(key) end)
@@ -663,10 +566,6 @@ local function OnNotesMenu(_, root, ctx)
         end
         lists:CreateButton("No tag", function() GK.WriteNote(t, list, "", "") end)
     end
-    sub:CreateButton("Add to nice names", function()
-        local ok, why = GK.AddNiceName(key, t)
-        print(GK.TAG .. ": " .. (ok and (GK.Show(key) .. " is on the nice names list.") or why))
-    end)
     if GK.IsNoted(key) then sub:CreateButton("Their notes", function() ShowNotes(key) end) end
 end
 
@@ -853,31 +752,8 @@ function GK.CheckNotesGroup()
     lastGroup = current
 end
 
--- ---------------------------------------------------------------------------
--- The alert style
--- ---------------------------------------------------------------------------
-local warnNotice = GK.Warn
-
-local function RaidWarning(text)
-    local colour = ChatTypeInfo and ChatTypeInfo["RAID_WARNING"]
-    if RaidWarningUtil and RaidWarningUtil.AddMessage then
-        RaidWarningUtil.AddMessage(text, colour)
-    elseif RaidNotice_AddMessage and RaidWarningFrame then
-        RaidNotice_AddMessage(RaidWarningFrame, text, colour)
-    end
-end
-
---- Every warning of the addon, in the style the player chose: the notice's red glow (Notice.lua), or a
---- raid warning in the middle of the screen and a line in chat.
-GK.Warn = function(text, urgent)
-    if GK.db and GK.db.alertStyle == "raid" then
-        RaidWarning(text)
-        GK.Sound("RAID_WARNING")
-        print(GK.TAG .. ": " .. text)
-        return
-    end
-    return warnNotice(text, urgent)
-end
+-- (Guild Grudge's raid-warning alert style was left out of the merge, 2026-11-05: Grudgekeeper's warnings
+-- are the letter's red glow and chime - letters, never popups.)
 
 -- ---------------------------------------------------------------------------
 -- After the import: tell the guild what is now mine
@@ -896,37 +772,15 @@ end
 -- This file loads before Options.lua, which makes the list: start it here if it isn't there yet.
 GK.OptionSections = GK.OptionSections or {}
 GK.OptionSections[#GK.OptionSections + 1] = function(f, anchor, h)
+    -- short names, what each does in its (i); the slash commands are on the CurseForge page, not here
     local head = h.Section(anchor, "Notes")
-    local alerts = h.Check(head, "Warn me when a Marked player is near", "noteAlerts",
-        "Off by default. A player you or a guildie wrote a note on, with no kill order on them, near you: the "
-        .. "same warning as for a kill order's target, at most every 90 seconds per player.")
-    local nearby = h.Check(alerts, "A chat line when a Shame list player is near", "watchNearby",
-        "Off by default. One line in chat, no sound, at most every 90 seconds per player.")
-    local group = h.Check(nearby, "Warn me when a Shame list player joins my group", "watchGroup",
-        "On by default. A warning with their tag, so a ninja looter does not slip into the raid.")
-    local kudos = h.Check(group, "A chat line when a Kudos player joins my group", "kudosGroup",
-        "On by default. One friendly line in chat, no sound.")
-    local plate = h.Check(kudos, "Mark the nameplates of players I have notes on", "plateNotes",
-        "On by default. A small dim mark beside the nameplate: a cross for Marked, an exclamation for "
-        .. "Shame, a tick for Kudos. Needs nameplates on (V).")
-    local style = h.Box(plate, "Raid warning instead of the scroll's glow", "Off by default. Every warning, "
-        .. "Grudgekeeper's own \"is near\" included, shows as a raid warning in the middle of the screen, with "
-        .. "its sound, instead of the scroll's red glow.", function(on)
-            GK.db.alertStyle = on and "raid" or "scroll"
-            GK.Changed()
-        end)
-    -- not one of Options.lua's Checks, so it sets its own box each time the page is shown
-    local function Set() style:SetChecked(GK.db.alertStyle == "raid") end
-    style:SetScript("OnShow", Set)
-    Set()
-    local note = h.Note(f, "|cffffd100/grudge note|r [first surname] <text> writes a note (no name: your target).  "
-        .. "|cffffd100/grudge shame|r and |cffffd100/grudge kudos|r <first> <surname> [text] put a player on a list.\n"
-        .. "|cffffd100/grudge nice|r <first> <surname> adds a funny name.  |cffffd100/grudge move|r <first> "
-        .. "<surname> marked|shame|kudos|none moves your mark.\n|cffffd100/grudge notes|r, |cffffd100shame|r, "
-        .. "|cffffd100kudos|r and |cffffd100names|r with no name open their pages.  "
-        .. "|cffffd100/grudge import|r takes over Guild Grudge's notes (import force: again).")
-    note:SetPoint("TOPLEFT", style, "BOTTOMLEFT", 4, -10)
-    return note
+    local alerts = h.Check(head, "When a Marked player is near", "noteAlerts", "The same warning as for a kill order's target.")
+    local nearby = h.Check(alerts, "When a Shame player is near", "watchNearby", "One line in chat, no sound.")
+    local group = h.Check(nearby, "When a Shame player joins my group", "watchGroup", "A warning with their tag.")
+    local kudos = h.Check(group, "When a Kudos player joins my group", "kudosGroup", "One friendly line in chat.")
+    local plate = h.Check(kudos, "Mark their nameplates", "plateNotes",
+        "A small mark beside players you have notes on. Needs nameplates on (V).")
+    return plate
 end
 
 -- ---------------------------------------------------------------------------
@@ -936,7 +790,6 @@ local USAGE = {
     note = "Usage: /grudge note [first surname] <text> - with no name, a note on your target.",
     watch = "Usage: /grudge shame <first> <surname> [text] - or just a note, for your target.",
     kudos = "Usage: /grudge kudos <first> <surname> [text] - or just a note, for your target.",
-    nice = "Usage: /grudge nice <first> <surname> - or with no name, your target.",
     move = "Usage: /grudge move <first> <surname> marked|shame|kudos|none - or without a name, your target.",
 }
 local MOVES = { kos = "kos", marked = "kos", watch = "watch", shame = "watch", kudos = "kudos", none = false, off = false, remove = false }
@@ -953,7 +806,7 @@ local function After(s, n)
     return strtrim(s)
 end
 
---- What a notes command asks for. cmd is note, watch, kudos, nice or move; rest is the line after it;
+--- What a notes command asks for. cmd is note, watch, kudos or move; rest is the line after it;
 --- target is the key of the player you have targeted (or nil); known(key) says whether we keep anything on
 --- that name already. Forever names are two words, "First Surname". Returns { key, text, list, clear } or
 --- nil and the usage line.
@@ -977,10 +830,6 @@ function GK.ParseNotesCommand(cmd, rest, target, known)
         if #w >= 2 then return { key = Named(), text = After(rest, 2), list = cmd } end
         if target then return { key = target, text = rest, list = cmd } end
         return nil, USAGE[cmd]
-    elseif cmd == "nice" then
-        if #w >= 2 then return { key = Named() } end
-        if #w == 0 and target then return { key = target } end
-        return nil, USAGE.nice
     elseif cmd == "move" then
         local to = #w > 0 and MOVES[w[#w]:lower()]
         if to == nil or #w == 0 then return nil, USAGE.move end
@@ -994,7 +843,7 @@ end
 local function Say(text) print(GK.TAG .. ": " .. text) end
 
 local function KnownName(key)
-    return key ~= nil and (GK.IsNoted(key) or GK.Store().names[key] ~= nil or (LIB.roster and LIB.roster[key] ~= nil))
+    return key ~= nil and (GK.IsNoted(key) or (LIB.roster and LIB.roster[key] ~= nil))
 end
 
 --- Run one of our subcommands. true when cmd was one of ours.
@@ -1003,7 +852,7 @@ function GK.RunNotesCommand(cmd, rest)
     if cmd == "notes" then
         GK.OpenNotes("kos")
         return true
-    elseif cmd == "names" or ((cmd == "watch" or cmd == "kudos") and strtrim(rest or "") == "") then
+    elseif (cmd == "watch" or cmd == "kudos") and strtrim(rest or "") == "" then
         GK.OpenNotes(cmd)                   -- with a name they keep adding (below)
         return true
     elseif cmd == "import" then
@@ -1023,10 +872,7 @@ function GK.RunNotesCommand(cmd, rest)
     end
     local info = (t and t.key == r.key) and t or { key = r.key }
     local name = GK.Show(r.key)
-    if cmd == "nice" then
-        local ok, why = GK.AddNiceName(r.key, info)
-        Say(ok and (name .. " is on the nice names list.") or why)
-    elseif cmd == "move" then
+    if cmd == "move" then
         if GK.SetMark(r.key, r.list) then
             Say(r.list and ("%s is on your %s list."):format(name, WORD[r.list]) or (name .. " is off your lists."))
         else
@@ -1039,8 +885,7 @@ function GK.RunNotesCommand(cmd, rest)
     return true
 end
 
-local OURS = { note = true, watch = true, shame = true, kudos = true, nice = true, move = true, notes = true, names = true,
-    import = true }
+local OURS = { note = true, watch = true, shame = true, kudos = true, move = true, notes = true, import = true }
 -- what Core.lua's /grudge answers itself; anything else it meets it answers with its help
 local CORE = { orders = true, hitlist = true, board = true, leaderboard = true, post = true, letters = true,
     read = true, test = true, notice = true, options = true, settings = true, debug = true }
@@ -1049,9 +894,8 @@ local function PrintHelp()
     print("  /grudge note [first surname] <text>  - write a note on a player (no name: your target)")
     print("  /grudge shame <first> <surname> [text]  - put a player on your Shame list")
     print("  /grudge kudos <first> <surname> [text]  - put a player on your Kudos list")
-    print("  /grudge nice <first> <surname>  - add a funny character name to the guild's list")
     print("  /grudge move <first> <surname> marked|shame|kudos|none  - move your mark on a player")
-    print("  /grudge notes  - open the Marked page (/grudge shame, kudos and names open theirs)")
+    print("  /grudge notes  - open the Marked page (/grudge shame and kudos open theirs)")
     print("  /grudge import  - take over Guild Grudge's notes (import force: again)")
 end
 

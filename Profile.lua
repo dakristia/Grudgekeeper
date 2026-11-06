@@ -63,7 +63,12 @@ end
 
 -- ---------------------------------------------------------------------------
 -- What a card says. Plain data, so the smoke test can read it without a frame:
--- { title, name, info, lines, big, caption, seal, blood, buttons = { { text, fn } }, c, unit, key }
+-- { title, name, info, lines, big, caption, seal, blood, buttons = { { text, fn } }, c, unit, key,
+--   stats, withStats }
+-- A line that starts "Label: " is drawn on the ledger as a label and its value, in two columns.
+-- stats: up to three { label, value }, the numbers that matter, side by side where a page has room for
+-- them (the ledger); where it hasn't, big and caption stand in. withStats: [line] = a shorter line, or
+-- false to leave it out, where the stats show - so the ledger never says a number twice.
 -- ---------------------------------------------------------------------------
 --- An enemy player. t = { key, guid, c, r, l, unit }: whatever the caller knows. inLedger: drawn on
 --- the ledger's own page (Window.lua), where your own order's button withdraws it rather than
@@ -83,29 +88,34 @@ function GK.PosterCard(t, inLedger)
     local c, r, l = Pick("c"), Pick("r"), Pick("l")
     -- race and sex only from a look this session: enough for their race's face in the portrait
     local d = { key = key, unit = t.unit, c = c, name = GK.Show(key), info = GK.Describe(l, c, r), lines = {},
-        buttons = {}, rf = live and live.rf, sx = live and live.sx }
+        buttons = {}, rf = live and live.rf, sx = live and live.sx, withStats = {} }
     local lines = d.lines
-    local killedUs = 0
+    local killedUs, weKilled = 0, 0
+    local tally = {}               -- [line] = the line without its total, where the stats say the total
     if w and next(w.victims) then
         local names, total = Names(w.victims)
         killedUs = total
-        lines[#lines + 1] = ("Has killed us %s: %s."):format(Plural(total, "time"), names)
+        lines[#lines + 1] = ("Killed us: %s - %s."):format(Plural(total, "time"), names)
+        tally[lines[#lines]] = ("Killed us: %s."):format(names)
     end
     if e and next(e.by) then
         local names, total = Names(e.by)
-        lines[#lines + 1] = ("We have killed them %s: %s."):format(Plural(total, "time"), names)
+        weKilled = total
+        lines[#lines + 1] = ("We killed them: %s - %s."):format(Plural(total, "time"), names)
+        tally[lines[#lines]] = ("We killed them: %s."):format(names)
     end
     if f and (f.k or 0) + (f.d or 0) > 0 then
-        local nemesis = GK.Nemesis()
+        local nemesis = GK.Nemesis() == fkey
         lines[#lines + 1] = ("You: %s, %s%s"):format(Plural(f.k or 0, "kill"), Plural(f.d or 0, "death"),
-            nemesis == fkey and " - your nemesis." or ".")
+            nemesis and " - your nemesis." or ".")
+        tally[lines[#lines]] = nemesis and "You: your nemesis." or false
     end
     -- Last seen: anyone in the guild, through the order; else our own look in the last 15 minutes.
     local seen = o and o.seen
     if seen and seen.t then
-        lines[#lines + 1] = ("Last seen in %s, %s, by %s."):format(seen.z or "the world", GK.Ago(seen.t), Who(seen.by))
+        lines[#lines + 1] = ("Last seen: %s, %s, by %s."):format(seen.z or "the world", GK.Ago(seen.t), Who(seen.by))
     elseif live then
-        lines[#lines + 1] = ("You saw them lately, in %s."):format(live.z or "the world")
+        lines[#lines + 1] = ("Last seen: by you, lately, in %s."):format(live.z or "the world")
     end
     local me = LIB.Me()
     if o then
@@ -117,20 +127,29 @@ function GK.PosterCard(t, inLedger)
         if hunting > 0 then extra[#extra + 1] = hunting .. " hunting them" end
         local tail = #extra > 0 and (" - " .. table.concat(extra, ", ")) or ""
         -- An order their own killing posted (GK.AutoOrder) says why, in the Grudgekeeper's words, and
-        -- was posted by a death rather than by a guildie's hand.
+        -- was posted by a death rather than by a guildie's hand. One a guildie posted says the why they
+        -- wrote, if they wrote one.
         local by = Who(o.by)
         if o.auto then
             by = (by == "you" and "your" or (by .. "'s")) .. " death"
             local why = o.note and (o.note:gsub("^%u", string.lower)) or nil
             lines[#lines + 1] = why and ("The guild wants them dead: %s"):format(why) or "The guild wants them dead."
+        elseif o.note and o.note ~= "" then
+            lines[#lines + 1] = ("Why: %s"):format(o.note)
         end
+        -- the pot, the backers and the hunters are the ledger's stats; the line only says who posted it there
+        local posted
         if pot > 0 then
-            lines[#lines + 1] = ("Bounty %s, posted by %s%s."):format(GK.MoneyText(pot), by, tail)
+            posted = ("Posted by: %s - a bounty of %s%s."):format(by, GK.MoneyText(pot), tail)
             d.big = pot >= 10000 and (math.floor(pot / 10000) .. "g") or GK.MoneyText(pot)
             d.caption = "bounty"
         else
-            lines[#lines + 1] = ("A kill order for the guild's honour, posted by %s%s."):format(by, tail)
+            posted = ("Posted by: %s - for the guild's honour%s."):format(by, tail)
         end
+        lines[#lines + 1] = posted
+        d.withStats[posted] = ("Posted by: %s."):format(by)
+        d.stats = { { "Bounty", pot > 0 and GK.Coins(pot) or "honour" }, { "Backers", tostring(backers) },
+            { "Hunting", tostring(hunting) } }
         if o.by ~= me then
             local mine = GK.char.accepted[o.key]
             d.buttons[1] = { mine and "Drop the order" or "Take the order", function() GK.Accept(o, not mine) end }
@@ -153,6 +172,11 @@ function GK.PosterCard(t, inLedger)
         d.title, d.seal = "WANTED", "mark"
     elseif history then
         d.title, d.seal = "A GRUDGE", "seal_black"
+        -- no order: the history is the numbers that matter, and its lines say who
+        d.stats = { { "Killed us", tostring(killedUs) }, { "We killed", tostring(weKilled) } }
+        -- (the You line is there exactly when this is)
+        if f and (f.k or 0) + (f.d or 0) > 0 then d.stats[3] = { "You", ("%d - %d"):format(f.k or 0, f.d or 0) } end
+        for line, short in pairs(tally) do d.withStats[line] = short end
     else
         d.title = "NO RECORD"
         lines[#lines + 1] = "Nobody in the guild has killed them or died to them - not that the Grudgekeeper heard of."
@@ -210,21 +234,35 @@ function GK.RecordCard(key, unit)
         end
         return nil
     end
+    -- Both counts say what they count: all time is everyone whose score reached us, this week only who
+    -- has a kill, death or point this week - the leaderboard's default list. "#1 of 4 in the guild, #1
+    -- this week" read as four on a list that showed one (the owner, 2026-11-06).
     local rank, of = Place(false)
-    local weekRank = Place(true)
+    local weekRank, weekOf = Place(true)
     local where = GK.Describe(r.l, r.c)
     if rank and of > 1 then
-        where = ("#%d of %d in the guild%s"):format(rank, of, weekRank and (", #%d this week"):format(weekRank) or "")
+        where = ("#%d of %d all time%s"):format(rank, of,
+            weekRank and (", #%d of %d this week"):format(weekRank, weekOf) or "")
     end
     d.info = where
     local lines = d.lines
     lines[#lines + 1] = ("All time: %s, %s."):format(Plural(r.k or 0, "kill"), Plural(r.d or 0, "death"))
-    if r.wid == GK.WeekId() and ((r.wk or 0) + (r.wd or 0) + (r.wp or 0)) > 0 then
+    local thisWeek = r.wid == GK.WeekId()
+    if thisWeek and ((r.wk or 0) + (r.wd or 0) + (r.wp or 0)) > 0 then
         lines[#lines + 1] = ("This week: %s, %s, %s."):format(Plural(r.wk or 0, "kill"), Plural(r.wd or 0, "death"),
             Plural(r.wp or 0, "point"))
     else
         lines[#lines + 1] = "Nothing yet this week."
     end
+    -- On the ledger: all time and this week as a table, each with its place on the board, and what they
+    -- are under the name; the two lines it says go there.
+    local function Of(i, n) return i and ("#%d of %d"):format(i, n) or "-" end
+    d.grid = { cols = { "Points", "Kills", "Deaths", "Place" }, rows = {
+        { "All time", tostring(p), tostring(r.k or 0), tostring(r.d or 0), Of(rank, of) },
+        { "This week", tostring(thisWeek and r.wp or 0), tostring(thisWeek and r.wk or 0),
+            tostring(thisWeek and r.wd or 0), Of(weekRank, weekOf) } } }
+    d.gridInfo = GK.Describe(r.l, r.c)
+    d.withStats = { [lines[1]] = false, [lines[2]] = false }
     if (r.bs or 0) > 0 then
         lines[#lines + 1] = ("Kill streak: %d now, best %d."):format(r.st or 0, r.bs)
     end
@@ -302,10 +340,8 @@ local function Build()
         if i == 1 then b:SetPoint("BOTTOMLEFT", 46, 50) else b:SetPoint("LEFT", f.buttons[1], "RIGHT", 6, 0) end
         f.buttons[i] = b
     end
-    -- Our own Hide, so closing works in combat too.
-    local close = GK.MakeCloseButton(f, 20, function() f:Hide() end, 14)
-    close:SetFrameLevel(f:GetFrameLevel() + 12)
-    close:SetPoint("TOPRIGHT", -12, -12)
+    -- The game's own X, as on the letter in the same frame; our own Hide, so closing works in combat too.
+    GK.MakeGameCloseButton(f, function() f:Hide() end)
     if LIB.RegisterWindow then LIB.RegisterWindow(f, GK.db, "profile") end
     card = f
 end

@@ -176,12 +176,10 @@ test("20 live notes per author per player", function()
     eq(#GK.NotesOf(GANK), 21)
 end)
 
-test("500 people and 300 nice names", function()
+test("500 people", function()
     local GK = boot()
     for i = 1, 520 do W.receive(GK, KARI, msg("N", 1, "Player" .. i .. "-Realm", 1, B + i, "", "", "", "", "", "x")) end
     eq(count(GK.Store().people), 500)
-    for i = 1, 320 do W.receive(GK, KARI, msg("M", 1, "Name" .. i .. "-Realm", B + i)) end
-    eq(count(GK.Store().names), 300)
 end)
 
 test("I can't write a 201st character, a 25th tag character, or a 21st note", function()
@@ -367,114 +365,6 @@ test("a vote on a player we know nothing of is dropped", function()
 end)
 
 -- ---------------------------------------------------------------------------
--- Nice names
--- ---------------------------------------------------------------------------
-test("nice names: add, vote, and remove only my own", function()
-    local GK = boot()
-    eq(GK.AddNiceName(NICE, { c = "PRIEST", r = "Human", l = 40 }), true)
-    eq(select(1, GK.AddNiceName(NICE)), nil, "already there")
-    W.receive(GK, KARI, msg("M", 1, "Bob Bobson-Realm", B + 5, "", "MAGE", "Gnome", "Gnome", 3, 20))
-    local names = GK.NiceNames()
-    eq(#names, 2)
-    local bob
-    for _, n in ipairs(names) do if n.key == "Bob Bobson-Realm" then bob = n end end
-    eq(bob.by, KARI)
-    eq(bob.mine, false)
-    -- not other people's
-    eq(GK.RemoveNiceName("Bob Bobson-Realm"), false)
-    W.receive(GK, EDVARD, msg("M", 1, "Bob Bobson-Realm", B + 99, 1))
-    eq(#GK.NiceNames(), 2, "Edvard can't remove Kari's name")
-    W.receive(GK, EDVARD, msg("M", 1, "Bob Bobson-Realm", B + 98, "", "MAGE"))
-    eq(GK.Store().names["Bob Bobson-Realm"].by, KARI, "nor take it over")
-    -- votes: not on mine, on Kari's
-    eq(GK.VoteName(NICE, 1), false)
-    eq(GK.VoteName("Bob Bobson-Realm", 1), true)
-    W.receive(GK, EDVARD, msg("G", 1, "Bob Bobson-Realm", 1, B + 7))
-    W.receive(GK, KARI, msg("G", 1, "Bob Bobson-Realm", 1, B + 7))
-    eq(GK.NameScore("Bob Bobson-Realm"), 2, "Kari can't vote on her own name")
-    eq(GK.VoteName("Bob Bobson-Realm", 0), true)
-    eq(GK.NameScore("Bob Bobson-Realm"), 1)
-    -- remove mine
-    eq(GK.RemoveNiceName(NICE), true)
-    eq(#GK.NiceNames(), 1)
-    eq(GK.RemoveNiceName(NICE), false)
-    -- Kari removes hers
-    W.receive(GK, KARI, msg("M", 1, "Bob Bobson-Realm", B + 500, 1))
-    eq(#GK.NiceNames(), 0)
-    -- and a removed name can be added again, by anyone
-    eq(GK.AddNiceName("Bob Bobson-Realm"), true)
-    eq(GK.Store().names["Bob Bobson-Realm"].by, ME)
-end)
-
-test("a vote on a name we don't have is dropped", function()
-    local GK = boot()
-    W.receive(GK, KARI, msg("G", 1, "Nobody-Realm", 1, B))
-    eq(count(GK.Store().nameVotes), 0)
-end)
-
-test("hiding a name: refused for a non-officer, accepted from an officer", function()
-    local GK, LIB = boot()
-    W.receive(GK, KARI, msg("M", 1, NICE, B + 1))
-    -- I am rank 5 and no flags are known: I can't hide
-    eq(GK.IsOfficer(ME), false)
-    eq(GK.HideName(NICE, true), false)
-    eq(#GK.NiceNames(), 1)
-    -- Edvard is no officer either
-    LIB.roster[EDVARD] = { rankIndex = 4 }
-    W.receive(GK, EDVARD, msg("H", 1, NICE, 1, B + 5))
-    eq(#GK.NiceNames(), 1)
-    -- the guild master is
-    LIB.roster["Master-Realm"] = { rankIndex = 0 }
-    W.receive(GK, "Master-Realm", msg("H", 1, NICE, 1, B + 6))
-    eq(#GK.NiceNames(), 0, "hidden")
-    local all = GK.NiceNames(true)
-    eq(#all, 1)
-    eq(all[1].hidden, true)
-    -- a sender that isn't on the roster at all is not an officer
-    W.receive(GK, "Stranger-Realm", msg("H", 1, NICE, 0, B + 9))
-    eq(#GK.NiceNames(), 0)
-    -- shown again
-    W.receive(GK, "Master-Realm", msg("H", 1, NICE, 0, B + 10))
-    eq(#GK.NiceNames(), 1)
-    eq(GK.NiceNames()[1].hidden, false)
-end)
-
-test("officer by rank flag 3, when the client has the call", function()
-    local GK, LIB = boot()
-    LIB.roster["Lieutenant-Realm"] = { rankIndex = 2 }
-    LIB.roster["Raider-Realm"] = { rankIndex = 3 }
-    W.rankFlags = { [3] = { true, true, true }, [4] = { true, true, false } }
-    eq(GK.IsOfficer("Lieutenant-Realm"), true)
-    eq(GK.IsOfficer("Raider-Realm"), false)
-    eq(GK.IsOfficer("Stranger-Realm"), false)
-    -- a call that raises is not an officer
-    C_GuildInfo.GuildControlGetRankFlags = function() error("restricted") end
-    eq(GK.IsOfficer("Lieutenant-Realm"), false)
-    C_GuildInfo = nil
-    eq(GK.IsOfficer("Lieutenant-Realm"), false, "no call: the guild master only")
-    LIB.roster[ME] = { rankIndex = 0 }
-    eq(GK.IsOfficer(ME), true)
-end)
-
-test("an officer hides my name and a hide may come before the name does", function()
-    local GK, LIB = boot()
-    LIB.roster[ME] = { rankIndex = 0 }
-    eq(GK.AddNiceName(NICE), true)
-    eq(GK.HideName(NICE, true), true)
-    eq(#GK.NiceNames(), 0)
-    eq(GK.HideName(NICE, false), true)
-    eq(#GK.NiceNames(), 1)
-    eq(GK.HideName("Unknown-Realm", true), false, "no such name")
-    -- a hide arrives first
-    LIB.roster["Master-Realm"] = { rankIndex = 0 }
-    W.receive(GK, "Master-Realm", msg("H", 1, "Late-Realm", 1, B + 4))
-    eq(#GK.NiceNames(true), 1, "the bare record isn't a name")
-    W.receive(GK, KARI, msg("M", 1, "Late-Realm", B + 8))
-    eq(#GK.NiceNames(), 1, "the name is there, hidden")
-    eq(#GK.NiceNames(true), 2)
-end)
-
--- ---------------------------------------------------------------------------
 -- Sending
 -- ---------------------------------------------------------------------------
 test("a Q goes out about ten seconds after login, and only once", function()
@@ -528,13 +418,9 @@ test("a Q is answered with my own records only, after 2 to 6 seconds, once per 3
     W.advance(11)
     W.takeSent()
     GK.AddNote(GANK, "mine", "Toxic", "watch")
-    GK.AddNiceName(NICE)
     W.receive(GK, KARI, msg("N", 1, GANK, 1, B, "", "", "", "", "", "Kari's note"))
     W.receive(GK, KARI, msg("L", 1, GANK, "watch", B))
-    W.receive(GK, KARI, msg("M", 1, "Hers-Realm", B))
-    W.receive(GK, EDVARD, msg("G", 1, NICE, 1, B))
     eq(GK.VoteNote(GANK, KARI, 1, 1), true)
-    eq(GK.VoteName("Hers-Realm", 1), true)
     W.advance(10)
     W.takeSent()
     W.receive(GK, KARI, "Q;1")
@@ -542,22 +428,21 @@ test("a Q is answered with my own records only, after 2 to 6 seconds, once per 3
     eq(#W.sent, 0, "not before 2 seconds")
     W.advance(10)
     local sent = W.takeSent()
-    -- N, L, M, V, G(vote on Hers), and not Kari's N, L, M or Edvard's G
-    eq(#sent, 5)
+    -- my N, L and V, and not Kari's N or L
+    eq(#sent, 3)
     local kinds = {}
     for _, m in ipairs(sent) do
         kinds[#kinds + 1] = m.text:sub(1, 1)
         assert(not m.text:find("Kari's note", 1, true), "never someone else's record")
-        assert(not m.text:find("Hers-Realm;" .. B, 1, true) or m.text:sub(1, 1) ~= "M", "never her name")
     end
-    eq(table.concat(kinds), "MNLVG", "players before the votes on them")
+    eq(table.concat(kinds), "NLV", "players before the votes on them")
     W.receive(GK, EDVARD, "Q;1")
     W.advance(10)
     eq(#W.sent, 0, "asked again within 30 seconds: no second answer")
     W.advance(30)
     W.receive(GK, EDVARD, "Q;1")
     W.advance(10)
-    eq(#W.sent, 5, "and again after")
+    eq(#W.sent, 3, "and again after")
 end)
 
 test("a Q reply is capped at 150, newest first, two a second", function()
@@ -606,8 +491,7 @@ end)
 -- ---------------------------------------------------------------------------
 test("every message type survives the trip from my client to another", function()
     -- the first client
-    local GK, LIB = boot()
-    LIB.roster[ME] = { rankIndex = 0 }
+    local GK = boot()
     local sent = {}
     local function flush()
         W.advance(30)                       -- the queue lets two a second out
@@ -618,41 +502,28 @@ test("every message type survives the trip from my client to another", function(
     local n3 = GK.AddNote("Old Foe-Realm", "gone again")
     GK.DeleteNote("Old Foe-Realm", n3.id)
     GK.SetMark(NICE, nil)
-    GK.AddNiceName("Funny Name-Realm", { c = "MAGE", r = "Gnome", rf = "Gnome", sx = 3, l = 33 })
-    GK.AddNiceName("Gone Name-Realm")
-    GK.RemoveNiceName("Gone Name-Realm")
-    GK.HideName("Funny Name-Realm", true)
-    GK.HideName("Funny Name-Realm", false)
-    GK.HideName("Funny Name-Realm", true)
     flush()
-    -- votes need someone else's note and name; give both clients Kari's
+    -- a vote needs someone else's note; give both clients Kari's
     local kariNote = msg("N", 1, GANK, 5, B, "", "", "", "", "", "Kari's note")
-    local kariName = msg("M", 1, "Kari Name-Realm", B)
     W.receive(GK, KARI, kariNote)
-    W.receive(GK, KARI, kariName)
     GK.VoteNote(GANK, KARI, 5, 1)
     GK.VoteNote(GANK, KARI, 5, -1)
-    GK.VoteName("Kari Name-Realm", 1)
-    GK.VoteName("Kari Name-Realm", 0)
     flush()
     sent[#sent + 1] = GK.NotesEncode.Q()
     local want = {}
     for _, key in ipairs({ GANK, NICE, "Old Foe-Realm" }) do
         want[key] = { notes = GK.NotesOf(key), mark = GK.MyMark(key) }
     end
-    local names = GK.NiceNames(true)
 
     -- the other client, which hears them all from me
-    local GK2, LIB2 = boot({ me = "Other-Realm" })
-    LIB2.roster[ME] = { rankIndex = 0 }
+    local GK2 = boot({ me = "Other-Realm" })
     W.receive(GK2, KARI, kariNote)
-    W.receive(GK2, KARI, kariName)
     local kinds = {}
     for _, text in ipairs(sent) do
         kinds[text:sub(1, 1)] = true
         W.receive(GK2, ME, text)
     end
-    for _, k in ipairs({ "N", "L", "V", "M", "G", "H", "Q" }) do assert(kinds[k], "a " .. k .. " was sent") end
+    for _, k in ipairs({ "N", "L", "V", "Q" }) do assert(kinds[k], "a " .. k .. " was sent") end
     for key, w in pairs(want) do
         local got = GK2.NotesOf(key)
         eq(#got, #w.notes, key .. " notes")
@@ -671,33 +542,29 @@ test("every message type survives the trip from my client to another", function(
     eq(GK2.Person(GANK).l, 60)
     eq(GK2.Person("Old Foe-Realm").notes[ME][n3.id].del, true, "the tombstone travelled")
     eq(GK2.NoteScore(GANK, KARI, 5), -1, "the last vote won")
-    eq(GK2.NameScore("Kari Name-Realm"), 0, "the vote taken back")
-    local got = GK2.NiceNames(true)
-    eq(#got, #names)
-    local fun = GK2.Store().names["Funny Name-Realm"]
-    eq(fun.by, ME)
-    eq(fun.c, "MAGE")
-    eq(fun.r, "Gnome")
-    eq(fun.rf, "Gnome")
-    eq(fun.sx, 3)
-    eq(fun.l, 33)
-    eq(fun.hidden.on, true, "hidden, shown again, hidden")
-    eq(GK2.Store().names["Gone Name-Realm"].del, true)
 end)
 
 test("the encoders clean what they are given", function()
     local GK = boot()
     local text = GK.NotesEncode.N(GANK, 3, { ts = B, text = "a;b|c", tag = "x;y" }, { c = "MAGE", r = "Orc", l = 5 })
     eq(text, msg("N", 1, GANK, 3, B, "", "x,y", "MAGE", "Orc", 5, "a,b/c"))
-    eq(GK.NotesEncode.H(GANK, true, B), msg("H", 1, GANK, 1, B))
-    eq(GK.NotesEncode.H(GANK, false, B), msg("H", 1, GANK, 0, B))
+end)
+
+test("the nice names' old messages (M, G, H) are ignored, and keep nothing", function()
+    local GK = boot()
+    W.receive(GK, KARI, msg("M", 1, "Funny Name-Realm", B))
+    W.receive(GK, KARI, msg("G", 1, "Funny Name-Realm", 1, B))
+    W.receive(GK, KARI, msg("H", 1, "Funny Name-Realm", 1, B))
+    eq(GK.Store().names, nil)
+    eq(count(GK.Store().people), 0)
 end)
 
 -- ---------------------------------------------------------------------------
 -- The import from Guild Grudge
 -- ---------------------------------------------------------------------------
 -- The shape of GuildGrudgeDB as GuildGrudge/Core.lua keeps it (see its "Data model" comment): entries by
--- lowercase key, notes with string ids and per-voter votes, and the nice names list. Names are
+-- lowercase key, notes with string ids and per-voter votes, and the nice names list (which Grudgekeeper
+-- leaves behind: BACKLOG.md). Names are
 -- "First Surname"; the player here is "Meyer Self".
 local function sampleDB()
     local t = B - 5000
@@ -744,13 +611,13 @@ end
 
 local IME, IKARI = "Meyer Self-Realm", "Kari Hansen-Realm"
 
-test("import: notes, tags, lists, names and votes land under their authors", function()
+test("import: notes, tags, lists and votes land under their authors; the nice names stay behind", function()
     local GK = boot({ me = IME, guildGrudge = sampleDB() })
     local counts = GK.ImportGuildGrudge()
     eq(counts.notes, 3)
     eq(counts.marks, 2)
-    eq(counts.names, 2)
-    eq(counts.votes, 5, "three on notes and two on names, less the removed one and my vote on my own name")
+    eq(counts.names, nil)
+    eq(counts.votes, 3, "the three on notes, less the removed one")
     -- Ganker: my note and Kari's live one; no deleted one; no bounty
     local key = "Ganker Forever-Realm"
     local notes = GK.NotesOf(key)
@@ -781,15 +648,9 @@ test("import: notes, tags, lists, names and votes land under their authors", fun
     eq(GK.Person("Wanda Watch-Realm").c, "MAGE")
     -- the bounty-only entry is not brought over
     eq(GK.Person("Bounty Only-Realm"), nil)
-    -- names
-    local names = GK.NiceNames()
-    eq(#names, 2)
-    local funny = GK.Store().names["Funny Name-Realm"]
-    eq(funny.by, IME)
-    eq(funny.l, 20)
-    eq(GK.NameScore("Funny Name-Realm"), 1, "Kari's vote; mine on my own name was never one")
-    eq(GK.NameScore("Third Silly-Realm"), 1)
-    eq(GK.Store().names["Old Name-Realm"], nil, "removed names stay removed")
+    -- the nice names are not taken over
+    eq(GK.Store().names, nil)
+    eq(GK.Person("Funny Name-Realm"), nil)
     assert(GK.db.importedGG["Guild-Realm"], "marked done")
     eq(#W.printed, 1)
     assert(W.printed[1]:find(GK.TAG, 1, true), "says who")
@@ -810,9 +671,7 @@ test("import: only my own records are ever sent", function()
     assert(not all:find("heals through anything", 1, true), "Kari's isn't")
     assert(all:find("L;1;Wanda Watch-Realm;watch", 1, true), "my mark is")
     assert(not all:find("L;1;Nina Nice-Realm", 1, true), "Kari's mark isn't")
-    assert(all:find("M;1;Funny Name-Realm", 1, true), "my name is")
-    assert(not all:find("Third Silly", 1, true) or all:find("G;1;Third Silly-Realm;1;", 1, true), "only my vote on it")
-    assert(not all:find("M;1;Third Silly", 1, true), "not her name")
+    assert(not all:find("Funny Name", 1, true) and not all:find("Third Silly", 1, true), "no nice name goes out")
     -- my votes on Kari's imported notes carry ids that are only ours: not sent
     for _, line in ipairs(text) do
         assert(line:sub(1, 1) ~= "V", "no vote on an imported note: " .. line)
@@ -829,9 +688,7 @@ test("import runs once per guild, unless forced, and forcing it again makes noth
     local forced = GK.ImportGuildGrudge(true)
     eq(forced.notes, 0)
     eq(forced.marks, 0)
-    eq(forced.names, 0)
     eq(#GK.NotesOf("Ganker Forever-Realm"), 2)
-    eq(GK.NameScore("Funny Name-Realm"), 1)
 end)
 
 test("import: nothing to do without a GuildGrudgeDB", function()
@@ -870,11 +727,10 @@ end)
 test("import: a vote that is not a table is skipped and counted, and the import goes on", function()
     local db = sampleDB()
     db.entries["ganker forever"].notes["Meyer Self-1-1"].votes["Edvard Eide"] = 1
-    db.names["funny name"].votes["Edvard Eide"] = "up"
     local GK = boot({ me = IME, guildGrudge = db })
     local counts = GK.ImportGuildGrudge()
-    eq(counts.skipped, 2)
-    eq(counts.votes, 5)
+    eq(counts.skipped, 1)
+    eq(counts.votes, 3)
     assert(GK.db.importedGG["Guild-Realm"], "finished")
 end)
 
@@ -1099,428 +955,6 @@ test("kill order sheet: sealing posts a new order, or adds to the pot it was ope
 end)
 
 -- ---------------------------------------------------------------------------
--- The Classic look, built against stand-in frames (tests/frames_mock.lua): the frames are built, filled
--- from the same data the ledger uses, and clicked. What they look like is for the game to say.
--- ---------------------------------------------------------------------------
-local F = require("frames_mock")
-
-local CARD = { title = "WANTED", name = "Gank Master", info = "Level 60 Orc", c = "MAGE", lines = { "Bounty 5g." },
-    big = "5g", caption = "bounty", buttons = { { "Take the order", function() end } } }
-
-local function bootClassic(look)
-    local GK = bootSheets({ me = ME })
-    F.install()
-    GK.db.look = look
-    for _, file in ipairs({ "Window.lua", "Profile.lua", "Notice.lua", "Inspect.lua", "Options.lua",
-            "Classic/Classic.lua", "Classic/Cards.lua", "Classic/Window.lua", "Classic/Letters.lua",
-            "Classic/Notice.lua", "Classic/Sheets.lua" }) do
-        assert(loadfile(W.dir .. file))("Grudgekeeper", GK)
-    end
-    GK.called = {}
-    for _, name in ipairs({ "OpenWindow", "ToggleWindow", "ShowPoster", "ShowRecord", "ShowCard", "OpenLetters",
-            "ShowLetter", "CloseLetters", "NoticeUpdate", "PlaceNotice", "Warn", "OpenPost", "OpenNoteSheet" }) do
-        GK[name] = function(...) GK.called[#GK.called + 1] = name end   -- the ledger's, stood in for
-    end
-    GK.built, GK.filled = 0, 0
-    GK.BuildCardPage = function() GK.built = GK.built + 1 end     -- the ledger's page for the Inspect tab
-    GK.FillCardPage = function() GK.filled = GK.filled + 1 end
-    GK.PosterCard = function() return CARD end
-    GK.RecordCard = function() return CARD end
-    GK.Sound = function() end
-    local sorted = 0
-    GK.LedgerPages = {}
-    for i = 1, 6 do
-        local page = { name = "Page" .. i, sortable = i == 1, side = i > 4 and "right" or nil }
-        page.items = function()
-            local items = { { header = true, name = "Group" } }
-            for n = 1, 3 do
-                items[#items + 1] = { key = "k" .. n, name = (n == 2 and "Beta" or "Alpha") .. n, sub = "sub" .. n,
-                    face = { c = "MAGE" }, right = "5g", ts = n, select = { kind = "card", make = function() return CARD end } }
-            end
-            return items, "Nothing here."
-        end
-        if i == 2 then
-            page.links = function()
-                return { { text = "This week", on = true, click = function() end },
-                         { text = "All time", on = false, click = function() sorted = sorted + 1 end } }
-            end
-        end
-        GK.LedgerPages[i] = page
-    end
-    GK.Classic.Apply()
-    return GK
-end
-
-local function visible(name) return _G[name] and _G[name].shown end
-
-test("classic: every wrapped function calls the ledger's own while the look is the ledger", function()
-    local GK = bootClassic("ledger")
-    GK.OpenWindow(1)
-    GK.ShowCard(function() return CARD end)
-    GK.OpenPost({ key = GANK })
-    GK.NoticeUpdate(false)
-    eq(#GK.called, 4)
-    eq(GK.called[1], "OpenWindow")
-    eq(visible("GrudgekeeperClassicWindow"), nil)
-    eq(visible("GrudgekeeperClassicCard"), nil)
-    eq(GK.IsClassic(), false)
-end)
-
-test("classic: the window lists the rows, headers included, and shows the chosen row's card", function()
-    local GK = bootClassic("classic")
-    GK.OpenWindow(1)
-    local win = _G.GrudgekeeperClassicWindow
-    eq(win.shown, true)
-    eq(#win.box.provided, 4)
-    eq(win.box.rows[1].name.text, "Group")
-    eq(win.box.rows[2].name.text, "Alpha1")
-    eq(win.box.rows[2].sub.text, "sub1")
-    eq(win.box.rows[2].right.text, "5g")
-    eq(win.detail.view.title.text, "WANTED")
-    eq(win.detail.view.name.text, "Gank Master")
-    eq(win.detail.view.buttons[1].text, "Take the order")
-    eq(win.sort.shown, true)
-    eq(win.mine.shown, true)
-    eq(win.numTabs, 6)
-    eq(win.selectedTab, 1)
-    eq(#GK.called, 0)
-end)
-
-test("classic: the search box filters by name and sub, and a click on a row chooses it", function()
-    local GK = bootClassic("classic")
-    GK.OpenWindow(1)
-    local win = _G.GrudgekeeperClassicWindow
-    win.search.text = "beta"
-    win.search.hooks.OnTextChanged()
-    eq(#win.box.provided, 1)
-    eq(win.box.rows[1].name.text, "Beta2")
-    win.search.text = "sub3"
-    win.search.hooks.OnTextChanged()
-    eq(win.box.rows[1].name.text, "Alpha3")
-    win.search.text = "nobody"
-    win.search.hooks.OnTextChanged()
-    eq(win.empty.text, "No matches.")
-    win.search.text = ""
-    win.search.hooks.OnTextChanged()
-    F.click(win.box.rows[3])
-    eq(win.box.rows[3].locked, true, "the clicked row is the highlighted one")
-end)
-
-test("classic: sort and Mine only act on the sortable page and sit out the others", function()
-    local GK = bootClassic("classic")
-    GK.OpenWindow(1)
-    local win = _G.GrudgekeeperClassicWindow
-    GK.db.sortMode = "newest"
-    GK.OpenWindow(1)
-    eq(win.box.rows[1].name.text, "Alpha3", "newest first, headers dropped")
-    eq(#win.box.provided, 3)
-    GK.db.mineOnly = true
-    GK.OpenWindow(1)
-    eq(#win.box.provided, 0, "none of the rows is mine")
-    eq(win.empty.text, "Nothing of yours here.")
-    GK.OpenWindow(2)
-    eq(win.sort.shown, false)
-    eq(win.mine.shown, false)
-    eq(#win.box.provided, 4, "other pages keep their own order")
-    eq(win.links[1].text, "This week")
-    eq(win.links[1].enabled, false, "the chosen link is the one that does nothing")
-    eq(win.links[2].enabled, true)
-end)
-
-test("classic: the tabs are the pages, the ones with side = right in the right group", function()
-    local GK = bootClassic("classic")
-    GK.OpenWindow(5)
-    local win = _G.GrudgekeeperClassicWindow
-    eq(#win.tabs, 6)
-    eq(win.tabs[5].text, "Page5")
-    eq(win.selectedTab, 5)
-    F.click(win.tabs[3])
-    eq(win.selectedTab, 3)
-    eq(win.tabs[4].side, nil)
-    eq(win.tabs[5].side, "right")
-end)
-
-test("classic: a card opens in its own frame and a ledger one is hidden when the look changes", function()
-    local GK = bootClassic("ledger")
-    local ledger = CreateFrame("Frame", "GrudgekeeperFrame")
-    ledger:Show()
-    GK.ShowCard(function() return CARD end)
-    GK.Classic.SetLook("classic")
-    eq(ledger.shown, false, "the ledger's window is hidden")
-    GK.ShowCard(function() return CARD end)
-    local card = _G.GrudgekeeperClassicCard
-    eq(card.shown, true)
-    GK.Classic.SetLook("ledger")
-    eq(card.shown, false, "the classic card is hidden")
-    eq(GK.db.look, "ledger")
-end)
-
-test("classic: a letter shows its content, buttons and place in the pile", function()
-    local GK = bootClassic("classic")
-    table.insert(GK.char.letters, { id = 1, kind = "kill", n = GANK, p = 2, of = 1, total = 5, t = W.base, read = false })
-    table.insert(GK.char.letters, { id = 2, kind = "expired", n = GANK, t = W.base, read = false })
-    eq((GK.Unread()), 2)
-    GK.OpenLetters()
-    local f = _G.GrudgekeeperClassicLetter
-    eq(f.shown, true)
-    eq(f.title.text, "Blood drawn")
-    eq(f.page.text, "1 of 2")
-    eq(f.buttons[1].text, "Leaderboard")
-    eq(f.buttons[2].shown, false)
-    eq(GK.char.letters[1].read, true)
-    F.click(f.next)
-    eq(f.title.text, "Order expired")
-    eq(f.page.text, "2 of 2")
-    eq(f.buttons[1].text, "Post it again")
-    GK.CloseLetters()
-    eq(f.shown, false)
-end)
-
-test("classic: the letter on show stays the same letter when the pile shifts, and a gone one is read the usual way", function()
-    local GK = bootClassic("classic")
-    for id = 1, 3 do
-        table.insert(GK.char.letters, { id = id, kind = "expired", n = GANK, t = W.base, read = false })
-    end
-    GK.ShowLetter(2)
-    local f = _G.GrudgekeeperClassicLetter
-    eq(f.page.text, "2 of 3")
-    -- a new letter pushes the oldest out: the one on show moves from second place to first
-    table.remove(GK.char.letters, 1)
-    table.insert(GK.char.letters, { id = 4, kind = "expired", n = GANK, t = W.base, read = false })
-    W.LIB.Fire("GRUDGEKEEPER_CHANGED")
-    eq(f.page.text, "1 of 3", "letter 2 is first in the pile now")
-    eq(GK.char.letters[3].read, false, "the new letter was not shown, so not read")
-    -- the letter on show itself drops out: what takes its place is shown and read
-    table.remove(GK.char.letters, 1)
-    W.LIB.Fire("GRUDGEKEEPER_CHANGED")
-    eq(f.page.text, "1 of 2")
-    eq(GK.char.letters[1].read, true, "the replacement is read")
-    eq(GK.char.letters[2].read, false)
-    -- an empty pile closes the window
-    GK.char.letters = {}
-    W.LIB.Fire("GRUDGEKEEPER_CHANGED")
-    eq(f.shown, false)
-end)
-
-test("classic: the window's card follows the search, and goes when nothing matches", function()
-    local GK = bootClassic("classic")
-    GK.LedgerPages[1].items = function()
-        local items = { { header = true, name = "Group" } }
-        for n = 1, 3 do
-            local name = (n == 2 and "Beta" or "Alpha") .. n
-            items[#items + 1] = { key = "k" .. n, name = name, sub = "sub" .. n, face = { c = "MAGE" }, ts = n,
-                select = { kind = "card", make = function() return { title = "T", name = "Card " .. name, lines = {} } end } }
-        end
-        return items, "Nothing here."
-    end
-    GK.OpenWindow(1)
-    local win = _G.GrudgekeeperClassicWindow
-    eq(win.detail.view.name.text, "Card Alpha1", "the page's pick")
-    F.click(win.box.rows[4])
-    eq(win.detail.view.name.text, "Card Alpha3")
-    win.search.text = "beta"
-    win.search.hooks.OnTextChanged()
-    eq(win.box.rows[1].name.text, "Beta2")
-    eq(win.detail.view.name.text, "Card Beta2", "Alpha3 is not in the list: its card is not on show")
-    win.search.text = "nobody"
-    win.search.hooks.OnTextChanged()
-    eq(win.detail.view.shown, false, "no card without a row")
-    win.search.text = "alpha"
-    win.search.hooks.OnTextChanged()
-    eq(win.detail.view.name.text, "Card Alpha3", "the choice survives a search that keeps it")
-    win.search.text = ""
-    win.search.hooks.OnTextChanged()
-    eq(win.detail.view.name.text, "Card Alpha3")
-end)
-
-test("classic: a page's own default row is shown in a search only if the search leaves it", function()
-    local GK = bootClassic("classic")
-    local page = GK.LedgerPages[1]
-    local items = page.items
-    page.items = function()
-        local rows = items()
-        for _, it in ipairs(rows) do
-            local name = it.name
-            it.select = { kind = "card", make = function() return { title = "T", name = "Card " .. name, lines = {} } end }
-        end
-        return rows, "Nothing here."
-    end
-    -- like Grudges' record of me: a row of its own, not one of the list
-    page.default = function()
-        return { key = "me", select = { kind = "card", make = function() return { title = "T", name = "Me", lines = {} } end } }
-    end
-    GK.OpenWindow(1)
-    local win = _G.GrudgekeeperClassicWindow
-    eq(win.detail.view.name.text, "Me", "no search: the page's own pick")
-    win.search.text = "beta"
-    win.search.hooks.OnTextChanged()
-    eq(win.detail.view.name.text, "Card Beta2", "the default is not among the matches")
-    win.search.text = "nobody"
-    win.search.hooks.OnTextChanged()
-    eq(win.detail.view.shown, false, "and nothing at all when nothing matches")
-    win.search.text = ""
-    win.search.hooks.OnTextChanged()
-    eq(win.detail.view.name.text, "Me")
-end)
-
-test("classic: an Inspect page built before the look was on gets its cover when it is filled", function()
-    local GK = bootClassic("classic")
-    local page = CreateFrame("Frame")
-    local refilled = function() end
-    page.refill = refilled                  -- as the ledger's BuildCardPage leaves it; ours never saw it built
-    eq(page.classic, nil)
-    GK.FillCardPage(page, CARD)
-    eq(GK.filled, 0)
-    assert(page.classic, "the cover was made")
-    eq(page.classic.shown, true)
-    eq(page.classic.refill, refilled)
-    eq(page.classic.view.title.text, "WANTED")
-    -- the ledger look leaves a page alone
-    GK.db.look = "ledger"
-    local other = CreateFrame("Frame")
-    GK.FillCardPage(other, CARD)
-    eq(other.classic, nil)
-    eq(GK.filled, 1)
-end)
-
-test("classic: Apply wraps once however often it runs", function()
-    local GK = bootClassic("classic")
-    local before = GK.OpenWindow
-    GK.Classic.Apply()
-    GK.Classic.Apply()
-    eq(GK.OpenWindow, before, "no second wrapper")
-    GK.OpenWindow(1)
-    eq(#GK.called, 0, "the classic version ran once and not the original")
-    GK.db.look = "ledger"
-    GK.OpenWindow(1)
-    eq(#GK.called, 1)
-end)
-
-test("classic: the letter icon shows the unread count, in place of the parchment one", function()
-    local GK = bootClassic("classic")
-    local old = CreateFrame("Button", "GrudgekeeperNotice")
-    old:Show()
-    GK.NoticeUpdate(false)
-    eq(visible("GrudgekeeperClassicNotice"), false, "nothing to read")
-    table.insert(GK.char.letters, { id = 1, kind = "slain", n = GANK, t = W.base, read = false })
-    GK.NoticeUpdate(true)
-    local btn = _G.GrudgekeeperClassicNotice
-    eq(btn.shown, true)
-    eq(btn.count.text, 1)
-    eq(old.shown, false)
-    F.click(btn)
-    eq(GK.char.letters[1].read, true, "a click reads the pile")
-    GK.PlaceNotice()
-    eq(btn.line.text, "Drag me - click when done")
-end)
-
-test("classic: a warning is a chat line and a glow, or the original's when the style is the raid warning", function()
-    local GK = bootClassic("classic")
-    W.printed = {}
-    GK.Warn("Gank is near!", true)
-    assert(W.printed[1] and W.printed[1]:find("Gank is near!", 1, true), "said it in chat")
-    eq(_G.GrudgekeeperClassicNotice.shown, true)
-    eq(#GK.called, 0, "the ledger's warning stayed out of it")
-    GK.db.alertStyle = "raid"
-    GK.Warn("Again", true)
-    eq(GK.called[#GK.called], "Warn")
-end)
-
-test("classic: the kill order sheet is filled from the plan and seals through PostSubmit", function()
-    local GK = bootClassic("classic")
-    local posted
-    function GK.PostOrder(t, copper, note) posted = { t, copper, note } return { key = "o" } end
-    GK.OpenPost({ key = GANK, c = "MAGE", l = 60 })
-    local f = _G.GrudgekeeperClassicPost
-    eq(f.shown, true)
-    eq(f.small.text, "No gold is taken now. Whoever fulfils the order is owed the bounty, and you pay them by mail. "
-        .. "The order runs for a week.")
-    eq(f.seal.text, "Seal it")
-    f.gold.text = "5"
-    f.silver.text = "20"
-    f.note.text = "camper"
-    F.click(f.seal)
-    eq(posted[2], 52000)
-    eq(posted[3], "camper")
-    eq(f.shown, false)
-    eq(_G.GrudgekeeperClassicWindow.shown, true, "sealing opens the hitlist, in this look")
-end)
-
-test("classic: the note sheet saves through WriteNote with the list and the tag", function()
-    local GK = bootClassic("classic")
-    local written
-    -- NotesUI.lua's, which loads before the Classic files in the TOC; its own tests cover what it does
-    GK.WriteNote = function(t, list, text, tag) written = { t, list, text, tag } return true end
-    GK.KnownTags = function() return { "Toxic" } end
-    local target = { key = GANK, c = "MAGE", r = "Orc", l = 60 }
-    GK.OpenNoteSheet(target, "watch")
-    local f = _G.GrudgekeeperClassicNote
-    eq(f.shown, true)
-    eq(f.list.text, "Shame")
-    f.tag.text = "Toxic"
-    f.text.text = "rude in chat"
-    F.click(f.save)
-    eq(written[1], target)
-    eq(written[2], "watch")
-    eq(written[3], "rude in chat")
-    eq(written[4], "Toxic")
-    eq(f.shown, false)
-    -- a list alone is something to write: the sheet doesn't stop it, WriteNote decides
-    GK.OpenNoteSheet({ key = GANK }, "kudos")
-    f.text.text = ""
-    F.click(f.save)
-    eq(written[2], "kudos")
-    eq(written[3], "")
-    eq(f.shown, false)
-    -- a list that isn't one is Marked, as in the ledger's sheet
-    GK.OpenNoteSheet({ key = GANK }, "bogus")
-    F.click(f.save)
-    eq(written[2], "kos")
-    -- and a refusal keeps the sheet open and says why
-    GK.WriteNote = function() return nil, "Write something, pick a tag or pick a list." end
-    GK.OpenNoteSheet({ key = GANK }, "kos")
-    W.printed = {}
-    F.click(f.save)
-    eq(f.shown, true, "it stays open when the note was refused")
-    assert(W.printed[1]:find("Write something", 1, true), "said why")
-end)
-
-test("classic: the setting and /grudge classic switch the look", function()
-    local GK = bootClassic("ledger")
-    local section = GK.OptionSections[#GK.OptionSections]
-    local clicked
-    local box = CreateFrame("CheckButton")
-    local helpers = { Section = function() return {} end, Box = function(_, _, _, onClick) clicked = onClick return box end }
-    eq(section({}, {}, helpers), box)
-    eq(box.checked, false)
-    clicked(true)
-    eq(GK.db.look, "classic")
-    clicked(false)
-    eq(GK.db.look, "ledger")
-    SlashCmdList.GRUDGEKEEPER("classic")
-    eq(GK.db.look, "classic")
-    SlashCmdList.GRUDGEKEEPER("classic")
-    eq(GK.db.look, "ledger")
-    SlashCmdList.GRUDGEKEEPER("letters")
-    eq(GK.called[#GK.called], "OpenLetters", "anything else goes to the original")
-end)
-
-test("classic: the Inspect page gets a card of ours over the ledger's while the look is classic", function()
-    local GK = bootClassic("classic")
-    local page = CreateFrame("Frame")
-    GK.BuildCardPage(page, {}, function() end)
-    eq(GK.built, 1)
-    GK.FillCardPage(page, CARD)
-    eq(GK.filled, 0, "the ledger's page is not filled")
-    eq(page.classic.shown, true)
-    eq(page.classic.view.title.text, "WANTED")
-    GK.db.look = "ledger"
-    GK.FillCardPage(page, CARD)
-    eq(GK.filled, 1)
-    eq(page.classic.shown, false)
-end)
-
--- ---------------------------------------------------------------------------
 -- Telling the guild what the import made
 -- ---------------------------------------------------------------------------
 test("NotesBroadcast sends my own records two a second, never someone else's, never in test mode", function()
@@ -1702,49 +1136,12 @@ test("a removed mark outlives its 30 days while its author still has a live note
     eq(GK.Person(GANK), nil, "with no note left it goes, mark and all")
 end)
 
-test("nice names: the earliest addition owns the name, the same on every client", function()
-    local function owner(first, second)
-        local GK = boot()
-        for _, m in ipairs({ first, second }) do W.receive(GK, m[1], msg("M", 1, NICE, m[2])) end
-        return GK, GK.Store().names[NICE].by
-    end
-    local a = { KARI, B + 10 }
-    local b = { EDVARD, B + 5 }
-    eq(select(2, owner(a, b)), EDVARD)
-    eq(select(2, owner(b, a)), EDVARD)
-    -- the same second: the lower key
-    local c, d = { KARI, B + 7 }, { EDVARD, B + 7 }
-    eq(select(2, owner(c, d)), EDVARD)
-    eq(select(2, owner(d, c)), EDVARD)
-    -- a later message from the loser is ignored, and only the owner removes the name
-    local GK = owner(a, b)
-    W.receive(GK, KARI, msg("M", 1, NICE, B + 50))
-    eq(GK.Store().names[NICE].by, EDVARD)
-    W.receive(GK, KARI, msg("M", 1, NICE, B + 60, 1))
-    eq(GK.Store().names[NICE].del, nil, "not hers to remove")
-    W.receive(GK, EDVARD, msg("M", 1, NICE, B + 70, 1))
-    eq(GK.Store().names[NICE].del, true)
-end)
-
-test("nice names: a new owner's own vote on the name stops counting", function()
-    local GK = boot()
-    W.receive(GK, KARI, msg("M", 1, NICE, B + 10))
-    W.receive(GK, EDVARD, msg("G", 1, NICE, 1, B + 11))
-    eq(GK.NameScore(NICE), 1)
-    W.receive(GK, EDVARD, msg("M", 1, NICE, B + 5))
-    eq(GK.Store().names[NICE].by, EDVARD)
-    eq(GK.NameScore(NICE), 0)
-end)
-
-test("votes that beat their note or name wait for it, a few and for ten minutes", function()
+test("votes that beat their note wait for it, a few and for ten minutes", function()
     local GK = boot()
     W.receive(GK, EDVARD, msg("V", 1, GANK, KARI, 7, 1, B + 3))
     eq(GK.Person(GANK), nil, "a vote makes no player")
     W.receive(GK, KARI, msg("N", 1, GANK, 7, B + 1, "", "", "", "", "", "ninja"))
     eq(GK.NoteScore(GANK, KARI, 7), 1, "applied when the note came")
-    W.receive(GK, EDVARD, msg("G", 1, NICE, -1, B + 3))
-    W.receive(GK, KARI, msg("M", 1, NICE, B + 1))
-    eq(GK.NameScore(NICE), -1)
     -- too late
     W.receive(GK, EDVARD, msg("V", 1, "Slow-Realm", KARI, 7, 1, B + 3))
     W.advance(11 * 60)
@@ -1760,65 +1157,12 @@ test("votes that beat their note or name wait for it, a few and for ten minutes"
     eq(applied, 200)
 end)
 
-test("nice names: every author's part is their own, and a backdated one takes nothing", function()
-    local GK = boot()
-    W.receive(GK, EDVARD, msg("M", 1, NICE, B + 10, "", "PRIEST"))
-    -- Kari sends an addition from before Edvard's, then removes hers
-    W.receive(GK, KARI, msg("M", 1, NICE, B + 1, "", "MAGE"))
-    eq(GK.Store().names[NICE].by, KARI, "the earliest part is the one shown")
-    W.receive(GK, KARI, msg("M", 1, NICE, B + 2, 1))
-    local n = GK.Store().names[NICE]
-    eq(n.del, nil, "Edvard's part is untouched")
-    eq(n.by, EDVARD)
-    eq(n.c, "PRIEST")
-    -- a stale addition can't undo a later one: Kari adds at 10, removes at 20, Edvard adds at 30
-    local GK2 = boot()
-    W.receive(GK2, KARI, msg("M", 1, NICE, B + 10))
-    W.receive(GK2, KARI, msg("M", 1, NICE, B + 20, 1))
-    W.receive(GK2, EDVARD, msg("M", 1, NICE, B + 30))
-    W.receive(GK2, KARI, msg("M", 1, NICE, B + 10))
-    eq(GK2.Store().names[NICE].by, EDVARD)
-    eq(GK2.Store().names[NICE].adds[KARI].del, true)
-    -- removing mine leaves hers
-    local GK3 = boot()
-    W.advance(11)
-    GK3.AddNiceName(NICE)
-    W.receive(GK3, KARI, msg("M", 1, NICE, B + 500))
-    W.takeSent()
-    eq(GK3.RemoveNiceName(NICE), true)
-    eq(GK3.Store().names[NICE].del, nil)
-    eq(GK3.Store().names[NICE].by, KARI)
-    eq(GK3.RemoveNiceName(NICE), false, "nothing of mine left to remove")
-    eq(#GK3.NiceNames(), 1)
-end)
-
-test("nice names: a store from before (one owner in `by`) is read as that author's part", function()
-    local GK = boot()
-    local s = GK.Store()
-    s.names = s.names or {}
-    s.names[NICE] = { by = KARI, ts = B + 5, c = "PRIEST" }
-    s.namesByAuthor = nil
-    local rows = GK.NiceNames()
-    eq(#rows, 1)
-    eq(rows[1].by, KARI)
-    eq(GK.Store().names[NICE].adds[KARI].ts, B + 5)
-    eq(GK.Store().names[NICE].adds[KARI].c, "PRIEST")
-    s.names["Gone-Realm"] = { by = KARI, ts = B, del = true }
-    s.namesByAuthor = nil
-    eq(#GK.NiceNames(), 1)
-    eq(GK.Store().names["Gone-Realm"].adds[KARI].del, true)
-end)
-
 test("held votes keep the newest per voter, and an old copy does not keep them alive", function()
     local GK = boot()
     W.receive(GK, EDVARD, msg("V", 1, GANK, KARI, 7, 1, B + 200))
     W.receive(GK, EDVARD, msg("V", 1, GANK, KARI, 7, -1, B + 100))
     W.receive(GK, KARI, msg("N", 1, GANK, 7, B + 1, "", "", "", "", "", "ninja"))
     eq(GK.NoteScore(GANK, KARI, 7), 1, "the later vote, not the older copy")
-    W.receive(GK, EDVARD, msg("G", 1, NICE, 1, B + 200))
-    W.receive(GK, EDVARD, msg("G", 1, NICE, -1, B + 100))
-    W.receive(GK, KARI, msg("M", 1, NICE, B + 1))
-    eq(GK.NameScore(NICE), 1)
     -- an older copy later on doesn't renew the wait
     W.receive(GK, EDVARD, msg("V", 1, "Slow-Realm", KARI, 7, 1, B + 200))
     W.advance(9 * 60)
@@ -1828,14 +1172,11 @@ test("held votes keep the newest per voter, and an old copy does not keep them a
     eq(GK.NoteScore("Slow-Realm", KARI, 7), 0, "it expired ten minutes after the first")
 end)
 
-test("held votes are applied when the player or name is made here or by the import", function()
+test("held votes are applied when the player is made here or by the import", function()
     local GK = boot()
     W.receive(GK, EDVARD, msg("V", 1, GANK, KARI, 7, 1, B + 3))
-    W.receive(GK, EDVARD, msg("G", 1, NICE, -1, B + 3))
     GK.AddNote(GANK, "my own note")
     eq(GK.NoteScore(GANK, KARI, 7), 1, "a note of mine made the player")
-    GK.AddNiceName(NICE)
-    eq(GK.NameScore(NICE), -1, "a name of mine made the name")
     -- the import
     local IM = "Meyer Self-Realm"
     local GK2 = boot({ me = IM, guildGrudge = sampleDB() })
@@ -1944,30 +1285,6 @@ test("a vote on an imported note is kept here and never sent", function()
     eq(#W.takeSent(), 1, "an ordinary one is")
 end)
 
-test("hide and show at the same second settle the same way on every client", function()
-    local function run(first, second)
-        local GK, LIB = boot()
-        LIB.roster[KARI] = { rankIndex = 0 }
-        LIB.roster[EDVARD] = { rankIndex = 0 }
-        W.receive(GK, KARI, msg("M", 1, NICE, B))
-        W.receive(GK, first[1], msg("H", 1, NICE, first[2], B + 10))
-        W.receive(GK, second[1], msg("H", 1, NICE, second[2], B + 10))
-        return GK.Store().names[NICE].hidden
-    end
-    local a, b = { EDVARD, 1 }, { KARI, 0 }
-    local h1, h2 = run(a, b), run(b, a)
-    eq(h1.by, h2.by)
-    eq(h1.on, h2.on)
-    eq(h1.by, KARI, "the higher key")
-    -- a later time still beats a higher key
-    local GK, LIB = boot()
-    LIB.roster[KARI] = { rankIndex = 0 }
-    LIB.roster[EDVARD] = { rankIndex = 0 }
-    W.receive(GK, KARI, msg("H", 1, NICE, 1, B + 10))
-    W.receive(GK, EDVARD, msg("H", 1, NICE, 0, B + 11))
-    eq(GK.Store().names[NICE].hidden.by, EDVARD)
-end)
-
 -- ---------------------------------------------------------------------------
 -- The ledger side: NotesUI.lua, against stand-ins for the files it builds on (tests/ui_mock.lua)
 -- ---------------------------------------------------------------------------
@@ -2000,13 +1317,13 @@ local function labels(node)
     return table.concat(out, "|")
 end
 
-test("the four list pages: Marked between Grudges and News, the rest on the right, none with links", function()
+test("the three list pages: Marked between Grudges and News, the rest on the right, none with links", function()
     local GK = bootUI()
-    eq(#GK.LedgerPages, 8)
-    local want = { { "Marked", nil, 4 }, { "Shame", "right", 6 }, { "Kudos", "right", 7 }, { "Names", "right", 8 } }
+    eq(#GK.LedgerPages, 7)
+    local want = { { "Marked", nil, 4 }, { "Shame", "right", 6 }, { "Kudos", "right", 7 } }
     local order = {}
     for i, page in ipairs(GK.LedgerPages) do order[i] = page.name end
-    eq(table.concat(order, "|"), "Kill orders|Leaderboard|Grudges|Marked|News|Shame|Kudos|Names")
+    eq(table.concat(order, "|"), "Kill orders|Leaderboard|Grudges|Marked|News|Shame|Kudos")
     for _, w in ipairs(want) do
         local page = GK.LedgerPages[w[3]]
         eq(page.name, w[1])
@@ -2017,7 +1334,6 @@ test("the four list pages: Marked between Grudges and News, the rest on the righ
     end
     for i = 1, 5 do eq(GK.LedgerPages[i].side, nil) end
     eq(GK.LedgerPages[4].headings[1][1], "Player")
-    eq(GK.LedgerPages[8].headings[1][1], "Nice name")
     eq(GK.db.notesList, nil, "the list is not a setting any more")
 end)
 
@@ -2031,7 +1347,7 @@ test("GK.OpenNotes opens the page of the list", function()
     GK.OpenNotes("kudos")
     eq(W2.opened, 7)
     GK.OpenNotes("names")
-    eq(W2.opened, 8)
+    eq(W2.opened, 4, "the nice names' page is gone: Marked, as for any unknown list")
     GK.OpenNotes("somewhere")
     eq(W2.opened, 4, "an unknown list is kos")
 end)
@@ -2092,31 +1408,6 @@ test("the page's rows: newest first, with tags, the newest note, the score and m
     eq(GK.LedgerPages[4].sub({ 1 }), "1 player marked")
     eq(GK.LedgerPages[6].sub(rows), "2 players on Shame")
     eq(#GK.LedgerPages[6].items(), 2)
-end)
-
-test("the Names list: hidden ones only for officers, and faded", function()
-    local GK, LIB = bootUI()
-    W.receive(GK, KARI, msg("M", 1, NICE, B + 1, "", "PRIEST", "Human", "Human", 3, 40))
-    W.receive(GK, KARI, msg("M", 1, "Silly Two-Realm", B + 2))
-    W.receive(GK, EDVARD, msg("G", 1, NICE, 1, B + 3))
-    LIB.roster["Master-Realm"] = { rankIndex = 0 }
-    W.receive(GK, "Master-Realm", msg("H", 1, "Silly Two-Realm", 1, B + 4))
-    local items, empty = GK.NotesItems("names")
-    eq(#items, 1)
-    eq(items[1].name, "Nina Nice")
-    eq(items[1].right, "+1")
-    eq(items[1].sub, "added by Kari")
-    eq(items[1].face.rf, "Human")
-    eq(items[1].faded, nil)
-    assert(empty:find("No nice names"), empty)
-    LIB.roster[ME] = { rankIndex = 0 }
-    items = GK.NotesItems("names")
-    eq(#items, 2)
-    eq(items[1].name, "Silly Two", "the newest first")
-    eq(items[1].faded, true)
-    eq(items[1].sub, "hidden - added by Kari")
-    eq(GK.LedgerPages[8].sub(items), "2 nice names in the guild's list")
-    eq(#GK.LedgerPages[8].items(), 2)
 end)
 
 test("a noted player's card: title, who put them where, the notes with their votes, the score", function()
@@ -2243,18 +1534,12 @@ end)
 test("Mine only keeps a row I voted on, and a vote taken back lets it go", function()
     local GK = bootUI()
     W.receive(GK, KARI, msg("N", 1, GANK, 1, B + 10, "", "", "ROGUE", "Orc", 60, "hers"))
-    W.receive(GK, KARI, msg("M", 1, NICE, B + 1))
     eq(GK.NotesItems("kos")[1].own, nil)
-    eq(GK.NotesItems("names")[1].own, nil)
     GK.VoteNote(GANK, KARI, 1, 1)
-    GK.VoteName(NICE, -1)
     eq(GK.NotesItems("kos")[1].own, true, "voted on the note")
-    eq(GK.NotesItems("names")[1].own, true, "voted on the name")
     eq(GK.NotesItems("kos")[1].mine, nil, "the tint is for what I wrote")
     GK.VoteNote(GANK, KARI, 1, 0)
-    GK.VoteName(NICE, 0)
     eq(GK.NotesItems("kos")[1].own, nil)
-    eq(GK.NotesItems("names")[1].own, nil)
 end)
 
 test("the note sheet and the small letter have frames of their own names", function()
@@ -2263,46 +1548,7 @@ test("the note sheet and the small letter have frames of their own names", funct
     file:close()
     assert(not source:find('"GrudgekeeperNote"', 1, true), "that name is the small letter's (Letters.lua)")
     local _, n = source:gsub('"GrudgekeeperNoteSheet"', "")
-    eq(n, 2, "the frame and its Escape entry")
-end)
-
-test("a nice name's card: who added it, the vote buttons, and the officer's hide", function()
-    local GK, LIB = bootUI()
-    W.receive(GK, KARI, msg("M", 1, NICE, B + 1, "", "PRIEST", "Human", "Human", 3, 40))
-    local d = GK.NameCard(NICE)
-    eq(d.title, "NICE NAME")
-    eq(d.name, "Nina Nice")
-    eq(d.lines[1], "Added by: Kari")
-    eq(d.big, "0")
-    eq(d.buttons[1][1], "Vote up")
-    eq(d.buttons[2][1], "More...")
-    d.buttons[1][2]()
-    eq(GK.NameScore(NICE), 1)
-    d = GK.NameCard(NICE)
-    eq(d.buttons[1][1], "Take back")
-    eq(d.big, "+1")
-    local root = fakeNode("root")
-    GK.NameMenu(root, NICE)
-    eq(labels(root), "Vote down|Take back my vote", "no hide: I am no officer")
-    LIB.roster[ME] = { rankIndex = 0 }
-    root = fakeNode("root")
-    GK.NameMenu(root, NICE)
-    eq(labels(root), "Vote down|Take back my vote|Hide for everyone")
-    kid(root, "Hide for everyone").fn()
-    d = GK.NameCard(NICE)
-    eq(d.lines[2], "Hidden: an officer hid it from the list.")
-    root = fakeNode("root")
-    GK.NameMenu(root, NICE)
-    assert(kid(root, "Show for everyone"))
-    LIB.roster[ME] = { rankIndex = 5 }
-    eq(GK.NameCard(NICE), nil, "hidden from a non-officer")
-    -- my own: remove, and no vote
-    GK.AddNiceName("Mine Funny-Realm")
-    d = GK.NameCard("Mine Funny-Realm")
-    eq(d.buttons[1][1], "Remove")
-    eq(d.buttons[2], nil, "nothing to put in More for my own name when I am no officer")
-    d.buttons[1][2]()
-    eq(GK.NameCard("Mine Funny-Realm"), nil)
+    eq(n, 1, "the frame's name, given to GK.MakeSheet (Letters.lua), which also puts it on Escape")
 end)
 
 test("the poster and the record get at most two lines about notes, and never more than nine in all", function()
@@ -2389,10 +1635,7 @@ test("slash parsing: names are two words, and a note's own words are not taken f
     r = P("kudos", "", KARI, known)
     eq(r.key, KARI)
     eq(select(1, P("watch", "", nil, known)), nil)
-    r = P("nice", "Funny Name", KARI, known)
-    eq(r.key, "Funny Name-Realm")
-    eq(P("nice", "", KARI, known).key, KARI)
-    eq(select(1, P("nice", "one", nil, known)), nil)
+    eq(select(1, P("nice", "Funny Name", KARI, known)), nil, "the nice names' command is gone")
     r = P("move", "Gank Master Watch", nil, known)
     eq(r.key, GANK)
     eq(r.list, "watch")
@@ -2425,20 +1668,14 @@ test("/grudge: our subcommands act, everything else is Core's, and the help grow
     slash("move Nina Nice none")
     eq(GK.MyMark(NICE), nil)
     W.units.target = nil
-    slash("nice Funny Name")
-    assert(GK.Store().names["Funny Name-Realm"], "a nice name")
-    slash("nice Funny Name")
-    assert(W.printed[#W.printed]:find("already"), W.printed[#W.printed])
     slash("notes")
     eq(W2.opened, 4, "Marked")
     slash("watch")
     eq(W2.opened, 6)
     slash("kudos")
     eq(W2.opened, 7)
-    slash("names")
-    eq(W2.opened, 8)
     slash("watch Nina Nice")
-    eq(W2.opened, 8, "with a name, watch adds")
+    eq(W2.opened, 7, "with a name, watch adds")
     eq(GK.MyMark(NICE), "watch")
     slash("note")
     assert(W.printed[#W.printed]:find("Usage: /grudge note"), W.printed[#W.printed])
@@ -2465,26 +1702,6 @@ test("/gg is ours only when Guild Grudge isn't loaded", function()
     eq(SLASH_GRUDGEKEEPERGG1, "/gg")
     SlashCmdList.GRUDGEKEEPERGG("watch Nina Nice")
     eq(GK2.MyMark(NICE), "watch", "it forwards")
-end)
-
-test("the alert style: a raid warning with its sound and a chat line, or the scroll", function()
-    local GK = bootUI()
-    local W2 = require("wow_mock")
-    GK.Warn("Gank is near!", true)
-    eq(#W2.raid, 0, "scroll is the default: the original ran")
-    eq(#W2.warned, 1, "...the stand-in for Notice.lua")
-    GK.db.alertStyle = "raid"
-    GK.Warn("Gank is near!", true)
-    eq(#W2.warned, 1, "the original is not called")
-    eq(#W2.raid, 1)
-    eq(W2.raid[1].text, "Gank is near!")
-    eq(W2.raid[1].colour, ChatTypeInfo.RAID_WARNING)
-    eq(W2.played[1], 8959)
-    assert(W.printed[#W.printed]:find(GK.TAG, 1, true) and W.printed[#W.printed]:find("Gank is near!", 1, true))
-    GK.db.sound = false
-    GK.Warn("again", true)
-    eq(#W2.played, 1, "no sound when sounds are off")
-    eq(#W2.raid, 2)
 end)
 
 test("the tooltip: an enemy's Grudge line gets the notes, anyone else gets a line of their own", function()
@@ -2586,6 +1803,8 @@ end)
 test("joining the group: Shame warns with the tag, Kudos says one green line, each once", function()
     local GK, LIB = bootUI()
     local W2 = require("wow_mock")
+    eq(GK.db.kudosGroup, false, "the Kudos chat line is off unless asked for")
+    GK.db.kudosGroup = true
     W.receive(GK, KARI, msg("N", 1, GANK, 1, B, "", "Ninja looter", "", "", "", "x"))
     W.receive(GK, KARI, msg("L", 1, GANK, "watch", B))
     W.receive(GK, KARI, msg("L", 1, NICE, "kudos", B))
@@ -2638,7 +1857,7 @@ test("the right-click menu: a submenu for any player but a mob or myself, with t
     menu(nil, root, { unit = "mouseover" })
     local sub = kid(root, "Grudgekeeper notes")
     assert(sub)
-    eq(labels(sub), "Add a note|Shame list|Kudos|Add to nice names", "no Their notes: nobody wrote about them")
+    eq(labels(sub), "Add a note|Shame list|Kudos", "no Their notes: nobody wrote about them")
     eq(#kid(sub, "Shame list").kids, #GK.TAGS.watch + 1)
     eq(kid(sub, "Shame list").kids[1].label, GK.TagText("Ninja looter"))
     eq(kid(sub, "Shame list").kids[#GK.TAGS.watch + 1].label, "No tag")
@@ -2650,8 +1869,6 @@ test("the right-click menu: a submenu for any player but a mob or myself, with t
     eq(GK.Person(GANK).c, "ROGUE", "learned from the unit")
     kid(sub, "Kudos").kids[#GK.TAGS.kudos + 1].fn()
     eq(GK.MyMark(GANK), "kudos", "No tag: just the mark")
-    kid(sub, "Add to nice names").fn()
-    assert(GK.Store().names[GANK])
     -- now they are noted
     root = fakeNode("root")
     menu(nil, root, { unit = "mouseover" })
@@ -2698,9 +1915,9 @@ test("the settings: defaults for every new setting, and a section for them", fun
     eq(GK.db.noteAlerts, false)
     eq(GK.db.watchNearby, false)
     eq(GK.db.watchGroup, true)
-    eq(GK.db.kudosGroup, true)
+    eq(GK.db.kudosGroup, false)
     eq(GK.db.plateNotes, true)
-    eq(GK.db.alertStyle, "scroll")
+    eq(GK.db.alertStyle, nil, "no raid-warning style")
     eq(#GK.OptionSections, 1)
 end)
 

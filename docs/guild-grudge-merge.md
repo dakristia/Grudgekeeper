@@ -9,6 +9,38 @@ notes, a Shame list for same-faction players to be careful with, a Kudos list fo
 of funny character names, votes, tags, sorting, a "mine only" filter and group-join warnings. Its
 bounties and bounty hunters are NOT brought over: kill orders and the leaderboard do that better.
 
+## As merged (2026-11-05)
+
+The owner merged this PR and trimmed it the same day. Where the rest of this document disagrees with
+this list, the list wins: the rest is the PR as it was written.
+
+- **Q1 yes** (friendly players are in scope). **Q2 no**: D2 stands, nobody relays anyone else's records.
+  **Q3**: two prefixes, as built.
+- **Q4 no: the Classic look is gone** - `Classic/`, its TOC lines, the `look` setting, `GK.LedgerCard`,
+  `tests/frames_mock.lua` and its tests. `GK.LetterContent`, `GK.PostPlan` and `GK.PostSubmit` (H6) stay:
+  the ledger draws from them.
+- **Q5 yes, as a gate**: `tools/test_grudgekeeper_notes.py` runs `tests/run.lua` in Lua 5.1 as part of
+  `python tools/check.py`, and fails when a test does (shown failing on a copy with one limit changed).
+- **Names (D7) left out, to the backlog** (`BACKLOG.md`), and with them the M, G and H messages and the
+  officer check (Q6 is moot). The code is at this PR's head, `ad2b348`. A client that still sends M, G or H
+  is ignored, and the import leaves Guild Grudge's names list behind.
+- **D13, the raid-warning alert style, left out**: Grudgekeeper's warnings stay the letter's red glow and
+  chime (letters, never popups). `GK.Warn` is no longer wrapped.
+- **The Kudos line on a group join is off by default** (`kudosGroup`): the owner doesn't read chat lines.
+- **`GK.Store()` makes `people` with the rest of the store.** Made by the first read instead, an empty one
+  turned up after the test panel had put the store back.
+- Our gates read the merged addon: the smoke test loads `Notes.lua`, `Import.lua` and `NotesUI.lua`, and its
+  menu stub keeps every `Menu.ModifyMenu` callback per tag, as the game does. `unknown_calls.py` skips
+  `tests/`, which isn't packaged. `Import.lua` no longer assigns to a for-loop variable, and the sort's
+  `Name` helper is `SortName`.
+- `.pkgmeta` leaves `docs/` out of the package too.
+- **D9 and H3 changed after the merge (2026-11-06)**: the sort dropdown and the buttons at the foot of the
+  page read as out of place to the owner. A page sorts by a click on a column heading (a heading's 4th field
+  names the item field, `GK.db.sortBy[page name]` keeps it, a second click clears it). Newest and Oldest are
+  gone: the list pages and the news are newest first already, kill orders go by the pot and grudges by
+  how much history. "Mine only" is "Only mine", an ink checkbox at the
+  foot of the page. Each page that adds has `add = { text, kind }`, which opens the who-picker (`Pick.lua`).
+
 ## How to read this document
 
 - **Decisions** (D1, D2, ...) are settled between the two authors' sides unless the owner says otherwise.
@@ -20,7 +52,8 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
 ## Decisions
 
 - **D1. Grudgekeeper's ledger is the default look.** Nothing about the book, its art or its behaviour
-  changes for a player who doesn't touch the new settings.
+  changes for a player who doesn't touch the new settings. (The book itself gave way to the game's frame
+  on 2026-11-06 - D18 - for everyone; that was the owner's own call, not the merge's.)
 - **D2. Each player sends only their own things.** This is Grudgekeeper's rule (Guild.lua header) and the
   notes follow it: your notes, your list marks, your votes, your nice names. Nobody edits or deletes
   another player's note. A client never re-sends someone else's data. See Q2 for what this costs.
@@ -36,7 +69,8 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
   with), and a player can type a custom one (at most 24 characters). Every preset has an icon (Ninja looter a
   rogue's stealth, Scammer a coin, Helpful a renew, and so on) and a custom tag gets a note. The data is in
   `Notes.lua`; `GK.TagIcon(tag)` gives the texture path and `GK.TagText(tag, size)` the `|T...|t Tag` text
-  that every place a tag is shown uses (rows, cards, tooltip, warnings, menus, the note sheet's tag links).
+  that every place a tag is shown uses (rows, cards, tooltip, warnings, menus). The note sheet draws the
+  icon and the words apart, so they can't overlap.
 - **D7. Nice names.** A guild-shared list of funny character names, with no notes, alerts or orders.
   Only the player who added a name can remove it (D2). The guild master and officers can **hide** a name
   for everyone, for cleanup; a hidden name is still in the data and can be shown again. See Q6.
@@ -81,6 +115,9 @@ bounties and bounty hunters are NOT brought over: kill orders and the leaderboar
   the friendly ones (**Shame**, **Kudos**, **Names**) over the right page. Marked is for an enemy you want to mark without a bounty or a
   history, e.g. a colleague on Horde. (This was Q7, "one Notes tab with a switch, or elsewhere?"; the
   owner tried it in the game and asked for tabs.) Folded, the row shows the active page's group plus a last tab, Friends or Enemies, that switches to the other group.
+  Since 2026-11-06 the ledger is a sheet of parchment in the game's own frame, not a book ("for mye
+  problemer med custom design med boka", the owner), and the tabs are the game's, under the frame: the
+  enemy's pages first, then the friendly ones a step apart. The groups and the folded row are as above.
 
 ## Questions for the owner
 
@@ -226,9 +263,13 @@ Known gaps:
   and the score, with Vote up (Take back once voted) and More... (Vote down, Remove for my own, and Hide /
   Show for everyone for officers).
 - The wanted poster and the record get up to two lines of their own about notes, never past nine lines.
-- The note sheet (`GK.OpenNoteSheet`) is one parchment: the list as three ink links, the tags of that list
-  as ink links, a box for your own tag, and a box for up to 200 letters. A list alone, or a tag alone, is
-  enough to write.
+- The note sheet (`GK.OpenNoteSheet`) is parchment in the game's own frame (`GK.MakeFrameSheet`, as the
+  who-picker; opened from the ledger it lies on it, is dragged with it and closes with it): the player's face and name at the head, the list as three radio buttons with their seals
+  (Marked black, Shame red, Kudos the gold laurel), the tags of that list as radio buttons with their icons
+  in two columns, a box for your own tag, a box for up to 200 letters, Save and Cancel. A list alone, or a
+  tag alone, is enough to write. The owner first had it as a parchment like the kill order's, then asked for
+  "blizz bars rundt og ikke scroll ... litt mer clean", then "med parchment bakgrunn" (2026-11-06); the kill
+  order stays a scroll.
 
 ## Data
 

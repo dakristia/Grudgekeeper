@@ -20,7 +20,10 @@ local MEDIA = "Interface\\AddOns\\Grudgekeeper\\Media\\"
 local TITLE_FONT = "Fonts\\MORPHEUS.ttf"
 local TEXT_FONT = "Fonts\\FRIZQT__.TTF"
 local CLASS_ICONS = "Interface\\TargetingFrame\\UI-Classes-Circles"
+local PORTRAIT_MASK = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
+local STAMP_ALPHA = 0.55                 -- a letter's stamp, under its writing (BuildScroll)
 local INK = { 0.22, 0.13, 0.05 }
+local FADED = { 0.35, 0.25, 0.15 }
 local BLOOD = { 0.47, 0.06, 0.04 }
 local W, BODY_H, ROLL_H = 300, 340, 32         -- the scroll
 local NW, NH = 540, 360                         -- the note: the frame's own 3:2, so it isn't stretched
@@ -426,7 +429,7 @@ local function NoteContent(L)
     return "Order expired", p, closing, "seal_black", false, action
 end
 
---- What a letter says, apart from how it is drawn (the Classic look draws the same, Classic/Letters.lua):
+--- What a letter says, apart from how it is drawn (FillScroll and FillNote draw from it):
 --- { note (a small letter, else the scroll), title, name, info, lines, foot, seal, stamp, blood, buttons =
 --- { { text, fn } }, c, rf, sx, key, sample }. name, info, foot and stamp are the scroll's only.
 function GK.LetterContent(L)
@@ -545,9 +548,12 @@ local function BuildScroll()
     f.seal = c:CreateTexture(nil, "OVERLAY")
     f.seal:SetSize(66, 66)
     f.seal:SetPoint("BOTTOMRIGHT", -24, 22)
-    f.stamp = c:CreateTexture(nil, "OVERLAY", nil, 2)
+    -- The stamp UNDER the writing and half faded, as ink stamped on paper: over it, at full strength, it
+    -- made the letter "vanskelig å lese" (the owner, 2026-11-06).
+    f.stamp = c:CreateTexture(nil, "BORDER", nil, 2)
     f.stamp:SetSize(210, 105)
     f.stamp:SetPoint("CENTER", 0, -30)
+    f.stamp:SetAlpha(STAMP_ALPHA)
 
     -- Up to two buttons, bottom left; the seal has the bottom right.
     f.buttons = {}
@@ -586,7 +592,7 @@ local function BuildScroll()
     grow:SetSmoothing("IN")
     local fade = slam:CreateAnimation("Alpha")
     fade:SetFromAlpha(0)
-    fade:SetToAlpha(1)
+    fade:SetToAlpha(STAMP_ALPHA)
     fade:SetDuration(0.08)
     local jolt = f:CreateAnimationGroup()
     for i, dx in ipairs({ 5, -9, 4 }) do
@@ -653,6 +659,19 @@ end
 --- button's side (what a click can hit); art: the cross's own side, smaller, so it sits inside a
 --- socket rather than over its rim (the preview of 2026-11-04 had it filling the hole). b.cross and
 -- b.glow are kept, for a caller whose socket changes size (the ledger, open and folded).
+--- The game's own close button (UIPanelCloseButton), for the note frame (letter_frame, GK.MakeNoteFrame),
+--- whose iron corner our cross clashed with. It sits on the bronze rivet of the top-right iron (measured
+--- from letter_frame.tga: 4.3% of the width in, 6.9% of the height down); at the frame's very corner it
+--- hung half off the iron ("litt lenger inn og ned", the owner, 2026-11-06). Its click is our own
+--- function: the template's HideUIPanel does nothing in combat when addon code calls it.
+function GK.MakeGameCloseButton(parent, onClick)
+    local b = CreateFrame("Button", nil, parent, "UIPanelCloseButton")
+    b:SetScript("OnClick", onClick)
+    b:SetFrameLevel(parent:GetFrameLevel() + 12)
+    b:SetPoint("CENTER", parent, "TOPRIGHT", -NW * 0.043, -NH * 0.069)
+    return b
+end
+
 function GK.MakeCloseButton(parent, size, onClick, art)
     art = art or size
     local b = CreateFrame("Button", nil, parent)
@@ -705,6 +724,419 @@ function GK.SetPortrait(tex, info)
     tex:SetTexture(MEDIA .. "mark")
     tex:SetTexCoord(0, 1, 0, 1)
     return "seal"
+end
+
+--- A round portrait in the bronze ring, for the ledger's rows and the sheets' heads alike. p:Set(face)
+--- dresses it (GK.SetPortrait), with a class crest on its shoulder beside a race's face.
+function GK.MakePortrait(parent, size)
+    local p = {}
+    p.tex = parent:CreateTexture(nil, "ARTWORK")
+    -- The ring's hole is 0.80 of it across and its band runs out to the edge (portrait_ring, measured
+    -- 2026-11-06). At 0.82 the face's masked circle - the game's mask has a soft edge - came out smaller
+    -- than the hole, and the page showed between face and ring ("glippe mellom ikonet og ramma", the
+    -- owner). At 0.92 the face's edge is under the band.
+    p.tex:SetSize(size * 0.92, size * 0.92)
+    local mask = parent:CreateMaskTexture()
+    mask:SetTexture(PORTRAIT_MASK, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    mask:SetAllPoints(p.tex)
+    p.tex:AddMaskTexture(mask)
+    p.ring = parent:CreateTexture(nil, "OVERLAY")
+    p.ring:SetTexture(MEDIA .. "portrait_ring")
+    -- the bronze dulled a little: polished, it was "litt shiny" beside the page (the owner, 2026-11-06)
+    p.ring:SetDesaturation(0.35)
+    p.ring:SetVertexColor(0.8, 0.74, 0.68)
+    p.ring:SetSize(size, size)
+    p.ring:SetPoint("CENTER", p.tex, "CENTER")
+    -- No dark rim behind the ring: one was tried for contrast and read as a brown halo ("ser litt rart
+    -- ut", 2026-11-05).
+    p.badge = parent:CreateTexture(nil, "OVERLAY", nil, 2)
+    p.badge:SetSize(size * 0.42, size * 0.42)
+    p.badge:SetPoint("CENTER", p.tex, "BOTTOMRIGHT", -size * 0.11, size * 0.11)   -- where it sat at 0.82
+    function p:Set(face)
+        local kind = GK.SetPortrait(self.tex, face)
+        local coords = kind == "race" and face.c and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[face.c]
+        self.badge:SetShown(coords and true or false)
+        if coords then
+            self.badge:SetTexture(CLASS_ICONS)
+            self.badge:SetTexCoord(unpack(coords))
+        end
+    end
+    function p:SetShown(on)
+        self.tex:SetShown(on)
+        self.ring:SetShown(on)
+        if not on then self.badge:Hide() end
+    end
+    return p
+end
+
+-- ---------------------------------------------------------------------------
+-- The sheets: the kill order, the note and the who-picker share one look, ink on the parchment and
+-- nothing of the game's own kit. A face in the bronze ring at the head, each part named in small
+-- capitals over a thin rule, lines to write on, and the red wax seal as the button that sends it.
+-- The game's dark input boxes and red buttons on our paper read as "en intern har lagd" (the owner,
+-- 2026-11-06); the look was previewed with the addon's own art before it was built.
+-- ---------------------------------------------------------------------------
+local function SheetInk(fs, colour, font, size)
+    fs:SetFont(font, size, "")
+    fs:SetTextColor(colour[1], colour[2], colour[3])
+    fs:SetShadowOffset(0, 0)
+end
+
+-- Every sheet made, the scroll and the framed ones alike. One opened on the ledger lies on it
+-- (f.onLedger, GK.PlaceSheet): a drag on it moves the ledger, and it closes with the ledger - "henge
+-- sammen er nice. lukkes hoved lukkes begge" (the owner, 2026-11-06).
+local sheets = {}
+
+--- What a drag on a sheet moves: the ledger, through the ledger's own drag (which saves where it is),
+--- when the sheet lies on it - the sheet is anchored to it and goes along. Else the sheet itself.
+local function Dragged(f)
+    local win = f.onLedger and _G.GrudgekeeperFrame
+    if win and win:IsShown() then return win end
+    return f
+end
+local function DragStart(f)
+    local t = Dragged(f)
+    local fn = t ~= f and t:GetScript("OnDragStart")
+    if fn then fn(t) else t:StartMoving() end
+end
+local function DragStop(f)
+    local t = Dragged(f)
+    local fn = t ~= f and t:GetScript("OnDragStop")
+    if fn then fn(t) else t:StopMovingOrSizing() end
+end
+
+--- A sheet's frame and what every sheet does: the dialog strata, kept on screen, dragged as above.
+local function SheetFrame(name, w, h, template)
+    local f = CreateFrame("Frame", name, UIParent, template)
+    f:SetSize(w, h)
+    f:SetPoint("CENTER", 0, 80)
+    f:SetFrameStrata("DIALOG")
+    f:SetClampedToScreen(true)
+    f:EnableMouse(true)
+    f:SetMovable(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", DragStart)
+    f:SetScript("OnDragStop", DragStop)
+    sheets[#sheets + 1] = f
+    return f
+end
+
+--- The ledger closing: the sheets lying on it close with it (Window.lua hooks its OnHide).
+function GK.CloseLedgerSheets()
+    for _, f in ipairs(sheets) do
+        if f.onLedger then f:Hide() end
+    end
+end
+
+--- A sheet of parchment between two rolls, w x h, with our cross at its top right. It can be dragged
+--- anywhere, and Escape closes it before the window under it. Hidden: the caller writes on it first.
+function GK.MakeSheet(name, w, h)
+    local f = SheetFrame(name, w, h)
+    local paper = f:CreateTexture(nil, "BACKGROUND")
+    paper:SetAllPoints()
+    paper:SetTexture(MEDIA .. "sheet")
+    local top = GK.MakeRoll(f, 30)
+    top:SetWidth(w + 16)
+    top:SetPoint("BOTTOM", f, "TOP", 0, -15)
+    local bottom = GK.MakeRoll(f, 30, true)
+    bottom:SetWidth(w + 16)
+    bottom:SetPoint("TOP", f, "BOTTOM", 0, 15)
+    local close = GK.MakeCloseButton(f, 20, function() f:Hide() end, 14)
+    close:SetPoint("TOPRIGHT", -12, -12)
+    close:SetFrameLevel(f:GetFrameLevel() + 12)
+    f:Hide()
+    if LIB.RegisterPopup then LIB.RegisterPopup(f) else tinsert(UISpecialFrames, name) end
+    return f
+end
+
+--- The head of a sheet: whom it is about. A face in the ring, a small caption over the name, and level,
+--- race and class under it. head:Set(caption, t, red) with t = { key, c, r, rf, sx, l }; red: the
+--- caption in blood (a kill order), else faded ink.
+function GK.SheetHead(f, w)
+    local width = w - 94 - 34                     -- from the face to the cross
+    local h = { face = GK.MakePortrait(f, 56) }
+    h.face.tex:SetPoint("CENTER", f, "TOPLEFT", 56, -54)
+    h.caption = f:CreateFontString(nil, "ARTWORK")
+    SheetInk(h.caption, FADED, TEXT_FONT, 10)
+    h.caption:SetPoint("TOPLEFT", 94, -31)
+    h.name = f:CreateFontString(nil, "ARTWORK")
+    SheetInk(h.name, INK, TITLE_FONT, 20)
+    h.name:SetPoint("TOPLEFT", h.caption, "BOTTOMLEFT", 0, -3)
+    h.name:SetWidth(width)
+    h.name:SetJustifyH("LEFT")
+    h.name:SetWordWrap(false)
+    h.info = f:CreateFontString(nil, "ARTWORK")
+    SheetInk(h.info, FADED, TEXT_FONT, 11)
+    h.info:SetPoint("TOPLEFT", h.name, "BOTTOMLEFT", 0, -3)
+    h.info:SetWidth(width)
+    h.info:SetJustifyH("LEFT")
+    h.info:SetWordWrap(false)
+    function h:Set(caption, t, red)
+        self.caption:SetText(caption)
+        SheetInk(self.caption, red and BLOOD or FADED, TEXT_FONT, 10)
+        -- a long name steps down a size or two before the game cuts it short
+        for _, size in ipairs({ 20, 17, 15 }) do
+            SheetInk(self.name, INK, TITLE_FONT, size)
+            self.name:SetText(GK.Show(t.key))
+            if (self.name:GetStringWidth() or 0) <= width then break end
+        end
+        self.info:SetText(GK.Describe(t.l, t.c, t.r))
+        self.face:Set(t)
+    end
+    return h
+end
+
+--- A part of a sheet: its name in small capitals at y down from the top, and a thin rule from there to
+--- the sheet's edge. The rule is placed from the sheet on both ends, so they can't disagree on its height.
+--- fs:Label(words) renames it, and the rule moves with the words.
+--- fs:Place(y) moves it down the sheet, rule and all (the note sheet's parts move with its tags).
+function GK.SheetSection(f, text, y)
+    local fs = f:CreateFontString(nil, "ARTWORK")
+    fs.rule = f:CreateTexture(nil, "ARTWORK")
+    if f.skinned then
+        -- on a window in the game's frame, in the skin's colours (GK.MakeFrameSheet)
+        GK.Ink(fs, GK.FADED, TEXT_FONT, 10)
+        GK.Paint(fs.rule, "rule")
+    else
+        SheetInk(fs, FADED, TEXT_FONT, 10)
+        fs.rule:SetColorTexture(FADED[1], FADED[2], FADED[3], 0.45)
+    end
+    fs.rule:SetHeight(1)
+    function fs:Place(at)
+        self.y = at
+        self:ClearAllPoints()
+        self:SetPoint("TOPLEFT", f, "TOPLEFT", 30, -at)
+        self.rule:ClearAllPoints()
+        self.rule:SetPoint("TOPLEFT", f, "TOPLEFT", 30 + math.ceil(self:GetStringWidth() or 30) + 8, -(at + 5))
+        self.rule:SetPoint("TOPRIGHT", f, "TOPRIGHT", -30, -(at + 5))
+    end
+    function fs:Label(words)
+        self:SetText(words:upper())
+        self:Place(self.y)
+    end
+    fs.y = y
+    fs:Label(text)
+    function fs:ShowAll(on)
+        self:SetShown(on)
+        self.rule:SetShown(on)
+    end
+    return fs
+end
+
+--- A line to write on: an edit box drawn as a ruled line in ink. The hint stands on it in faded ink
+--- while it is empty, and the line turns to blood while you write. e.onChange(e, byHand) runs on every
+--- change of its text (OnTextChanged is the line's own: set onChange, not the script).
+function GK.SheetLine(f, width, letters, hint, numeric)
+    local e = CreateFrame("EditBox", nil, f)
+    e:SetSize(width, 20)
+    e:EnableMouse(true)
+    e:SetAutoFocus(false)
+    e:SetMaxLetters(letters)
+    e:SetFont(TEXT_FONT, 13, "")
+    e:SetTextColor(INK[1], INK[2], INK[3])
+    e:SetShadowOffset(0, 0)
+    e:SetTextInsets(2, 2, 0, 0)
+    e:SetHighlightColor(BLOOD[1], BLOOD[2], BLOOD[3], 0.35)
+    if numeric then
+        e:SetNumeric(true)
+        e:SetJustifyH("RIGHT")
+    end
+    e.rule = e:CreateTexture(nil, "ARTWORK")
+    e.rule:SetHeight(1)
+    e.rule:SetPoint("BOTTOMLEFT")
+    e.rule:SetPoint("BOTTOMRIGHT")
+    e.hint = e:CreateFontString(nil, "ARTWORK")
+    SheetInk(e.hint, FADED, TEXT_FONT, 12)
+    e.hint:SetAlpha(0.7)
+    e.hint:SetPoint("LEFT", 2, 0)
+    e.hint:SetText(hint or "")
+    local function Look(self)
+        self.hint:SetShown((self:GetText() or "") == "")
+        local c = self:HasFocus() and BLOOD or FADED
+        self.rule:SetColorTexture(c[1], c[2], c[3], self:HasFocus() and 0.8 or 0.55)
+    end
+    e:SetScript("OnTextChanged", function(self, byHand)
+        Look(self)
+        if self.onChange then self.onChange(self, byHand) end
+    end)
+    e:SetScript("OnEditFocusGained", Look)
+    e:SetScript("OnEditFocusLost", function(self)
+        self:HighlightText(0, 0)
+        Look(self)
+    end)
+    e:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    e:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    Look(e)
+    return e
+end
+
+--- The button that sends a sheet: its word in blood beside the red wax seal, at the sheet's foot on the
+--- right. b:Set(word).
+function GK.SheetSeal(f, onClick)
+    local b = CreateFrame("Button", nil, f)
+    b:SetHeight(50)
+    b:SetPoint("BOTTOMRIGHT", -20, 16)
+    b.glow = b:CreateTexture(nil, "BACKGROUND")
+    b.glow:SetTexture(MEDIA .. "glow")
+    b.glow:SetBlendMode("ADD")
+    b.glow:SetVertexColor(1, 0.25, 0.1)
+    b.glow:SetAlpha(0.45)
+    b.glow:SetSize(84, 84)
+    b.glow:Hide()
+    b.wax = b:CreateTexture(nil, "ARTWORK")
+    b.wax:SetTexture(MEDIA .. "seal_red")
+    b.wax:SetSize(50, 50)
+    b.wax:SetPoint("RIGHT")
+    b.glow:SetPoint("CENTER", b.wax, "CENTER")
+    b.text = b:CreateFontString(nil, "ARTWORK")
+    SheetInk(b.text, BLOOD, TITLE_FONT, 18)
+    b.text:SetPoint("RIGHT", b.wax, "LEFT", -2, 0)
+    function b:Set(word)
+        self.text:SetText(word)
+        self:SetWidth(52 + math.ceil(self.text:GetStringWidth() or 60))
+    end
+    b:SetScript("OnEnter", function(self) self.glow:Show() end)
+    b:SetScript("OnLeave", function(self)
+        self.glow:Hide()
+        self.wax:SetVertexColor(1, 1, 1)
+    end)
+    b:SetScript("OnMouseDown", function(self) self.wax:SetVertexColor(0.72, 0.72, 0.72) end)
+    b:SetScript("OnMouseUp", function(self) self.wax:SetVertexColor(1, 1, 1) end)
+    b:SetScript("OnClick", onClick)
+    return b
+end
+
+--- Cancel, in faded ink at the sheet's foot on the left: the quiet way out. Hides the sheet.
+function GK.SheetCancel(f)
+    local b = CreateFrame("Button", nil, f)
+    b.text = b:CreateFontString(nil, "ARTWORK")
+    SheetInk(b.text, FADED, TEXT_FONT, 12)
+    b.text:SetPoint("LEFT")
+    b.text:SetText(CANCEL or "Cancel")
+    b:SetSize(math.ceil(b.text:GetStringWidth() or 50) + 4, 20)
+    b:SetPoint("BOTTOMLEFT", 30, 31)
+    b:SetScript("OnEnter", function(self) self.text:SetTextColor(INK[1], INK[2], INK[3]) end)
+    b:SetScript("OnLeave", function(self) self.text:SetTextColor(FADED[1], FADED[2], FADED[3]) end)
+    b:SetScript("OnClick", function() f:Hide() end)
+    return b
+end
+
+-- ---------------------------------------------------------------------------
+-- The notes' sheets in the game's own frame: Blizzard's window (SettingsFrameTemplate, which Forever
+-- draws in bronze, as our other addons' windows) on our plain parchment, with the game's own boxes,
+-- radio buttons and buttons, and ink for the writing. The scroll suits a kill order; for the notes and
+-- the who-picker the owner asked for "blizz bars rundt og ikke scroll ... litt mer clean", then "med
+-- parchment bakgrunn" (2026-11-06).
+-- ---------------------------------------------------------------------------
+--- A window in the game's frame, w x h, titled; dragged as every sheet is, closed by its X (which hides
+--- it directly: the template's HideUIPanel does nothing in combat) and by Escape before the window under it.
+function GK.MakeFrameSheet(name, w, h, title)
+    local f = SheetFrame(name, w, h, "SettingsFrameTemplate")
+    -- the template's flat grey backdrop gives way to the skin's background, as on the ledger: the plain
+    -- parchment (sheet_single, the page with no torn edge) in its tone, or in classic the frame's own panel
+    local bg = f:CreateTexture(nil, "BACKGROUND")
+    bg:SetPoint("TOPLEFT", 7, -18)
+    bg:SetPoint("BOTTOMRIGHT", -3, 3)
+    local function Back()
+        if GK.Classic() then
+            bg:SetAtlas("heavybronze-frame-background")
+            bg:SetDesaturation(0)
+            bg:SetVertexColor(1, 1, 1)
+        else
+            bg:SetTexture(MEDIA .. "sheet_single")
+            bg:SetTexCoord(0, 1, 0, 1)
+            if GK.Tone then GK.Tone(bg) end
+        end
+    end
+    Back()
+    GK.OnLook(Back)
+    f.bg = bg
+    f.skinned = true                  -- what is written on it takes the skin's colours (SheetSection)
+    if type(f.Bg) == "table" then f.Bg:Hide() end
+    if type(f.ClosePanelButton) == "table" then f.ClosePanelButton:SetScript("OnClick", function() f:Hide() end) end
+    -- the title bar's own text; a font string of ours where a template has none
+    f.title = type(f.NineSlice) == "table" and f.NineSlice.Text or nil
+    if not f.title then
+        f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        f.title:SetPoint("TOP", 0, -5)
+    end
+    f.title:SetText(title or "")
+    f:Hide()
+    if LIB.RegisterPopup then LIB.RegisterPopup(f) else tinsert(UISpecialFrames, name) end
+    return f
+end
+
+--- The head of a framed sheet: whom it is about. The face in the bronze ring, the name in the ledger's
+--- ink and type, and level, race and class under it. head:Set(t), t = { key, c, r, rf, sx, l }.
+function GK.FrameHead(f, w)
+    local width = w - 82 - 24
+    local h = { face = GK.MakePortrait(f, 48) }
+    h.face.tex:SetPoint("CENTER", f, "TOPLEFT", 50, -60)
+    h.name = f:CreateFontString(nil, "ARTWORK")
+    GK.Ink(h.name, GK.INK, GK.TITLE_FONT, 19)              -- in the skin's colours, as the frame is skinned
+    h.name:SetPoint("TOPLEFT", 82, -44)
+    h.name:SetWidth(width)
+    h.name:SetJustifyH("LEFT")
+    h.name:SetWordWrap(false)
+    h.info = f:CreateFontString(nil, "ARTWORK")
+    GK.Ink(h.info, GK.FADED, GK.TEXT_FONT, 11)
+    h.info:SetPoint("TOPLEFT", h.name, "BOTTOMLEFT", 0, -4)
+    h.info:SetWidth(width)
+    h.info:SetJustifyH("LEFT")
+    h.info:SetWordWrap(false)
+    function h:Set(t)
+        self.name:SetText(GK.Show(t.key))
+        self.info:SetText(GK.Describe(t.l, t.c, t.r))
+        self.face:Set(t)
+    end
+    return h
+end
+
+--- The game's own text box, with a grey hint on it while it is empty (as the game's search boxes have).
+--- Hook OnTextChanged to follow it, rather than setting it.
+local function Hint(box) box.hint:SetShown((box:GetText() or "") == "") end
+function GK.FrameBox(parent, width, letters, hint)
+    local e = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+    e:SetSize(width, 20)
+    e:SetAutoFocus(false)
+    e:SetMaxLetters(letters)
+    e:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    e:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    e.hint = e:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
+    e.hint:SetPoint("LEFT", 2, 0)
+    e.hint:SetText(hint or "")
+    e:HookScript("OnTextChanged", Hint)
+    Hint(e)
+    return e
+end
+
+--- The game's own button, its words in the game's small type in every state (setting only the current
+--- one loses them when the button is disabled, Guildhall found).
+function GK.FrameButton(parent, text, width, onClick)
+    local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    b:SetSize(width or 96, 22)
+    b:SetNormalFontObject("GameFontNormal")
+    b:SetHighlightFontObject("GameFontHighlight")
+    b:SetDisabledFontObject("GameFontDisable")
+    b:SetText(text)
+    b:SetScript("OnClick", onClick)
+    return b
+end
+
+--- Where a sheet opens: on the ledger when it is open - over the middle of the book, its top well below
+--- the tabs (a scroll laid right under them looked as if they were its own), anchored to the ledger so
+--- the two go together (see sheets, above). Beside the book was tried and the owner wanted it on top
+--- (2026-11-06). Without the ledger, high in the middle. Anchored by its top either way, so a sheet that
+--- grows grows downward.
+function GK.PlaceSheet(f)
+    local win = _G.GrudgekeeperFrame
+    f:ClearAllPoints()
+    f.onLedger = (win and win:IsShown()) and true or nil
+    if f.onLedger then
+        f:SetPoint("TOP", win, "TOP", 0, -80)
+    else
+        f:SetPoint("TOP", UIParent, "TOP", 0, -140)
+    end
 end
 
 --- The note's paper, frame, plaque and portrait, for the letters and the profiles (Profile.lua) alike:
@@ -811,12 +1243,9 @@ local function BuildNote()
     later:SetText("Later")
     later:SetScript("OnClick", function() GK.CloseLetters() end)
     Pager(f, f, 180, 54)
-    -- The same iron cross as the profile card on this frame (Profile.lua): "Later" alone read as the
-    -- only way out, and the frame looked like it had none (the owner, 2026-11-05).
-    local close = GK.MakeCloseButton(f, 20, function() GK.CloseLetters() end, 14)
-    close:SetFrameLevel(f:GetFrameLevel() + 12)
-    close:SetPoint("TOPRIGHT", -12, -12)
-    f.close = close
+    -- A close button: "Later" alone read as the only way out (the owner, 2026-11-05). The game's own X:
+    -- our iron cross sat on top of the frame's iron corner and didn't go with it (2026-11-06).
+    GK.MakeGameCloseButton(f, function() GK.CloseLetters() end)
 
     -- Arrives with a small drop and a fade, nothing more.
     local arrive = f:CreateAnimationGroup()

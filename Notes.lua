@@ -1,9 +1,11 @@
 -- Grudgekeeper - notes on players: what the guild writes down about the people it meets. A free-text
--- note with a tag, a mark that puts a player on one of three lists (Marked, Shame, Kudos),
--- votes on notes, and a guild-shared list of funny character names. This file is the data and the
+-- note with a tag, a mark that puts a player on one of three lists (Marked, Shame, Kudos), and
+-- votes on notes. This file is the data and the
 -- wire only; it makes no frames. The pages, menus and tooltip lines that show it are elsewhere.
+-- (Guild Grudge's list of funny character names came with the merge and was left out, 2026-11-05: it
+-- waits in BACKLOG.md, and its code is at the merged PR's head, ad2b348.)
 -- It follows Guild.lua's rule: everyone sends only their OWN things - their notes, their marks, their
--- votes, their nice names - and the author of a record is always the SENDER of the message, never a
+-- votes - and the author of a record is always the SENDER of the message, never a
 -- field in it, so nobody can write in another player's name. A client never re-sends what someone
 -- else wrote. Every record is last-writer-wins by the author's time, per author and id; a delete is a
 -- record kept 30 days (a tombstone) so a late sync can't bring the note back.
@@ -13,11 +15,9 @@
 --   N;1;key;id;ts;del;tag;c;r;l;text        my note (del: 1 or empty)
 --   L;1;key;list;ts;del;c;r;l               my mark: which list I put them on
 --   V;1;key;author;id;v;ts                  my vote on author's note id (v: 1, -1 or 0 to take it back)
---   M;1;key;ts;del;c;r;rf;sx;l              my nice name
---   G;1;key;v;ts                            my vote on a nice name
---   H;1;key;on;ts                           I hide (1) or show (0) a nice name - officers only
 --   Q;1                                     tell me yours (at login)
--- Worst case a guild can make us keep: 500 people, 300 names, 20 live notes and 40 note ids (live and
+-- (M, G and H were the nice names' messages; a client that still sends them is ignored.)
+-- Worst case a guild can make us keep: 500 people, 20 live notes and 40 note ids (live and
 -- deleted) per author per player, 5000 note ids in all, 100 voted-on notes per player, 300 voters on one.
 -- Every sender is also held to LibForever's 30 messages / 10 s, and so are we: everything we send
 -- goes through one queue (see "The outbound queue").
@@ -33,11 +33,10 @@ local MAX_IDS = 40                          -- note ids per author per player, d
 local MAX_ALL_IDS = 5000                    -- note ids in the whole store
 local MAX_ID = 2 ^ 40                       -- the largest note id on the wire (the import's ids are time * 100 + a bit)
 local MAX_PEOPLE = 500
-local MAX_NAMES = 300
 local MAX_VOTE_GROUPS = 100                 -- notes with votes, per player
-local MAX_VOTERS = 300                      -- voters on one note or one name
+local MAX_VOTERS = 300                      -- voters on one note
 local MAX_REPLY = 150                       -- records one client answers a Q with
-local MAX_PENDING = 200                     -- votes held for a note or name that hasn't arrived
+local MAX_PENDING = 200                     -- votes held for a player who hasn't arrived
 local PENDING_FOR = 10 * 60                 -- seconds a held vote waits
 local KEEP_TOMBSTONE = 30 * GK.DAY
 local LISTS = { kos = true, watch = true, kudos = true }
@@ -115,7 +114,7 @@ local function Vote(v)
     return nil
 end
 
---- What a client may say about a player or a name beyond its key: class file, race, race file, sex
+--- What a client may say about a player beyond their key: class file, race, race file, sex
 --- (2 or 3) and level. Each field that isn't valid is nil.
 local function ParseInfo(c, r, rf, sx, l)
     return {
@@ -131,21 +130,6 @@ end
 local function Tables()
     local s = GK.Store()
     s.people = s.people or {}
-    s.names = s.names or {}
-    s.nameVotes = s.nameVotes or {}
-    -- Names used to have one owner in `by`; each author's part is kept apart now (see Put.Name). A name
-    -- from before is that owner's part.
-    if not s.namesByAuthor then
-        for _, n in pairs(s.names) do
-            if not n.adds then
-                n.adds = {}
-                if n.by then
-                    n.adds[n.by] = { ts = n.ts, del = n.del, c = n.c, r = n.r, rf = n.rf, sx = n.sx, l = n.l }
-                end
-            end
-        end
-        s.namesByAuthor = true
-    end
     return s
 end
 
@@ -345,19 +329,6 @@ function Encode.V(key, author, id, v, ts)
     return Msg("V", PROTO, key, author, id, v, ts)
 end
 
---- My part of a nice name: the record in store.names[key].adds[me].
-function Encode.M(key, part)
-    return Msg("M", PROTO, key, part.ts, part.del and 1 or nil, part.c, part.r, part.rf, part.sx, part.l)
-end
-
-function Encode.G(key, v, ts)
-    return Msg("G", PROTO, key, v, ts)
-end
-
-function Encode.H(key, on, ts)
-    return Msg("H", PROTO, key, on and 1 or 0, ts)
-end
-
 function Encode.Q()
     return Msg("Q", PROTO)
 end
@@ -472,7 +443,7 @@ end
 
 -- A vote can beat what it is about: another guildie's reply lands before the note's author's does, and
 -- a vote on a player we don't know is turned away. So those wait here, a few of them and not for long,
--- and are tried again whenever the player or the name comes into being - by a message, by something I
+-- and are tried again whenever the player comes into being - by a message, by something I
 -- did, or by the import (every one of them ends in a Put below). Not saved: a reload starts clean.
 local pending = {}
 
@@ -495,7 +466,7 @@ local function Hold(v)
     pending[#pending + 1] = v
 end
 
---- The player (kind "V") or the name (kind "N") `key` now exists: apply the votes that were waiting.
+--- The player `key` now exists (kind "V", the one kind of held vote): apply the votes that were waiting.
 local function ReplayPending(key, kind)
     if #pending == 0 then return end
     local now = GetTime()
@@ -505,11 +476,7 @@ local function ReplayPending(key, kind)
             table.remove(pending, i)
         elseif h.key == key and h.kind == kind then
             table.remove(pending, i)
-            if kind == "V" then
-                Put.Vote(h.key, h.author, h.id, h.voter, h.v, h.ts)
-            else
-                Put.NameVote(h.key, h.voter, h.v, h.ts)
-            end
+            Put.Vote(h.key, h.author, h.id, h.voter, h.v, h.ts)
         end
     end
 end
@@ -568,106 +535,6 @@ function Put.Vote(key, author, id, voter, v, ts)
     if not old and Count(group) >= MAX_VOTERS then return false end
     group[voter] = { v = v, ts = ts }
     return true
-end
-
---- Work out what a nice name shows from the contributions in n.adds ({ [author] = { ts, del, c, r, rf, sx,
---- l } }): it is live while any author's is, and its owner ("added by") is the earliest live one, the lower
---- key at the same second. With none live it shows the latest removal. The result sits in n.by, n.ts,
---- n.del and the class, race and level fields, which is where everything else reads them.
-local function DeriveName(n)
-    local best, bestAuthor
-    for author, c in pairs(n.adds) do
-        if not c.del and (not best or c.ts < best.ts or (c.ts == best.ts and author < bestAuthor)) then
-            best, bestAuthor = c, author
-        end
-    end
-    if not best then
-        for author, c in pairs(n.adds) do
-            if not best or c.ts > best.ts or (c.ts == best.ts and author < bestAuthor) then best, bestAuthor = c, author end
-        end
-    end
-    n.by, n.ts, n.del = bestAuthor, best and best.ts or 0, (not best or best.del) and true or nil
-    n.c, n.r, n.rf, n.sx, n.l = nil, nil, nil, nil, nil
-    if best then n.c, n.r, n.rf, n.sx, n.l = best.c, best.r, best.rf, best.sx, best.l end
-end
-
---- A nice name added or removed by `by`; rec = { ts, del, c, r, rf, sx, l }. Each author's part is their own
---- record (D2): nobody's message changes anyone else's, so there is nothing to take over, and a late
---- stale message from one author can't undo another's. Two players who added the same name before
---- hearing of each other both stand, and the name shows the earlier as its owner, the same on every client.
---- Removing a name removes only the part of whoever sends it; the name is gone when no part is left.
-function Put.Name(key, by, rec)
-    local s = Tables()
-    local names = s.names
-    local n = names[key]
-    local mine = n and n.adds[by]
-    if mine and rec.ts <= mine.ts then return false end
-    if not n then
-        if Count(names) >= MAX_NAMES then return false end
-        n = { adds = {} }
-        names[key] = n
-    elseif not mine and Count(n.adds) >= MAX_VOTERS then
-        return false
-    end
-    n.adds[by] = { ts = rec.ts, del = rec.del or nil, c = rec.c, r = rec.r, rf = rec.rf, sx = rec.sx, l = rec.l }
-    -- someone who adds a name has no vote on it: one they cast before is dropped
-    if not rec.del and s.nameVotes[key] then s.nameVotes[key][by] = nil end
-    DeriveName(n)
-    ReplayPending(key, "N")
-    return true
-end
-
-function Put.NameVote(key, voter, v, ts)
-    local s = Tables()
-    local n = s.names[key]
-    local part = n and n.adds[voter]
-    if not n or (part and not part.del) then return false end
-    local votes = s.nameVotes[key]
-    local old = votes and votes[voter]
-    if old and ts <= old.ts then return false end
-    if not votes then
-        votes = {}
-        s.nameVotes[key] = votes
-    end
-    if not old and Count(votes) >= MAX_VOTERS then return false end
-    votes[voter] = { v = v, ts = ts }
-    return true
-end
-
---- `by` hid (on) or showed a name. The hide may come before the name does, so it can make a bare
---- record (no `by`, deleted) that the name's own message fills in later.
-function Put.Hide(key, by, on, ts)
-    local names = Tables().names
-    local n = names[key]
-    if not n then
-        if Count(names) >= MAX_NAMES then return false end
-        n = { adds = {}, ts = 0, del = true }
-        names[key] = n
-        ReplayPending(key, "N")
-    end
-    -- two officers in the same second: the higher key's word stands, on every client
-    if n.hidden and (ts < n.hidden.ts or (ts == n.hidden.ts and by <= (n.hidden.by or ""))) then return false end
-    n.hidden = { by = by, ts = ts, on = on and true or false }
-    return true
-end
-
--- ---------------------------------------------------------------------------
--- Officers
--- ---------------------------------------------------------------------------
---- Is this guildie the guild master, or a rank that can listen to officer chat? Judged on their rank in
---- the roster as it is now. If the client has no call to read a rank's flags, only the guild master.
-function GK.IsOfficer(who)
-    if not who then return false end
-    local row = LIB.roster and LIB.roster[who]
-    local rank = row and row.rankIndex
-    if type(rank) ~= "number" then return false end
-    if rank == 0 then return true end
-    local get = (C_GuildInfo and C_GuildInfo.GuildControlGetRankFlags) or GuildControlGetRankFlags
-    if not get then return false end
-    local ok, first, second, third = pcall(get, rank + 1)
-    if not ok then return false end
-    if type(first) == "table" then return first[3] == true end
-    return third == true
 end
 
 -- ---------------------------------------------------------------------------
@@ -905,94 +772,6 @@ function GK.MyNoteVote(key, author, id)
 end
 
 -- ---------------------------------------------------------------------------
--- Nice names
--- ---------------------------------------------------------------------------
---- Add a funny character name to the guild's list. info = { c, r, rf, sx, l } as far as known.
---- Returns true, or nil and why not.
-function GK.AddNiceName(key, info)
-    local me = LIB.Me()
-    key = ValidKey(key)
-    if not (me and key) then return nil, "That name can't be kept." end
-    local names = Tables().names
-    local old = names[key]
-    if old and not old.del then return nil, "That name is on the list already." end
-    local i = ParseInfo(info and info.c, info and info.r, info and info.rf, info and info.sx, info and info.l)
-    i.ts = NextTs(old and old.adds[me])
-    if not Put.Name(key, me, i) then return nil, "The list is full - " .. MAX_NAMES .. " names." end
-    Send(Encode.M(key, names[key].adds[me]))
-    GK.Changed()
-    return true
-end
-
---- Take a name I added off the list. Not another player's (D2); an officer hides it instead.
-function GK.RemoveNiceName(key)
-    local me = LIB.Me()
-    local n = Tables().names[key]
-    local mine = me and n and n.adds[me]
-    if not mine or mine.del then return false end
-    Put.Name(key, me, { ts = NextTs(mine), del = true })
-    Send(Encode.M(key, n.adds[me]))
-    GK.Changed()
-    return true
-end
-
---- The names on the list, newest first: { key, by, ts, score, myVote, mine, hidden }. A name an officer
---- hid is left out unless showHidden.
-function GK.NiceNames(showHidden)
-    local out, me = {}, LIB.Me()
-    local s = Tables()
-    for key, n in pairs(s.names) do
-        local hidden = n.hidden and n.hidden.on or false
-        if not n.del and (showHidden or not hidden) then
-            local score, mine = 0, 0
-            for voter, vote in pairs(s.nameVotes[key] or NONE) do
-                score = score + vote.v
-                if voter == me then mine = vote.v end
-            end
-            local part = me and n.adds[me]
-            out[#out + 1] = { key = key, by = n.by, ts = n.ts, score = score, myVote = mine,
-                mine = (part ~= nil and not part.del), hidden = hidden }
-        end
-    end
-    table.sort(out, function(a, b)
-        if a.ts ~= b.ts then return a.ts > b.ts end
-        return a.key < b.key
-    end)
-    return out
-end
-
---- My vote on a nice name (1, -1, or 0 to take it back). Not on my own.
-function GK.VoteName(key, v)
-    local me, s = LIB.Me(), Tables()
-    local n = s.names[key]
-    v = Vote(v)
-    local part = me and n and n.adds[me]
-    if not (me and v and n) or n.del or (part and not part.del) then return false end
-    local votes = s.nameVotes[key]
-    if not Put.NameVote(key, me, v, NextTs(votes and votes[me])) then return false end
-    Send(Encode.G(key, v, s.nameVotes[key][me].ts))
-    GK.Changed()
-    return true
-end
-
-function GK.NameScore(key)
-    local score = 0
-    for _, vote in pairs(Tables().nameVotes[key] or NONE) do score = score + vote.v end
-    return score
-end
-
---- Hide a nice name from everyone (on), or show it again. Officers only; the name stays in the data.
-function GK.HideName(key, on)
-    local me = LIB.Me()
-    if not me or not GK.IsOfficer(me) or not Tables().names[key] then return false end
-    local n = Tables().names[key]
-    if not Put.Hide(key, me, on, NextTs(n.hidden)) then return false end
-    Send(Encode.H(key, on, n.hidden.ts))
-    GK.Changed()
-    return true
-end
-
--- ---------------------------------------------------------------------------
 -- What others send
 -- ---------------------------------------------------------------------------
 --- A message tells us a little about the player it is about: fill in what we lack.
@@ -1001,8 +780,11 @@ local function LearnWire(key, c, r, l)
     if p then Learn(p, ParseInfo(c, r, nil, nil, l), true) end
 end
 
+-- The player a record is about, and the author of a note voted on, are names the SENDER wrote: a guildie
+-- (or we) with the sender's own realm on the live servers. GK.LocalKey files them under our spelling; a
+-- stranger's name is left as written.
 local function OnNote(sender, f)
-    local key, id, ts = ValidKey(f[3]), Int(f[4], 1, MAX_ID), Ts(f[5])
+    local key, id, ts = GK.LocalKey(ValidKey(f[3])), Int(f[4], 1, MAX_ID), Ts(f[5])
     if not (key and id and ts) then return false end
     local del = f[6] == "1"
     local text, tag = GK.Clean(f[11], MAX_TEXT), GK.Clean(f[7], GK.MAX_TAG)
@@ -1017,7 +799,7 @@ local function OnNote(sender, f)
 end
 
 local function OnMark(sender, f)
-    local key, ts = ValidKey(f[3]), Ts(f[5])
+    local key, ts = GK.LocalKey(ValidKey(f[3])), Ts(f[5])
     local del = f[6] == "1"
     local list = LISTS[f[4]] and f[4] or nil
     if not (key and ts) or (not del and not list) then return false end
@@ -1027,9 +809,12 @@ local function OnMark(sender, f)
 end
 
 local function OnVote(sender, f)
-    local key, author, id = ValidKey(f[3]), ValidKey(f[4]), Int(f[5], 1, MAX_ID)
+    local key, author, id = GK.LocalKey(ValidKey(f[3])), ValidKey(f[4]), Int(f[5], 1, MAX_ID)
     local v, ts = Vote(f[6]), Ts(f[7])
     if not (key and author and id and v and ts) then return false end
+    -- the note's author as we know them: also one whose notes on this player are all we know of them
+    local p = GK.Person(key, false)
+    author = GK.LocalKey(author, function(k) return p ~= nil and p.notes[k] ~= nil end)
     if Put.Vote(key, author, id, sender, v, ts) then return true end
     if not GK.Person(key, false) and sender ~= author then
         Hold({ kind = "V", key = key, author = author, id = id, voter = sender, v = v, ts = ts })
@@ -1037,35 +822,12 @@ local function OnVote(sender, f)
     return false
 end
 
-local function OnName(sender, f)
-    local key, ts = ValidKey(f[3]), Ts(f[4])
-    if not (key and ts) then return false end
-    local i = ParseInfo(f[6], f[7], f[8], f[9], f[10])
-    i.ts, i.del = ts, f[5] == "1"
-    return Put.Name(key, sender, i)
-end
-
-local function OnNameVote(sender, f)
-    local key, v, ts = ValidKey(f[3]), Vote(f[4]), Ts(f[5])
-    if not (key and v and ts) then return false end
-    if Put.NameVote(key, sender, v, ts) then return true end
-    if not Tables().names[key] then Hold({ kind = "N", key = key, voter = sender, v = v, ts = ts }) end
-    return false
-end
-
-local function OnHide(sender, f)
-    local key, ts = ValidKey(f[3]), Ts(f[5])
-    if not (key and ts) or (f[4] ~= "0" and f[4] ~= "1") then return false end
-    if not GK.IsOfficer(sender) then return false end
-    return Put.Hide(key, sender, f[4] == "1", ts)
-end
-
 -- ---------------------------------------------------------------------------
 -- Answering a Q: my own records, newest first, a few at a time
 -- ---------------------------------------------------------------------------
 -- Players are told about before the votes on their notes, because a vote on a player we don't know is
 -- dropped; the cap still keeps the newest 150 of everything.
-local RANK = { M = 1, N = 2, L = 3, V = 4, G = 5, H = 6 }
+local RANK = { N = 1, L = 2, V = 3 }
 
 local function OwnRecords()
     local me, out = LIB.Me(), {}
@@ -1085,13 +847,6 @@ local function OwnRecords()
                 add(mine.ts, Encode.V(key, author, id, mine.v, mine.ts))
             end
         end
-    end
-    for key, n in pairs(s.names) do
-        local part = n.adds[me]
-        if part then add(part.ts, Encode.M(key, part)) end
-        if n.hidden and n.hidden.by == me then add(n.hidden.ts, Encode.H(key, n.hidden.on, n.hidden.ts)) end
-        local mine = s.nameVotes[key] and s.nameVotes[key][me]
-        if mine then add(mine.ts, Encode.G(key, mine.v, mine.ts)) end
     end
     table.sort(out, function(a, b)
         if a.ts ~= b.ts then return a.ts > b.ts end
@@ -1140,7 +895,7 @@ local function OnAsk()
     return false
 end
 
-local HANDLERS = { N = OnNote, L = OnMark, V = OnVote, M = OnName, G = OnNameVote, H = OnHide, Q = OnAsk }
+local HANDLERS = { N = OnNote, L = OnMark, V = OnVote, Q = OnAsk }
 
 local function OnMessage(_, text, dist, sender)
     if dist ~= "GUILD" or type(text) ~= "string" or #text > 600 or not (GK.char and GK.db) then return end
@@ -1194,30 +949,6 @@ function GK.PruneNotes()
             if next(group) == nil or (not note and allOld) then p.votes[gk] = nil end
         end
         if next(p.marks) == nil and next(p.notes) == nil and next(p.votes) == nil then s.people[key] = nil end
-    end
-    for key, n in pairs(s.names) do
-        if n.hidden and n.hidden.ts < cutoff and not n.hidden.on then n.hidden = nil end
-        for author, part in pairs(n.adds) do
-            if part.del and part.ts < cutoff then
-                n.adds[author] = nil
-                gone = gone + 1
-            end
-        end
-        DeriveName(n)
-        if (n.del and n.ts < cutoff) and not (n.hidden and n.hidden.ts >= cutoff) then
-            s.names[key] = nil
-            s.nameVotes[key] = nil
-            gone = gone + 1
-        end
-    end
-    for key, votes in pairs(s.nameVotes) do
-        for voter, vote in pairs(votes) do
-            if vote.v == 0 and vote.ts < cutoff then
-                votes[voter] = nil
-                gone = gone + 1
-            end
-        end
-        if next(votes) == nil or not s.names[key] then s.nameVotes[key] = nil end
     end
     if gone > 0 then GK.Changed() end
     return gone

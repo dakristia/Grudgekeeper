@@ -28,6 +28,20 @@ function GK.Seen(key, guid)
     return nil
 end
 
+--- Every enemy player we saw lately, the latest first: the records themselves ({ key, guid, c, r, rf, l,
+--- t = GetTime(), z }), in a new list. For the who-picker, which asks once per keystroke at most.
+function GK.SeenList()
+    local out, now = {}, GetTime()
+    for _, s in pairs(seen) do
+        if now - s.t <= SEEN_FOR then out[#out + 1] = s end
+    end
+    table.sort(out, function(a, b)
+        if a.t ~= b.t then return a.t > b.t end
+        return a.key < b.key
+    end)
+    return out
+end
+
 --- The latest enemy player we saw under this name (GK.SameName), or nil.
 function GK.SeenByName(name)
     local best

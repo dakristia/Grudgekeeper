@@ -2,7 +2,7 @@
 ## Title: Grudgekeeper
 ## Notes: Keep score of your world PvP: who you killed, who killed you and how often. A guild leaderboard, and kill orders with a bounty that arrive as sealed scrolls - take one and you're warned when the target is near.
 ## Author: vebjorn
-## Version: 0.1.0-beta1
+## Version: 0.1.0-beta2
 ## IconTexture: Interface\AddOns\Grudgekeeper\Media\icon
 ## SavedVariables: GrudgekeeperDB
 ## SavedVariablesPerCharacter: GrudgekeeperCharDB
@@ -42,14 +42,9 @@ Mail.lua
 Social.lua
 Profile.lua
 NotesUI.lua
+Pick.lua
 Inspect.lua
 MapPins.lua
 MapPins.xml
 Options.lua
-Classic\Classic.lua
-Classic\Cards.lua
-Classic\Window.lua
-Classic\Letters.lua
-Classic\Notice.lua
-Classic\Sheets.lua
 Debug.lua

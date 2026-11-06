@@ -57,6 +57,12 @@ local function NewLib()
         if not name:find("-", 1, true) then name = name .. "-Realm" end
         return name
     end
+    function LIB.Realm() return "Realm" end
+    -- Same rule as the real one: on the roster, or heard on the guild's addon channel (M.receive).
+    LIB.guildHeard = {}
+    function LIB.KnownGuildie(full)
+        return full ~= nil and (LIB.roster[full] ~= nil or LIB.guildHeard[full] == true)
+    end
     function LIB.Me() return M.me end
     function LIB.UnitKey(unit) return M.units[unit] end
     function LIB.IsMyStoredName(key) return key == M.me end
@@ -177,6 +183,7 @@ end
 
 --- Feed a message to the addon as if `sender` had sent it to the guild.
 function M.receive(GK, sender, text, dist)
+    if (dist or "GUILD") == "GUILD" then M.LIB.guildHeard[sender] = true end
     GK.NotesReceive("GrudgeNotes", text, dist or "GUILD", sender)
 end
 
