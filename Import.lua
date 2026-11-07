@@ -17,7 +17,7 @@ local LIB = LibStub("LibForever-1.0")
 
 --- A Guild Grudge name ("First Surname", or "Name-Realm") as one of our player keys.
 local function Key(name)
-    return GK.KeyOf(GK.Clean(name, 64))
+    return GK.PlayerKey(GK.KeyOf(GK.Clean(name, 64)))
 end
 
 --- A time Guild Grudge kept, in a range we accept: whole seconds, not after now.

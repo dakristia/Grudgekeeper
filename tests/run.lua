@@ -438,11 +438,15 @@ test("a Q is answered with my own records only, after 2 to 6 seconds, once per 3
     eq(table.concat(kinds), "NLV", "players before the votes on them")
     W.receive(GK, EDVARD, "Q;1")
     W.advance(10)
-    eq(#W.sent, 0, "asked again within 30 seconds: no second answer")
+    eq(#W.sent, 0, "asked again within 30 seconds: no second answer yet")
     W.advance(30)
+    -- an ask in the half minute used to get nothing at all: Edvard, logging in just after Kari, heard
+    -- none of our notes (2026-11-07)
+    eq(#W.sent, 3, "...but one once the half minute is over")
+    W.receive(GK, KARI, "Q;1")
     W.receive(GK, EDVARD, "Q;1")
-    W.advance(10)
-    eq(#W.sent, 3, "and again after")
+    W.advance(60)
+    eq(#W.sent, 6, "two asks in one half minute: one answer for both")
 end)
 
 test("a Q reply is capped at 150, newest first, two a second", function()
@@ -1317,13 +1321,15 @@ local function labels(node)
     return table.concat(out, "|")
 end
 
-test("the three list pages: Marked between Grudges and News, the rest on the right, none with links", function()
+-- Marked has no page since 2026-11-07: it is a section of the kill orders page (Window.lua), as kill orders
+-- and Most wanted say the rest ("most wanted og kill orders holder kanskje?", the owner).
+test("the list pages: Shame and Kudos on the right, none with links; Marked has none", function()
     local GK = bootUI()
     eq(#GK.LedgerPages, 7)
-    local want = { { "Marked", nil, 4 }, { "Shame", "right", 6 }, { "Kudos", "right", 7 } }
+    local want = { { "Shame", "right", 6 }, { "Kudos", "right", 7 } }
     local order = {}
     for i, page in ipairs(GK.LedgerPages) do order[i] = page.name end
-    eq(table.concat(order, "|"), "Kill orders|Leaderboard|Grudges|Marked|News|Shame|Kudos")
+    eq(table.concat(order, "|"), "Kill orders|Leaderboard|Most wanted|Grudges|News|Shame|Kudos")
     for _, w in ipairs(want) do
         local page = GK.LedgerPages[w[3]]
         eq(page.name, w[1])
@@ -1333,7 +1339,7 @@ test("the three list pages: Marked between Grudges and News, the rest on the rig
         eq(#page.headings, 2)
     end
     for i = 1, 5 do eq(GK.LedgerPages[i].side, nil) end
-    eq(GK.LedgerPages[4].headings[1][1], "Player")
+    eq(GK.LedgerPages[6].headings[1][1], "Player")
     eq(GK.db.notesList, nil, "the list is not a setting any more")
 end)
 
@@ -1341,15 +1347,15 @@ test("GK.OpenNotes opens the page of the list", function()
     local GK = bootUI()
     local W2 = require("wow_mock")
     GK.OpenNotes("kos")
-    eq(W2.opened, 4)
+    eq(W2.opened, 1, "Marked is on the kill orders page")
     GK.OpenNotes("watch")
     eq(W2.opened, 6)
     GK.OpenNotes("kudos")
     eq(W2.opened, 7)
     GK.OpenNotes("names")
-    eq(W2.opened, 4, "the nice names' page is gone: Marked, as for any unknown list")
+    eq(W2.opened, 1, "the nice names' page is gone: the kill orders page, as for any unknown list")
     GK.OpenNotes("somewhere")
-    eq(W2.opened, 4, "an unknown list is kos")
+    eq(W2.opened, 1, "an unknown list: the kill orders page")
 end)
 
 test("/grudge move accepts marked next to kos and shame next to watch", function()
@@ -1377,7 +1383,7 @@ test("the page's rows: newest first, with tags, the newest note, the score and m
     W.receive(GK, KARI, msg("L", 1, GANK, "watch", B + 11))
     W.receive(GK, EDVARD, msg("V", 1, GANK, KARI, 1, 1, B + 12))
     W.receive(GK, KARI, msg("N", 1, "Older Foe-Realm", 1, B + 5, "", "", "", "", "", "ganked me"))
-    local items, empty = GK.LedgerPages[4].items()
+    local items, empty = GK.NotesItems("kos")
     eq(#items, 1, "Gank is on Shame, not on kos")
     eq(items[1].name, "Older Foe")
     eq(items[1].sub, '"ganked me"')
@@ -1405,7 +1411,6 @@ test("the page's rows: newest first, with tags, the newest note, the score and m
     local rows = GK.NotesItems("watch")
     eq(#rows, 2)
     eq(rows[1].name, "Older Foe", "the newest news first")
-    eq(GK.LedgerPages[4].sub({ 1 }), "1 player marked")
     eq(GK.LedgerPages[6].sub(rows), "2 players on Shame")
     eq(#GK.LedgerPages[6].items(), 2)
 end)
@@ -1669,7 +1674,7 @@ test("/grudge: our subcommands act, everything else is Core's, and the help grow
     eq(GK.MyMark(NICE), nil)
     W.units.target = nil
     slash("notes")
-    eq(W2.opened, 4, "Marked")
+    eq(W2.opened, 1, "the kill orders page, where Marked is")
     slash("watch")
     eq(W2.opened, 6)
     slash("kudos")

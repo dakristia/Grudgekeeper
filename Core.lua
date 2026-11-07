@@ -19,8 +19,7 @@ local TAG = GK.TAG
 local defaults = {
     letters = true,          -- kill orders your guildies post arrive as letters
     myLetters = true,        -- a letter for your own kills and deaths
-    alertNear = true,        -- warn when the target of an order you accepted is near
-    alertAll = false,        -- ...and for every open order, accepted or not
+    alertNear = true,        -- warn when the target of any open kill order is near, or a guildie sees them
     plateMarks = true,       -- a skull over anyone with an open order on them
     shotFulfil = true,       -- a screenshot when you fulfil an order (the user asked for this one)
     shotEveryKill = false,   -- a screenshot at every kill
@@ -41,6 +40,7 @@ local defaults = {
     kudosGroup = false,      -- one friendly chat line when a Kudos player joins your group (chat: off, the owner doesn't read it)
     plateNotes = true,       -- a small dim mark on the nameplate of a player you have notes on
     guilds = {},             -- [guild key] = { board, orders, wanted, slain, feed, nextId } (Guild.lua)
+    looks = {},              -- [player key] = race file and sex, "Scourge3": their race's face on cards (Sightings.lua)
 }
 -- This character's own record.
 local charDefaults = {
@@ -50,7 +50,6 @@ local charDefaults = {
     -- week = { id, p, k, d }: this week's score, made by GK.Week and started over at the weekly reset
     log = {},                -- newest first: { k = "K" or "D", t, n, c, r, l, z, p, o }
     foes = {},               -- [key] = { n, c, r, l, k, d, last, lastKill, lastDeath, hits = { time, ... } }
-    accepted = {},           -- [order key] = true: orders you took
     letters = {},            -- oldest first (Letters.lua)
     letterId = 0,
 }
@@ -246,6 +245,123 @@ function GK.LocalKey(full, known)
     local ours = name .. "-" .. LIB.Realm()
     if ours ~= full and Known(ours) then return ours end
     return full
+end
+
+--- Is this, after a name's dash, a realm? The live servers' internal realms ("CAMWOWEU4Realm4PvP") and the
+--- beta's ("ClassicBetaPvP2") carry digits or PvP/PvE; a surname is a plain word. Our own realm is one,
+--- whatever it looks like.
+local function LooksLikeRealm(s)
+    return s == LIB.Realm() or s:find("%d") ~= nil or s:find("PvP", 1, true) ~= nil or s:find("PvE", 1, true) ~= nil
+end
+
+--- Any player's key in the one spelling Grudgekeeper keeps: name and surname, and our realm. Every
+--- Forever character has a surname (DECISIONS.md, 2026-10-03), and a name is unique across the region,
+--- so the realm part of a key tells nobody apart - but on the live servers it varied, and so the same
+--- player had several keys:
+---   - LibForever reads the surname of a player on another of the server's internal realms as the realm:
+---     "Unc-Shark" for Unc Shark. Every Unc then lost their surname wherever a realm was cut off, and
+---     a death to Unc Allayra went to Unc Shark (the owner, 2026-11-06). A dash followed by a plain
+---     word is put back as the surname.
+---   - a guildie on another realm writes everyone with THEIR realm ("Unc Shark-CAMWOWEU4Realm8PvP"), so
+---     their kill orders never met the same enemy on our nameplates. The realm becomes ours.
+--- A key whose name has no surname and a realm after it stays as it is: "Unc-<realm>" is a name we were
+--- given without one (a death recap, an old record), and guessing which Unc it is would be worse.
+function GK.PlayerKey(key)
+    if type(key) ~= "string" then return key end
+    local name, after = key:match("^(.-)%-([^%-]+)$")
+    if not name or name == "" then return LIB.FullName(key) end
+    if not name:find(" ", 1, true) and not LooksLikeRealm(after) then
+        name = name .. " " .. after                    -- the surname, read as a realm
+    end
+    return name .. "-" .. LIB.Realm()
+end
+
+-- What was kept before GK.PlayerKey (0.1.0-beta2 and the live servers' first days) moves to its spelling
+-- once: GK.db.keys and GK.char.keys say it has. A record that meets one already under the new key is
+-- added into it where we know how (the counts of a foe, the tallies of the guild); anything else keeps
+-- its old key rather than lose either.
+local KEYS_VERSION = 1
+
+local function MaxInto(into, from)
+    for who, n in pairs(from or {}) do
+        if type(n) == "number" and (into[who] or 0) < n then into[who] = n end
+    end
+end
+
+local MERGE = {
+    foes = function(a, b)
+        a.k, a.d = (a.k or 0) + (b.k or 0), (a.d or 0) + (b.d or 0)
+        a.last = math.max(a.last or 0, b.last or 0)
+        if b.lastDeath and (a.lastDeath or 0) < b.lastDeath then a.lastDeath = b.lastDeath end
+    end,
+    wanted = function(a, b)
+        a.victims = a.victims or {}
+        MaxInto(a.victims, b.victims)
+        a.last = math.max(a.last or 0, b.last or 0)
+    end,
+    slain = function(a, b)
+        a.by = a.by or {}
+        MaxInto(a.by, b.by)
+        a.last = math.max(a.last or 0, b.last or 0)
+    end,
+}
+
+--- Move a table keyed by players to the one spelling; merge(new, old) when both are there, else keep both.
+local function Rekey(t, merge)
+    if type(t) ~= "table" then return end
+    local moves = {}
+    for k in pairs(t) do
+        local nk = type(k) == "string" and GK.PlayerKey(k) or k
+        if nk ~= k then moves[#moves + 1] = { k, nk } end
+    end
+    for _, m in ipairs(moves) do
+        local old, new = m[1], m[2]
+        local v = t[old]
+        if t[new] == nil then
+            t[old], t[new] = nil, v
+        elseif merge then
+            merge(t[new], v)
+            t[old] = nil
+        end
+    end
+end
+
+local function RekeyList(list, field)
+    for _, e in ipairs(type(list) == "table" and list or {}) do
+        if type(e) == "table" and type(e[field]) == "string" then e[field] = GK.PlayerKey(e[field]) end
+    end
+end
+
+--- Once, at login: every name Grudgekeeper keeps for another player, in GK.PlayerKey's spelling.
+function GK.RekeyStores()
+    if (GK.char.keys or 0) < KEYS_VERSION then
+        Rekey(GK.char.foes, MERGE.foes)
+        for key, f in pairs(GK.char.foes) do f.n = GK.Show(key) end
+        RekeyList(GK.char.log, "n")
+        RekeyList(GK.char.letters, "n")
+        GK.char.keys = KEYS_VERSION
+    end
+    if (GK.db.keys or 0) < KEYS_VERSION then
+        for _, g in pairs(GK.db.guilds) do
+            Rekey(g.wanted, MERGE.wanted)
+            Rekey(g.slain, MERGE.slain)
+            Rekey(g.people)
+            for key, p in pairs(g.people or {}) do
+                if type(p) == "table" then p.n = key end
+            end
+            for _, o in pairs(g.orders or {}) do
+                if type(o.n) == "string" then o.n = GK.PlayerKey(o.n) end
+            end
+            RekeyList(g.feed, "n")
+        end
+        GK.db.keys = KEYS_VERSION
+    end
+end
+
+--- A unit's player in that spelling (LIB.UnitKey, made GK.PlayerKey's), or nil.
+function GK.UnitKey(unit)
+    local key = LIB.UnitKey(unit)
+    return key and GK.PlayerKey(key) or nil
 end
 
 --- "Level 35 Orc Rogue", from whatever we know.
@@ -595,14 +711,14 @@ function GK.Ink(fs, colour, font, size)
     end
 end
 
---- A flat colour from the skin: "stripe", "rule", or "blood" (GK.BLOOD at alpha a).
+--- A flat colour from the skin: "stripe", "rule", or "blood" (GK.BLOOD), at alpha a or the skin's own.
 function GK.Paint(tex, role, a)
     painted[tex] = { role, a }
     if role == "blood" then
         tex:SetColorTexture(GK.BLOOD[1], GK.BLOOD[2], GK.BLOOD[3], a or 1)
     else
         local c = GK.LOOK[role]
-        tex:SetColorTexture(c[1], c[2], c[3], c[4])
+        tex:SetColorTexture(c[1], c[2], c[3], a or c[4])
     end
 end
 
@@ -633,6 +749,10 @@ LIB.On("PLAYER_LOGIN", function()
     GK.UseLook(GK.db.look)
     GK.char = LIB.PrepareDB(GrudgekeeperCharDB, charDefaults, nil, 1)
     GrudgekeeperCharDB = GK.char
+    -- Retired 2026-11-07, when taking an order went: the orders you took, and the warning for every
+    -- order beside the one for yours (every order warns now). Gone from the saved files too.
+    GK.char.accepted, GK.db.alertAll = nil, nil
+    GK.RekeyStores()
     RegisterMinimap()
     GK.StartGuild()
     GK.StartSightings()

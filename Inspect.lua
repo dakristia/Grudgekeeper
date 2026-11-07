@@ -53,7 +53,7 @@ function GK.InspectCard(unit)
         t.unit = unit
         return GK.PosterCard(t), GK.OrderOn(t.key, t.guid) ~= nil
     end
-    local key = LIB.UnitKey(unit)
+    local key = GK.UnitKey(unit)
     if not key then return nil end
     local d
     if GK.HasRecord(key) then

@@ -12,7 +12,8 @@ function U.load(M, GK)
     M.group = { raid = false, size = 0 }
 
     -- the other files' functions NotesUI calls or wraps
-    GK.LedgerPages = { { name = "Kill orders" }, { name = "Leaderboard" }, { name = "Grudges" }, { name = "News" } }
+    GK.LedgerPages = { { name = "Kill orders" }, { name = "Leaderboard" }, { name = "Most wanted" }, { name = "Grudges" },
+        { name = "News" } }
     GK.AddLedgerPage = function(def)        -- as Window.lua's: def.before names the page to sit in front of
         for i, page in ipairs(GK.LedgerPages) do
             if def.before and page.name == def.before then return table.insert(GK.LedgerPages, i, def) end

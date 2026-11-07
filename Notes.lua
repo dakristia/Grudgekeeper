@@ -611,7 +611,7 @@ end
 --- Put the player on a list, or take them off mine (list nil). Only my own mark moves (D5).
 function GK.SetMark(key, list)
     local me = LIB.Me()
-    key = ValidKey(key)
+    key = GK.PlayerKey(ValidKey(key))
     if not (me and key) or (list ~= nil and not LISTS[list]) then return false end
     local p = GK.Person(key, list ~= nil)
     if not p then return list == nil end
@@ -654,7 +654,7 @@ end
 function GK.AddNote(key, text, tag, list, info)
     local me = LIB.Me()
     if not me then return nil, "The game hasn't said who you are yet - try again in a moment." end
-    key = ValidKey(key)
+    key = GK.PlayerKey(ValidKey(key))
     if not key then return nil, "That player has no name we can keep." end
     text, tag = GK.Clean(text, MAX_TEXT), GK.Clean(tag, GK.MAX_TAG)
     if not (text or tag) then return nil, "Write something first." end
@@ -784,7 +784,7 @@ end
 -- (or we) with the sender's own realm on the live servers. GK.LocalKey files them under our spelling; a
 -- stranger's name is left as written.
 local function OnNote(sender, f)
-    local key, id, ts = GK.LocalKey(ValidKey(f[3])), Int(f[4], 1, MAX_ID), Ts(f[5])
+    local key, id, ts = GK.PlayerKey(GK.LocalKey(ValidKey(f[3]))), Int(f[4], 1, MAX_ID), Ts(f[5])
     if not (key and id and ts) then return false end
     local del = f[6] == "1"
     local text, tag = GK.Clean(f[11], MAX_TEXT), GK.Clean(f[7], GK.MAX_TAG)
@@ -799,7 +799,7 @@ local function OnNote(sender, f)
 end
 
 local function OnMark(sender, f)
-    local key, ts = GK.LocalKey(ValidKey(f[3])), Ts(f[5])
+    local key, ts = GK.PlayerKey(GK.LocalKey(ValidKey(f[3]))), Ts(f[5])
     local del = f[6] == "1"
     local list = LISTS[f[4]] and f[4] or nil
     if not (key and ts) or (not del and not list) then return false end
@@ -809,7 +809,7 @@ local function OnMark(sender, f)
 end
 
 local function OnVote(sender, f)
-    local key, author, id = GK.LocalKey(ValidKey(f[3])), ValidKey(f[4]), Int(f[5], 1, MAX_ID)
+    local key, author, id = GK.PlayerKey(GK.LocalKey(ValidKey(f[3]))), ValidKey(f[4]), Int(f[5], 1, MAX_ID)
     local v, ts = Vote(f[6]), Ts(f[7])
     if not (key and author and id and v and ts) then return false end
     -- the note's author as we know them: also one whose notes on this player are all we know of them
@@ -886,12 +886,18 @@ function GK.NotesBroadcast()
     return QueueSnapshot()
 end
 
-local replyAfter = 0
+local replyAfter, replyDue = 0, false
 local function OnAsk()
-    -- Everyone logging in at once asks at once: answer once, a few seconds later.
-    if GetTime() < replyAfter then return false end
-    replyAfter = GetTime() + 30
-    C_Timer.After(2 + math.random() * 4, GK.NotesBroadcast)
+    -- Everyone logging in at once asks at once: answer once, a few seconds later. An ask inside the half
+    -- minute after an answer waits for it to end; it used to get no answer at all, so a guildie who
+    -- logged in a little after another heard none of our notes (2026-11-07, as Guild.lua's).
+    if replyDue then return false end
+    replyDue = true
+    C_Timer.After(math.max(0, replyAfter - GetTime()) + 2 + math.random() * 4, function()
+        replyDue = false
+        replyAfter = GetTime() + 30
+        GK.NotesBroadcast()
+    end)
     return false
 end
 

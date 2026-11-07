@@ -82,6 +82,38 @@ end
 
 local KARI_ORDER = 901
 
+-- A question only the game can answer (VERIFY.md, 2026-11-06): does a face drawn with SetPortraitTexture
+-- stay in its texture after the player has gone - target cleared, out of sight? If it does, a poster can
+-- keep the real face of the one you hate for the rest of the session; if not, there is nothing to keep.
+-- Every face call in the client takes a unit, so nothing keeps a face past a reload either way.
+local faceProbe
+local function KeepTargetFace()
+    if not UnitExists("target") or not UnitIsPlayer("target") then
+        Say("target a player first - friend or foe.")
+        return
+    end
+    if not faceProbe then
+        local f = CreateFrame("Button", "GrudgekeeperFaceProbe", UIParent)
+        f:SetSize(110, 128)
+        f:SetPoint("CENTER", 0, 180)
+        f:SetFrameStrata("DIALOG")
+        f.face = f:CreateTexture(nil, "ARTWORK")
+        f.face:SetSize(96, 96)
+        f.face:SetPoint("TOP")
+        f.name = f:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
+        f.name:SetPoint("TOP", f.face, "BOTTOM", 0, -4)
+        f.name:SetWidth(110)
+        f:SetScript("OnClick", function(self) self:Hide() end)
+        if LIB.RegisterPopup then LIB.RegisterPopup(f) end
+        faceProbe = f
+    end
+    local ok = pcall(SetPortraitTexture, faceProbe.face, "target")
+    local key = GK.UnitKey("target")
+    faceProbe.name:SetText(ok and (key and GK.Show(key) or "?") or "the game refused the face")
+    faceProbe:Show()
+    Say("now clear your target and walk out of sight: does the face stay? Click it to close.")
+end
+
 -- { label } is a heading; { label, fn } a button.
 local ACTIONS = {
     { "Letters and the notice" },
@@ -89,6 +121,7 @@ local ACTIONS = {
     { "Your target is near", function() GK.Warn(GK.Show(TheEnemy().key) .. " is near!", true) end },
     { "Place the letter icon", function() GK.PlaceNotice() end },
     { "Open the window", function() GK.OpenWindow(1) end },
+    { "Keep your target's face", KeepTargetFace },
 
     { "You" },
     { "Kill your target", function() GK.RecordKill(TheEnemy()) end },
@@ -119,6 +152,13 @@ local ACTIONS = {
     end },
     { "Edvard adds 5g to it", function() Hear("Edvard", "T", 1, Guildie("Kari"), KARI_ORDER, 50000) end },
     { "Edvard saw them here", function()
+        -- A sighting lands only on an open order: without Kari's, nothing is placed, and the line below
+        -- used to send you to the map anyway.
+        local o = GK.Store().orders[Guildie("Kari") .. "#" .. KARI_ORDER]
+        if not (o and o.state == "o") then
+            Say("there is no open order to see them for - press Kari posts an order first.")
+            return
+        end
         local ok, m, x, y = pcall(LIB.MyPosition)
         if not (ok and m) then
             Say("the game gives no map position here (indoors, or an instance).")
@@ -126,7 +166,13 @@ local ACTIONS = {
         end
         Hear("Edvard", "S", 1, Guildie("Kari"), KARI_ORDER, GK.Zone(), TheEnemy().l, m,
             math.floor(x * 1000 + 0.5), math.floor(y * 1000 + 0.5))
-        Say("open the map (M): the seal is where you stand.")
+        if not (o.seen and o.seen.m) then
+            Say("the sighting didn't land on Kari's order.")
+            return
+        end
+        -- the panel's own Restore takes the order away again, and its seal with it
+        Say(("open the map (M): the seal is where you stand (map %d, %.1f, %.1f), for 15 minutes "
+            .. "- while this panel stays open."):format(m, x * 100, y * 100))
     end },
     { "Edvard fulfils it", function() Hear("Edvard", "F", 1, Guildie("Kari"), KARI_ORDER, GK.Zone()) end },
     { "Kari and Edvard's scores", function()

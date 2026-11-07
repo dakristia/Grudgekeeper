@@ -110,7 +110,7 @@ local function Build(panel)
     local letters = Check(h1, "Kill orders as letters", "letters",
         "A small sealed letter where you put it; click it to read. Off: orders only show in the ledger.")
     local mine = Check(letters, "Letters for my own kills and deaths", "myLetters",
-        "Your points after a kill, or who killed you - with a button to post a kill order on them.")
+        "Your points after a kill, and the death that put a kill order on your killer.")
     -- Placing the letter icon: it only shows when something came, so it needs a way to be shown now.
     local place = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     place:SetSize(170, 22)
@@ -125,10 +125,9 @@ local function Build(panel)
     place:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     local h2 = Section(place, "Warnings")
-    local near = Check(h2, "When my targets are near", "alertNear",
-        "Orders you took or posted: a red glow, a soft chime and who it is.")
-    local all = Check(near, "For every open kill order", "alertAll", "The same warning for every order the guild has out.")
-    local marks = Check(all, "Skull over targets' nameplates", "plateMarks",
+    local near = Check(h2, "When a kill order's target is near", "alertNear",
+        "Near you: a red glow, a soft chime and who it is. Seen by a guildie: who saw them, and where.")
+    local marks = Check(near, "Skull over targets' nameplates", "plateMarks",
         "Over anyone with an open order on them. Needs enemy nameplates on (V).")
     local pins = Check(marks, "Last seen on the map", "mapPins",
         "Where a guildie saw an order's target, for 15 minutes. Click it for the poster.")

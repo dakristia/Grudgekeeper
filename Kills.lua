@@ -34,6 +34,7 @@ end
 function GK.RecordKill(v)
     local now = time()
     local f = GK.Foe(v.key, { n = GK.Show(v.key), c = v.c, r = v.r, l = v.l })
+    GK.KeepLooks(v.key, GK.Seen(v.key, v.guid) or v)     -- a grudge now: their race's face is kept
     local today = 0
     for i = #f.hits, 1, -1 do
         if now - f.hits[i] > GK.DAY then table.remove(f.hits, i) else today = today + 1 end
@@ -77,7 +78,7 @@ function GK.OnPartyKill(attacker, target)
     local ok, _, classFile, race, raceFile, _, name, realm = pcall(GetPlayerInfoByGUID, target)
     if not ok or Secret(name) or type(name) ~= "string" then return end
     local s = GK.Seen(nil, target)
-    local key = (s and s.key) or GK.KeyOf(name, realm)
+    local key = (s and s.key) or GK.PlayerKey(GK.KeyOf(name, realm))
     if not key then return end
     -- The other side only: we keep sightings of enemies alone, so having seen them settles it;
     -- otherwise their race decides, and a race that could be either side is not counted.
@@ -135,6 +136,7 @@ end
 --- One death of ours to an enemy player. v = { key, guid, c, r, l, spell }
 function GK.RecordDeath(v)
     local f = GK.Foe(v.key, { n = GK.Show(v.key), c = v.c, r = v.r, l = v.l })
+    GK.KeepLooks(v.key, GK.Seen(v.key, v.guid) or v)     -- a grudge now: their race's face is kept
     f.d = f.d + 1
     f.lastDeath = time()
     GK.char.deaths = GK.char.deaths + 1
@@ -147,7 +149,10 @@ function GK.RecordDeath(v)
     GK.SendBoard()
     -- the third of us in two hours, or the third time for you in half an hour: an order goes out
     local auto = GK.AutoOrder(v)
-    if GK.db.myLetters then GK.SlainLetter(v, f.d, zone, auto ~= nil) end
+    -- A letter only for the death that posted that order. One death to someone you will never see again
+    -- is no news ("kanskje ikke så viktig å få brev om man bare blir drept en random gang", the owner,
+    -- 2026-11-06); it still counts, and the ledger's Grudges and News have it.
+    if GK.db.myLetters and auto then GK.SlainLetter(v, f.d, zone, true) end
     GK.Changed()
 end
 
@@ -169,9 +174,10 @@ function GK.ResolveDeath()
         lastDeath = "neither the death recap nor the damage meter named anyone"
         return
     end
-    local s = GK.SeenByName(name)
+    local s, why = GK.SeenByName(name)
     if not s then
-        lastDeath = ("%s, by %s - not an enemy player we saw, so not counted"):format(GK.Clean(name, 40) or "?", how)
+        lastDeath = ("%s, by %s - %s, so not counted"):format(GK.Clean(name, 40) or "?", how,
+            why == "several" and "several enemy players we saw go by that name" or "not an enemy player we saw")
         return
     end
     lastDeath = ("%s, by %s"):format(s.key, how)

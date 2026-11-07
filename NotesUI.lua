@@ -227,8 +227,7 @@ end
 -- News; Shame and Kudos are the friendly ones, over the right page (side = "right").
 local PAGE_WORD = { kos = "Marked", watch = "Shame", kudos = "Kudos" }
 local EMPTY = {
-    kos = "Nobody is marked. It is for an enemy you want to mark without a bounty or a history. "
-        .. "Use Mark someone, at the top of this page, or right-click a player and pick Grudgekeeper notes.",
+    kos = "Nobody is marked. Right-click an enemy and pick Grudgekeeper notes to mark them.",
     watch = "Nobody is on your Shame list. It is for players to be careful with - a ninja looter, a scammer. "
         .. "Use Put someone on Shame, at the top of this page - someone who just left your group is on its list.",
     kudos = "Nobody has kudos yet. Use Give someone kudos, at the top of this page, or right-click a good "
@@ -236,7 +235,7 @@ local EMPTY = {
 }
 
 -- each list page's own action, at the top of the page: it opens the who-picker (Pick.lua)
-local ADD = { kos = "Mark someone", watch = "Put someone on Shame", kudos = "Give someone kudos" }
+local ADD = { watch = "Put someone on Shame", kudos = "Give someone kudos" }
 
 --- Did I vote, one way or the other, on a note of this player's? Mine only keeps such a row (D9).
 local function VotedOn(p)
@@ -262,7 +261,7 @@ function GK.NotesItems(list)
         local newest = s and s.notes[1]
         if newest then bits[#bits + 1] = newest.text and ('"' .. newest.text .. '"') or nil end
         local key = e.key
-        items[#items + 1] = { key = "p:" .. key, name = GK.Show(key), face = { c = p.c, rf = p.rf, sx = p.sx },
+        items[#items + 1] = { key = "p:" .. key, name = GK.Show(key), face = { key = key, c = p.c, rf = p.rf, sx = p.sx },
             sub = table.concat(bits, " - "), right = e.score ~= 0 and ScoreText(e.score) or "", ts = e.ts,
             votes = e.score, own = (e.mine or VotedOn(p)) or nil,
             select = { kind = "card", make = function() return GK.NoteCard(key, list) end } }
@@ -275,27 +274,24 @@ function GK.NotesItems(list)
     return items, EMPTY[list]
 end
 
-for _, list in ipairs({ "kos", "watch", "kudos" }) do
+-- The friendly lists have pages of their own, at the right. Marked has none since 2026-11-07: it is a
+-- section of the kill orders page (Window.lua), as kill orders and Most wanted say the rest of it.
+for _, list in ipairs({ "watch", "kudos" }) do
     GK.AddLedgerPage({
-        name = PAGE_WORD[list], list = list, sortable = true, side = list ~= "kos" and "right" or nil,
-        before = list == "kos" and "News" or nil, add = { text = ADD[list], kind = list },
+        name = PAGE_WORD[list], list = list, sortable = true, side = "right", add = { text = ADD[list], kind = list },
         items = function() return GK.NotesItems(list) end,
         headings = { { "Player", 48, nil, "name", "name, A to Z" }, { "Votes", COL_RIGHT, "RIGHT", "votes", "votes" } },
-        sub = function(items)
-            if list == "kos" then return Plural(#items, "player") .. " marked" end
-            return ("%s on %s"):format(Plural(#items, "player"), PAGE_WORD[list])
-        end,
+        sub = function(items) return ("%s on %s"):format(Plural(#items, "player"), PAGE_WORD[list]) end,
     })
 end
 
---- Open the ledger at the page of a list: "kos", "watch" or "kudos" (Marked for anything else).
+--- Open the ledger at the page of a list: "watch" or "kudos"; Marked, and anything else, is on the kill
+--- orders page, the first.
 function GK.OpenNotes(list)
-    local kos
     for i, def in ipairs(GK.LedgerPages) do
         if def.list == list then return GK.OpenWindow(i) end
-        if def.list == "kos" then kos = i end
     end
-    GK.OpenWindow(kos)
+    GK.OpenWindow(1)
 end
 
 -- ---------------------------------------------------------------------------
@@ -321,6 +317,19 @@ local function WrapCard(name)
         local d = original(...)
         local lines = d and GK.NoteLines(d.key)
         for i = 1, lines and math.min(#lines, MAX_CARD_LINES - #d.lines) or 0 do d.lines[#d.lines + 1] = lines[i] end
+        -- the ledger's card: a Notes section of its own, before the news (which gives way when room runs out)
+        if lines and d.rich then
+            local rows = {}
+            for i, line in ipairs(lines) do
+                local label, value = line:match("^(%a+): (.+)$")
+                rows[i] = { label, value or line }
+            end
+            local at = #d.rich.sections + 1
+            for i, sec in ipairs(d.rich.sections) do
+                if sec.kind == "events" then at = i break end
+            end
+            table.insert(d.rich.sections, at, { head = "Notes", kind = "facts", rows = rows })
+        end
         return d
     end
 end
@@ -514,7 +523,7 @@ local function PlayerKey(unit)
     if not UnitExists(unit) then return nil end
     local ok, isPlayer = pcall(UnitIsPlayer, unit)
     if not ok or Secret(isPlayer) or not isPlayer then return nil end
-    local key = LIB.UnitKey(unit)
+    local key = GK.UnitKey(unit)
     if not key or LIB.IsMyStoredName(key) then return nil end
     return key
 end
@@ -895,7 +904,7 @@ local function PrintHelp()
     print("  /grudge shame <first> <surname> [text]  - put a player on your Shame list")
     print("  /grudge kudos <first> <surname> [text]  - put a player on your Kudos list")
     print("  /grudge move <first> <surname> marked|shame|kudos|none  - move your mark on a player")
-    print("  /grudge notes  - open the Marked page (/grudge shame and kudos open theirs)")
+    print("  /grudge notes  - open the kill orders page, where Marked is (/grudge shame and kudos open theirs)")
     print("  /grudge import  - take over Guild Grudge's notes (import force: again)")
 end
 

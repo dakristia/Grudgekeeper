@@ -2,8 +2,8 @@
 -- envelope says you have mail - but on its own, wherever you put it, not on the minimap. It fades in
 -- and blinks when a letter lands, then rests with a faint glow until you read it. Click it to read,
 -- right-click for the hitlist, drag it anywhere; /grudge notice shows it to place it without waiting
--- for mail. When the target of an order you took or posted is near it glows red, with a soft chime and one
--- short line under it. That is the only warning Grudgekeeper gives: nothing opens in the middle of
+-- for mail. When the target of a kill order is near it glows red, with a soft chime and one short line
+-- under it; when a guildie sees them, the line alone says who saw them where. That is the only warning Grudgekeeper gives: nothing opens in the middle of
 -- the screen.
 local ADDON, GK = ...
 

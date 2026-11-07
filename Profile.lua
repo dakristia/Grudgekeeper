@@ -43,11 +43,19 @@ local function Find(t, key)
     return nil
 end
 
---- "Vebjørn 5, Kari 4 and 3 more" from { [who] = count }, the most first; and the sum of the counts.
-local function Names(map)
+--- "once", "twice", "3 times".
+local function Times(n) return n == 1 and "once" or n == 2 and "twice" or (n .. " times") end
+
+--- A count beside a name: "once", "twice", "3x" (with the times sign).
+local function Count(n) return n == 1 and "once" or n == 2 and "twice" or (n .. "\195\151") end
+
+--- "Vebjørn 5, Kari 4 and 3 more" from { [who] = count }, the most first; the sum of the counts (yours
+--- too); and how many names it has. count: how a count is written after the name (Count), else as a
+--- plain number. notMe: leave yourself out of the names, where a line of your own already says yours.
+local function Names(map, count, notMe)
     local list, total = {}, 0
     for who, n in pairs(map) do
-        list[#list + 1] = { who = who, n = n }
+        if not (notMe and LIB.IsMyStoredName(who)) then list[#list + 1] = { who = who, n = n } end
         total = total + n
     end
     table.sort(list, function(a, b)
@@ -55,20 +63,91 @@ local function Names(map)
         return a.who < b.who
     end)
     local parts = {}
-    for i = 1, math.min(NAMES, #list) do parts[i] = ("%s %d"):format(Who(list[i].who), list[i].n) end
+    for i = 1, math.min(NAMES, #list) do
+        parts[i] = ("%s %s"):format(Who(list[i].who), count and count(list[i].n) or tostring(list[i].n))
+    end
     local text = table.concat(parts, ", ")
     if #list > NAMES then text = text .. (" and %d more"):format(#list - NAMES) end
-    return text, total
+    return text, total, #list
+end
+
+--- How long ago, short, for a number on the card: "now", "12 min", "5 h", "3 d".
+local function Since(t)
+    local s = time() - (t or 0)
+    if s < 90 then return "now" end
+    if s < 3600 then return math.floor(s / 60) .. " min" end
+    if s < 2 * GK.DAY then return math.floor(s / 3600) .. " h" end
+    return math.floor(s / GK.DAY) .. " d"
+end
+
+--- The same, as the line under a number: "just now", "12 min ago", "3 d ago".
+local function SinceAgo(t)
+    local s = Since(t)
+    return s == "now" and "just now" or (s .. " ago")
+end
+
+--- How long until: "in 5 days", "in 3 h", "within the hour".
+local function Until(t)
+    local s = (t or 0) - time()
+    if s < 3600 then return "within the hour" end
+    if s < 2 * GK.DAY then return ("in %d h"):format(math.floor(s / 3600)) end
+    return ("in %d days"):format(math.floor(s / GK.DAY))
+end
+
+--- "Kari, Lars and you": a list of names, the last joined with "and", at most NAMES and "2 more".
+local function AndList(names)
+    local shown = {}
+    for i = 1, math.min(NAMES, #names) do shown[i] = names[i] end
+    if #names > NAMES then shown[#shown + 1] = ("%d more"):format(#names - NAMES) end
+    if #shown < 2 then return shown[1] or "" end
+    return table.concat(shown, ", ", 1, #shown - 1) .. " and " .. shown[#shown]
+end
+
+local function Upper(s) return (s:gsub("^%l", string.upper)) end
+
+--- What a tile counts, said for one or for more: "1 DEATH", "3 DEATHS".
+local function Counted(n, word) return n == 1 and word or (word .. "s") end
+
+--- Our guild's name, for the line under an enemy's kills and deaths; "us" without one, or while the
+--- client can't say.
+local function OurGuild()
+    local name = GetGuildInfo and GetGuildInfo("player")
+    if type(name) == "string" and name ~= "" and not GK.Secret(name) then return name end
+    return "us"
+end
+
+--- Where and when an enemy was last seen, from the best we have: a guildie's sighting of an order's
+--- target, our own look in the last 15 minutes, or the guild's news of a kill on either side (which
+--- says where). { t = time(), z } or nil.
+local function LastSeen(key, o, live)
+    local best
+    local function Take(t, z)
+        if t and (not best or t > best.t) then best = { t = t, z = z } end
+    end
+    if o and o.seen and o.seen.t then Take(o.seen.t, o.seen.z) end
+    if live and live.t and GetTime then Take(time() - math.floor(GetTime() - live.t), live.z) end
+    for _, e in ipairs(GK.Store().feed) do
+        if (e.kind == "K" or e.kind == "D") and e.n and (e.n == key or GK.SameName(e.n, key)) then
+            Take(e.t, e.z)
+            break                                   -- the feed is newest first
+        end
+    end
+    return best
 end
 
 -- ---------------------------------------------------------------------------
 -- What a card says. Plain data, so the smoke test can read it without a frame:
--- { title, name, info, lines, big, caption, seal, blood, buttons = { { text, fn } }, c, unit, key,
---   stats, withStats }
--- A line that starts "Label: " is drawn on the ledger as a label and its value, in two columns.
--- stats: up to three { label, value }, the numbers that matter, side by side where a page has room for
--- them (the ledger); where it hasn't, big and caption stand in. withStats: [line] = a shorter line, or
--- false to leave it out, where the stats show - so the ledger never says a number twice.
+-- { title, name, info, lines, big, caption, seal, blood, buttons = { { text, fn } }, c, unit, key, rich }
+-- title, name, info, lines, big and caption are the card as the small profile card and the Inspect tab
+-- draw it: a line that starts "Label: " is a label and its value there, in two columns.
+-- rich is the same card for a page with room for it, the ledger's (Window.lua, FillRich), as previewed
+-- with the owner (2026-11-06): every number in a tile with a name and a line that says something, then
+-- sections of facts.
+--   { kicker, head, sub, info, seal, sealNum, tiles = { { value, label, under, under2 } },
+--     bar = { frac, left, right }, sections = { { head, kind, rows } } }
+--   kicker: the small red line over the name ("WANTED", "#1 THIS WEEK"); head: the name; sub: under it.
+--   kind "facts": rows { label, value, more } (no label: a paragraph; more: a grey word after the
+--   value); "events": { c, text, under, right }, each with their class's crest.
 -- ---------------------------------------------------------------------------
 --- An enemy player. t = { key, guid, c, r, l, unit }: whatever the caller knows. inLedger: drawn on
 --- the ledger's own page (Window.lua), where your own order's button withdraws it rather than
@@ -86,30 +165,58 @@ function GK.PosterCard(t, inLedger)
             or (w and w[field])
     end
     local c, r, l = Pick("c"), Pick("r"), Pick("l")
-    -- race and sex only from a look this session: enough for their race's face in the portrait
+    -- Their face: the one we met this session, else their race's from race and sex, seen or kept
+    -- (GK.FaceOf). Under whichever spelling we have them by - the card may be asked for a name alone.
+    local function Known(k) return k and (GK.HasFace(k) or GK.FaceOf(k).rf) and k or nil end
+    local faceKey = Known(key) or Known(fkey) or Known(o and o.n) or key
+    local look = GK.FaceOf(faceKey, c)
     local d = { key = key, unit = t.unit, c = c, name = GK.Show(key), info = GK.Describe(l, c, r), lines = {},
-        buttons = {}, rf = live and live.rf, sx = live and live.sx, withStats = {} }
+        buttons = {}, rf = look.rf, sx = look.sx, faceKey = faceKey }
+    local rich = { head = d.name, info = d.info, tiles = {}, sections = {} }
+    d.rich = rich
     local lines = d.lines
     local killedUs, weKilled = 0, 0
-    local tally = {}               -- [line] = the line without its total, where the stats say the total
+    local history = {}             -- the rich card's History: you, then whom they killed, then who got them
+    local nemesis = f ~= nil and fkey ~= nil and GK.Nemesis() == fkey
+    if f and (f.k or 0) + (f.d or 0) > 0 then
+        local said = {}
+        if (f.k or 0) > 0 then said[#said + 1] = "killed them " .. Times(f.k) end
+        if (f.d or 0) > 0 then said[#said + 1] = "died to them " .. Times(f.d) end
+        history[1] = { "You", table.concat(said, ", ") }
+    end
+    -- With a You row, the guild's lists name only the others: "You: killed them once" over "Killed by:
+    -- you once" said the same thing twice (the owner, 2026-11-06). A list left empty goes.
+    local youSaid = history[1] ~= nil
     if w and next(w.victims) then
         local names, total = Names(w.victims)
         killedUs = total
         lines[#lines + 1] = ("Killed us: %s - %s."):format(Plural(total, "time"), names)
-        tally[lines[#lines]] = ("Killed us: %s."):format(names)
+        local others, _, n = Names(w.victims, Count, youSaid)
+        if n > 0 then history[#history + 1] = { "They killed", others } end
     end
     if e and next(e.by) then
         local names, total = Names(e.by)
         weKilled = total
         lines[#lines + 1] = ("We killed them: %s - %s."):format(Plural(total, "time"), names)
-        tally[lines[#lines]] = ("We killed them: %s."):format(names)
+        local others, _, n = Names(e.by, Count, youSaid)
+        if n > 0 then history[#history + 1] = { "Killed by", others } end
     end
     if f and (f.k or 0) + (f.d or 0) > 0 then
-        local nemesis = GK.Nemesis() == fkey
         lines[#lines + 1] = ("You: %s, %s%s"):format(Plural(f.k or 0, "kill"), Plural(f.d or 0, "death"),
             nemesis and " - your nemesis." or ".")
-        tally[lines[#lines]] = nemesis and "You: your nemesis." or false
     end
+    -- The rich card's numbers are THEIR score against the guild, read as a scoreboard: "7 KILLS on
+    -- YippYapp", "3 DEATHS by YippYapp", and under it when the last was. Named from our side - "7 KILLED
+    -- US", "3 WE KILLED" - the number read as the start of a sentence; "to us" became the guild's name
+    -- (the owner, 2026-11-06). The guild on a line of its own, so a long name is cut, never the time.
+    rich.sub = nemesis and "Your nemesis" or nil
+    local guild = OurGuild()
+    local kills = { tostring(killedUs), Counted(killedUs, "Kill"), "on " .. guild }
+    if killedUs > 0 and w.last then kills[4] = SinceAgo(w.last) end
+    local deaths = { tostring(weKilled), Counted(weKilled, "Death"), "by " .. guild }
+    if weKilled > 0 and e.last then deaths[4] = SinceAgo(e.last) end
+    local spotted = LastSeen(key, o, live)
+    local seenTile = spotted and { Since(spotted.t), "Last seen", spotted.z or "" } or { "-", "Last seen", "not lately" }
     -- Last seen: anyone in the guild, through the order; else our own look in the last 15 minutes.
     local seen = o and o.seen
     if seen and seen.t then
@@ -120,11 +227,8 @@ function GK.PosterCard(t, inLedger)
     local me = LIB.Me()
     if o then
         local pot, backers = GK.Pot(o)
-        local hunting = 0
-        for _ in pairs(o.hunters or {}) do hunting = hunting + 1 end
         local extra = {}
         if backers > 0 then extra[#extra + 1] = Plural(backers, "backer") end
-        if hunting > 0 then extra[#extra + 1] = hunting .. " hunting them" end
         local tail = #extra > 0 and (" - " .. table.concat(extra, ", ")) or ""
         -- An order their own killing posted (GK.AutoOrder) says why, in the Grudgekeeper's words, and
         -- was posted by a death rather than by a guildie's hand. One a guildie posted says the why they
@@ -137,23 +241,26 @@ function GK.PosterCard(t, inLedger)
         elseif o.note and o.note ~= "" then
             lines[#lines + 1] = ("Why: %s"):format(o.note)
         end
-        -- the pot, the backers and the hunters are the ledger's stats; the line only says who posted it there
-        local posted
         if pot > 0 then
-            posted = ("Posted by: %s - a bounty of %s%s."):format(by, GK.MoneyText(pot), tail)
+            lines[#lines + 1] = ("Posted by: %s - a bounty of %s%s."):format(by, GK.MoneyText(pot), tail)
             d.big = pot >= 10000 and (math.floor(pot / 10000) .. "g") or GK.MoneyText(pot)
             d.caption = "bounty"
         else
-            posted = ("Posted by: %s - for the guild's honour%s."):format(by, tail)
+            lines[#lines + 1] = ("Posted by: %s - for the guild's honour%s."):format(by, tail)
         end
-        lines[#lines + 1] = posted
-        d.withStats[posted] = ("Posted by: %s."):format(by)
-        d.stats = { { "Bounty", pot > 0 and GK.Coins(pot) or "honour" }, { "Backers", tostring(backers) },
-            { "Hunting", tostring(hunting) } }
+        -- The rich card: the bounty and how many put gold in it, then the order itself - who posted it and
+        -- when, why, when it runs out. Nobody takes an order, so nobody is listed as hunting them: any
+        -- guildie's kill fulfils it, and "Hunting: nobody yet" read as a sign-up it was waiting for ("jeg
+        -- vil ikke at noen skal ta ordre", the owner, 2026-11-07).
+        local givers = backers + ((o.reward or 0) > 0 and 1 or 0)
+        rich.tiles[1] = { pot > 0 and GK.Coins(pot) or "honour", "Bounty",
+            givers > 0 and ("from %d guildie%s"):format(givers, givers == 1 and "" or "s") or "no gold on it" }
+        local order = { { "Posted by", ("%s, %s"):format(Upper(by), GK.Ago(o.t)) } }
+        if o.note and o.note ~= "" then order[#order + 1] = { "Why", o.note } end
+        if o.exp then order[#order + 1] = { "Runs out", Until(o.exp) } end
+        rich.sections[1] = { head = "The order", kind = "facts", rows = order }
         if o.by ~= me then
-            local mine = GK.char.accepted[o.key]
-            d.buttons[1] = { mine and "Drop the order" or "Take the order", function() GK.Accept(o, not mine) end }
-            d.buttons[2] = { (o.pot and me and o.pot[me]) and "Your share" or "Add to the pot", function()
+            d.buttons[1] = { (o.pot and me and o.pot[me]) and "Your share" or "Add to the pot", function()
                 GK.OpenPost({ key = o.n, guid = o.guid, c = o.c, r = o.r, l = o.l })
             end }
         elseif inLedger then
@@ -167,22 +274,59 @@ function GK.PosterCard(t, inLedger)
         end }
     end
     if not d.big and killedUs > 0 then d.big, d.caption = tostring(killedUs), "killed us" end
-    local history = killedUs > 0 or (e and next(e.by)) or (f and (f.k or 0) + (f.d or 0) > 0)
     if o then
         d.title, d.seal = "WANTED", "mark"
-    elseif history then
+    elseif #history > 0 then
         d.title, d.seal = "A GRUDGE", "seal_black"
-        -- no order: the history is the numbers that matter, and its lines say who
-        d.stats = { { "Killed us", tostring(killedUs) }, { "We killed", tostring(weKilled) } }
-        -- (the You line is there exactly when this is)
-        if f and (f.k or 0) + (f.d or 0) > 0 then d.stats[3] = { "You", ("%d - %d"):format(f.k or 0, f.d or 0) } end
-        for line, short in pairs(tally) do d.withStats[line] = short end
     else
         d.title = "NO RECORD"
         lines[#lines + 1] = "Nobody in the guild has killed them or died to them - not that the Grudgekeeper heard of."
+        history[1] = { nil, lines[#lines] }
     end
+    rich.kicker, rich.seal = d.title, d.seal
+    rich.tiles[#rich.tiles + 1] = kills
+    rich.tiles[#rich.tiles + 1] = deaths
+    rich.tiles[#rich.tiles + 1] = seenTile
+    rich.sections[#rich.sections + 1] = { head = "History", kind = "facts", rows = history }
     d.blood = f ~= nil and (f.d or 0) > 0       -- they have killed you
     return d
+end
+
+-- What a guildie did, as the rich card's Lately says it; the right-hand column is what it was worth.
+local DID = { K = "Killed %s", D = "Fell to %s", F = "Fulfilled the kill order on %s", C = "Put a price on %s",
+    T = "Added to the pot on %s" }
+
+--- The last few things the news says a guildie did, newest first: { c, text, under, right }.
+local function Lately(key, me, most)
+    local out = {}
+    for _, e in ipairs(GK.Store().feed) do
+        if #out >= most then break end
+        if DID[e.kind] and (e.who == key or (me and LIB.IsMyStoredName(e.who))) then
+            local right
+            if e.kind == "K" then
+                right = (e.p or 0) > 0 and ("+%d"):format(e.p) or nil
+            elseif e.kind == "C" then
+                right = (e.p or 0) > 0 and GK.Coins(e.p) or "honour"
+            elseif e.kind == "T" then
+                right = (e.p or 0) > 0 and GK.Coins(e.p) or nil
+            end
+            out[#out + 1] = { c = e.c, text = DID[e.kind]:format(GK.Show(e.n)),
+                under = (e.z and (e.z .. " \194\183 ") or "") .. GK.Ago(e.t), right = right }
+        end
+    end
+    return out
+end
+
+--- How far a score is on its way to the next title: { frac, left = this title, right = what is left }.
+local function Progress(p)
+    local at = 1
+    for i, row in ipairs(GK.TITLES) do
+        if p >= row[1] then at = i end
+    end
+    local now, after = GK.TITLES[at], GK.TITLES[at + 1]
+    if not after then return { frac = 1, left = now[2], right = "the highest title" } end
+    return { frac = (p - now[1]) / (after[1] - now[1]), left = now[2],
+        right = ("%s to %s"):format(Plural(after[1] - p, "point"), after[2]) }
 end
 
 --- The latest the news says about a guildie: one line, or nil.
@@ -254,15 +398,44 @@ function GK.RecordCard(key, unit)
     else
         lines[#lines + 1] = "Nothing yet this week."
     end
-    -- On the ledger: all time and this week as a table, each with its place on the board, and what they
-    -- are under the name; the two lines it says go there.
-    local function Of(i, n) return i and ("#%d of %d"):format(i, n) or "-" end
-    d.grid = { cols = { "Points", "Kills", "Deaths", "Place" }, rows = {
-        { "All time", tostring(p), tostring(r.k or 0), tostring(r.d or 0), Of(rank, of) },
-        { "This week", tostring(thisWeek and r.wp or 0), tostring(thisWeek and r.wk or 0),
-            tostring(thisWeek and r.wd or 0), Of(weekRank, weekOf) } } }
-    d.gridInfo = GK.Describe(r.l, r.c)
-    d.withStats = { [lines[1]] = false, [lines[2]] = false }
+    -- The rich card (the ledger): the all-time numbers in tiles, this week's under each; the place on
+    -- the board with what it counts; the way to the next title; the highlights; and the news of them.
+    -- The kicker is this week's place, the list the leaderboard opens on.
+    local function Week(n) return thisWeek and (n or 0) > 0 and ("%d this week"):format(n) or "none this week" end
+    local wp = thisWeek and (r.wp or 0) or 0
+    local info = GK.Describe(r.l, r.c)
+    if not me and r.t and time() - r.t > QUIET_FOR then info = info .. " \194\183 last heard " .. GK.Ago(r.t) end
+    local streak, best = r.st or 0, math.max(r.bs or 0, r.st or 0)
+    local rich = { head = d.title, sub = d.name, info = info,
+        kicker = (weekRank and ("#%d this week"):format(weekRank)) or (rank and ("#%d all time"):format(rank)) or nil,
+        seal = weekRank and weekRank <= 3 and wp > 0 and ("rank_" .. weekRank) or nil,
+        tiles = {
+            { tostring(p), Counted(p, "Point"), Week(r.wp) },
+            { tostring(r.k or 0), Counted(r.k or 0, "Kill"), Week(r.wk) },
+            { tostring(r.d or 0), Counted(r.d or 0, "Death"), Week(r.wd) },
+            { rank and ("#" .. rank) or "-", "Place", rank and ("of %d all time"):format(of) or "" } },
+        bar = Progress(p), sections = {} }
+    rich.sealNum = rich.seal and tostring(weekRank) or nil
+    -- Only the highlights there are: four rows of "none yet" and "nobody yet" were most of the card for a
+    -- new player, and made the rest hard to find (the owner, 2026-11-06). The bounties go with the orders
+    -- they were won on.
+    local highlights = {}
+    if best > 0 then
+        highlights[#highlights + 1] = { "Kill streak", tostring(streak),
+            best > streak and ("best ever %d"):format(best) or (me and "your best yet" or "their best yet") }
+    end
+    if r.nm then
+        highlights[#highlights + 1] = { "Nemesis", GK.Show(r.nm),
+            r.nt and ("has killed %s %s"):format(me and "you" or "them", Times(r.nt)) or nil }
+    end
+    if (r.od or 0) > 0 then
+        highlights[#highlights + 1] = { "Orders fulfilled", tostring(r.od),
+            (r.ow or 0) > 0 and (GK.Coins(r.ow) .. " in bounties") or nil }
+    end
+    if #highlights > 0 then rich.sections[1] = { head = "Highlights", kind = "facts", rows = highlights } end
+    local news = Lately(key, me, 3)
+    if #news > 0 then rich.sections[#rich.sections + 1] = { head = "Lately", kind = "events", rows = news } end
+    d.rich = rich
     if (r.bs or 0) > 0 then
         lines[#lines + 1] = ("Kill streak: %d now, best %d."):format(r.st or 0, r.bs)
     end
@@ -343,6 +516,13 @@ local function Build()
     -- The game's own X, as on the letter in the same frame; our own Hide, so closing works in combat too.
     GK.MakeGameCloseButton(f, function() f:Hide() end)
     if LIB.RegisterWindow then LIB.RegisterWindow(f, GK.db, "profile") end
+    -- The face we were lent went elsewhere: what the card shows without it.
+    function f.faceHost:Lost()
+        f.portrait:Show()
+        local badge = self.kind == "race" and self.coords
+        f.badge:SetShown(badge and true or false)
+        f.badgeRing:SetShown(badge and true or false)
+    end
     card = f
 end
 
@@ -353,19 +533,28 @@ local function Portrait(f, d)
     local face = false
     local unit = d.unit
     if unit and SetPortraitTexture and UnitExists(unit) then
-        local key = LIB.UnitKey(unit)
+        local key = GK.UnitKey(unit)
         if key and GK.SameName(key, d.key) then face = pcall(SetPortraitTexture, f.portrait, unit) end
     end
+    -- Not here now: the face we met them with this session (GK.LendFace), over their race's.
+    local host, lent = f.faceHost, false
+    host.coords = coords
     if face then
         f.portrait:SetTexCoord(0, 1, 0, 1)
+        host.kind = "live"
+        GK.ReturnFace(host)
     else
         local kind = GK.SetPortrait(f.portrait, d)
-        face = kind == "race"
+        host.kind = kind
         if kind == "seal" then
             f.portrait:SetTexture(MEDIA .. "portrait")
             f.portrait:SetTexCoord(0, 1, 0, 1)
         end
+        lent = GK.LendFace(d.faceKey or d.key, host)
+        if not lent then GK.ReturnFace(host) end
+        face = kind == "race" or lent
     end
+    f.portrait:SetShown(not lent)
     local badge = face and coords
     f.badge:SetShown(badge and true or false)
     f.badgeRing:SetShown(badge and true or false)
@@ -469,13 +658,13 @@ end
 function GK.MenuKey(ctx)
     if type(ctx) ~= "table" then return nil end
     local unit = Text(ctx.unit)
-    if unit then return LIB.UnitKey(unit), unit end
+    if unit then return GK.UnitKey(unit), unit end
     local name = Text(ctx.chatTarget) or Text(ctx.name)
-    if name then return GK.KeyOf(name), nil end
+    if name then return GK.PlayerKey(GK.KeyOf(name)), nil end
     local guid = Text(ctx.guid)
     if guid and GetPlayerInfoByGUID then
         local ok, _, _, _, _, _, gname, realm = pcall(GetPlayerInfoByGUID, guid)
-        if ok then return GK.KeyOf(Text(gname), Text(realm)), nil end
+        if ok then return GK.PlayerKey(GK.KeyOf(Text(gname), Text(realm))), nil end
     end
     return nil
 end

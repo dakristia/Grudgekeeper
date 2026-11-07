@@ -21,6 +21,14 @@ local TEXT_FONT = "Fonts\\FRIZQT__.TTF"
 -- The skin's colours and drawing (Core.lua): the same tables every skinned window holds, so a switch of
 -- skin redraws all of them.
 local INK, FADED, BLOOD = GK.INK, GK.FADED, GK.BLOOD
+-- A grudge's score (FillRow): you leading in a dark olive, they in blood, a tie in ink, a 0 and the dash
+-- faded into the page. As hex for the |c codes inside one string.
+local LEAD_YOU = { 0.31, 0.37, 0.07 }
+local function Hex(c)
+    local function B(v) return math.floor(v * 255 + 0.5) end
+    return ("%02x%02x%02x"):format(B(c[1]), B(c[2]), B(c[3]))
+end
+local SCORE_YOU, SCORE_THEM, SCORE_INK, SCORE_DIM = Hex(LEAD_YOU), Hex(BLOOD), Hex(INK), "9a8462"
 local Ink, Paint, Wash = GK.Ink, GK.Paint, GK.Wash
 
 -- The window, in UI units. A page is the list or the card; open, two pages side by side, folded one.
@@ -40,7 +48,35 @@ local LIST_TOP = 96                                  -- the first row, down from
 -- the right-hand column stops short of the row's end: folded, room for the » that says a click turns
 -- the page (they ran into each other in the preview)
 local COL1, COL2, COL_WIDE, COL_RIGHT = 232, 266, 196, PAGE_W - 36
+local SCORE_X = COL_RIGHT - 34                       -- the middle of a grudge's score ("0 - 1")
+local SUGGEST = 5            -- with no open order, who killed us most: this many, on the orders page
 local TAB_GAP, GROUP_GAP = 3, 16                     -- between two tabs; and before the friendly pages, or Friends
+
+--- Where each page of a list starts (0-based offsets into it): ROWS rows a page, but a heading is never
+--- the last row of a page - it goes over to the next one with its rows. Turning a page goes from one
+--- start to the next, so a page never shows what the page before showed: after 1-9 of 10 the last page
+--- used to be 2-10, the list pushed back to fill it ("page turning burde jo ikke vise de samme", the
+--- owner, 2026-11-07).
+function GK.PageStarts(items)
+    local starts, at = { 0 }, 0
+    while at + ROWS < #items do
+        local nextAt = at + ROWS
+        if items[nextAt] and items[nextAt].header and nextAt - 1 > at then nextAt = nextAt - 1 end
+        starts[#starts + 1] = nextAt
+        at = nextAt
+    end
+    return starts
+end
+
+--- The page after (dir 1) or before (dir -1) the one that starts at `offset`; the same one at either end.
+function GK.TurnPage(starts, offset, dir)
+    starts = starts or { 0 }
+    local at = 1
+    for i, s in ipairs(starts) do
+        if s <= offset then at = i end
+    end
+    return starts[math.max(1, math.min(#starts, at + dir))]
+end
 
 local win
 local tab = 1
@@ -70,7 +106,7 @@ end
 local function Folded() return GK.db and GK.db.ledgerFolded == true end
 
 -- ---------------------------------------------------------------------------
--- What each page lists. An item: { key, name, sub, rank, seal, face = { rf, sx, c }, c1, c2, wide,
+-- What each page lists. An item: { key, name, sub, rank, seal, face = { key, rf, sx, c }, c1, c2, wide,
 -- right, rightColour, faded, mine, own, ts, votes, header, select = { kind = "poster", t, order } or
 -- { kind = "record", key } or { kind = "card", make } }
 -- mine tints the row; own only says the row is yours, for Only mine; votes, bounty, you and they are the
@@ -93,18 +129,19 @@ local function OrderItems()
     local items, me = {}, LIB.Me()
     for _, o in ipairs(GK.AllOrders()) do
         local pot, backers = GK.Pot(o)
-        local it = { key = "o:" .. o.key, name = GK.Show(o.n), face = { c = o.c }, select = PosterSpec(o.n, o, o),
+        local it = { key = "o:" .. o.key, name = GK.Show(o.n), face = { key = o.n, c = o.c }, select = PosterSpec(o.n, o, o),
             desc = Short(o.l, o.c, o.r), ts = o.t,
-            own = GK.char.accepted[o.key] or (me and (o.by == me or o.doneBy == me or (o.pot and o.pot[me]))) or nil }
+            own = me and (o.by == me or o.doneBy == me or (o.pot and o.pot[me])) or nil }
         if o.state == "o" then
             it.bounty = pot
             it.right = pot > 0 and GK.Coins(pot) or "honour"
-            local hunting = 0
-            for _ in pairs(o.hunters or {}) do hunting = hunting + 1 end
             local bits = { o.auto and ("by %s's death"):format(GK.Show(o.by)) or ("by " .. GK.Show(o.by)) }
             if backers > 0 then bits[#bits + 1] = Plural(backers, "backer") end
-            if hunting > 0 then bits[#bits + 1] = hunting .. " hunting" end
-            if o.seen then bits[#bits + 1] = "seen " .. GK.Ago(o.seen.t) end
+            -- where a guildie saw them last: what a hunter needs, and every guildie is one
+            if o.seen then
+                bits[#bits + 1] = o.seen.z and ("seen in %s, %s"):format(o.seen.z, GK.Ago(o.seen.t))
+                    or ("seen " .. GK.Ago(o.seen.t))
+            end
             it.sub = table.concat(bits, " - ")
         else
             it.faded, it.right, it.rightColour = true, STATE_WORD[o.state] or "", BLOOD
@@ -112,57 +149,149 @@ local function OrderItems()
         end
         items[#items + 1] = it
     end
+    -- No open order: the first page of the ledger was a blank one (the owner, 2026-11-06). Who has killed
+    -- the guild most stands in - the ones you would put a price on - each a click from their poster and
+    -- its Post a kill order. The closed orders follow under a heading of their own.
+    if #GK.OpenOrders() == 0 then
+        local wanted = GK.MostWanted()
+        if #wanted > 0 then
+            local top = { { header = true, name = "Killed us most - no order yet" } }
+            for i = 1, math.min(#wanted, SUGGEST) do
+                local e = wanted[i]
+                top[#top + 1] = { key = "w:" .. e.key, name = GK.Show(e.key), desc = Short(e.w.l, e.w.c, e.w.r),
+                    face = { key = e.key, c = e.w.c }, wide = "killed us " .. e.total, select = PosterSpec(e.key, e.w),
+                    ts = e.w.last }
+            end
+            if #items > 0 then top[#top + 1] = { header = true, name = "Closed orders" } end
+            for _, it in ipairs(items) do top[#top + 1] = it end
+            items = top
+        end
+    end
+    -- Marked: enemies the guild marked to kill on sight, with no bounty and no end date (Guild Grudge's
+    -- list). It had a tab of its own, one too many: kill orders and Most wanted say the rest ("most wanted
+    -- og kill orders holder kanskje?", the owner, 2026-11-07). The word at its heading's right marks
+    -- someone, as the tab's action did. The votes stay on the note's card: in this column they would
+    -- read as a bounty.
+    local marked = GK.NotesItems and GK.NotesItems("kos") or {}
+    if #marked > 0 then
+        items[#items + 1] = { header = true, name = "Marked", order = "mark someone",
+            clickTip = "Mark an enemy to kill on sight, with no bounty", click = function() GK.OpenPicker("kos") end }
+        for _, it in ipairs(marked) do
+            it.right = ""
+            items[#items + 1] = it
+        end
+    end
     return items, "No kill orders. Post one with Post a kill order, at the top of this page - or right-click "
         .. "an enemy player and pick it there."
 end
 
 local function BoardItems()
-    local items = {}
-    for i, r in ipairs(GK.Board(weekly)) do
-        items[#items + 1] = { key = "b:" .. r.who, rank = i, seal = i <= 3 and r.p > 0,
-            name = GK.Show(r.who), sub = GK.Title(r.total), face = { rf = r.rf, sx = r.sx, c = r.c },
-            c1 = tostring(r.k), c2 = tostring(r.d), right = tostring(r.p), mine = r.me,
+    local items, listed = {}, {}
+    local function Add(r, p, k, d)
+        local i = #items + 1
+        listed[r.who] = true
+        items[i] = { key = "b:" .. r.who, rank = i, seal = i <= 3 and p > 0,
+            name = GK.Show(r.who), sub = GK.Title(r.total), face = { key = r.who, rf = r.rf, sx = r.sx, c = r.c },
+            c1 = tostring(k), c2 = tostring(d), right = tostring(p), mine = r.me,
             select = { kind = "record", key = r.who } }
     end
-    local wanted = GK.MostWanted()
-    if #wanted > 0 then
-        items[#items + 1] = { header = true, name = "Most wanted" }
-        for i = 1, math.min(#wanted, 10) do
-            local e = wanted[i]
-            local o = GK.OrderOn(e.key)
-            items[#items + 1] = { key = "w:" .. e.key, name = GK.Show(e.key), desc = Short(e.w.l, e.w.c, e.w.r),
-                face = { c = e.w.c }, wide = "killed us " .. e.total,
-                right = o and ((GK.Pot(o)) > 0 and GK.MoneyText((GK.Pot(o))) or "order") or "",
-                rightColour = BLOOD, select = PosterSpec(e.key, e.w) }
+    for _, r in ipairs(GK.Board(weekly)) do Add(r, r.p, r.k, r.d) end
+    -- This week a short board fills its first page with the rest of the guild, at nothing yet: three rows
+    -- and six empty ones under them looked like a list that hadn't loaded ("vis this week leaderboard folk
+    -- med 0 poeng også", the owner, 2026-11-07). Only the first page - pages of zeros say nothing - and the
+    -- best of all time first. The board itself (GK.Board, your place and "of N") counts only who scored.
+    if weekly and #items < ROWS then
+        for _, r in ipairs(GK.Board(false)) do
+            if #items >= ROWS then break end
+            if not listed[r.who] then Add(r, 0, 0, 0) end
         end
     end
     return items, ""
 end
 
+--- Who has killed the guild most, every one of them. A page of its own since 2026-11-07: under the
+--- leaderboard they pushed it onto a second page ("en tab med most wanted og en tab med leaderboard",
+--- the owner). The bounty column says what is on them now: gold, or an order for honour.
+local function WantedItems()
+    local items, me = {}, LIB.Me()
+    for _, e in ipairs(GK.MostWanted()) do
+        local o = GK.OrderOn(e.key)
+        local pot = o and (GK.Pot(o)) or 0
+        items[#items + 1] = { key = "w:" .. e.key, name = GK.Show(e.key), desc = Short(e.w.l, e.w.c, e.w.r),
+            face = { key = e.key, c = e.w.c }, sub = e.w.last and ("last kill " .. GK.Ago(e.w.last)) or nil,
+            c1 = tostring(e.total), killed = e.total, bounty = pot,
+            right = o and (pot > 0 and GK.MoneyText(pot) or "order") or "",
+            rightColour = BLOOD, select = PosterSpec(e.key, e.w), ts = e.w.last,
+            own = me and e.w.victims[me] and true or nil }            -- Only mine: those who killed you
+    end
+    return items, "Nobody has killed the guild yet - not that the Grudgekeeper heard of."
+end
+
+-- How your grudges are ordered: the word at the right of their heading, clicked, goes to the next. The
+-- page has no heading row to sort by - it stood over the page's own big headings (the owner, 2026-11-07).
+local GRUDGE_ORDERS = { { "fought", "most fought first" }, { "recent", "latest first" }, { "name", "A to Z" } }
+local grudgeOrder = 1
+
+--- The order the Grudges page is in now, by its word: "fought", "recent" or "name".
+function GK.GrudgeOrder() return GRUDGE_ORDERS[grudgeOrder][1] end
+
 local function GrudgeItems()
     local items, c = {}, GK.char
+    -- the last thing that happened with each of them: your log is newest first
+    local lastOf = {}
+    for _, e in ipairs(c.log) do
+        if e.n and not lastOf[e.n] then lastOf[e.n] = e end
+    end
     local foes = {}
     for k, v in pairs(c.foes) do
-        if (v.k or 0) + (v.d or 0) > 0 then foes[#foes + 1] = { key = k, f = v } end
+        if (v.k or 0) + (v.d or 0) > 0 then foes[#foes + 1] = { key = k, f = v, name = GK.Show(k) } end
     end
-    table.sort(foes, function(a, b) return (a.f.k + a.f.d) > (b.f.k + b.f.d) end)
-    if #foes > 0 then items[#items + 1] = { header = true, name = "Your grudges" } end
+    local how = GRUDGE_ORDERS[grudgeOrder][1]
+    table.sort(foes, function(a, b)
+        if how == "recent" then
+            if (a.f.last or 0) ~= (b.f.last or 0) then return (a.f.last or 0) > (b.f.last or 0) end
+        elseif how == "fought" then
+            local x, y = (a.f.k or 0) + (a.f.d or 0), (b.f.k or 0) + (b.f.d or 0)
+            if x ~= y then return x > y end
+        end
+        if a.name:lower() ~= b.name:lower() then return a.name:lower() < b.name:lower() end
+        return a.key < b.key
+    end)
+    if #foes > 0 then
+        local nextOrder = GRUDGE_ORDERS[grudgeOrder % #GRUDGE_ORDERS + 1]
+        items[#items + 1] = { header = true, name = "Your grudges", order = GRUDGE_ORDERS[grudgeOrder][2],
+            clickTip = "Click: " .. nextOrder[2],
+            click = function() grudgeOrder = grudgeOrder % #GRUDGE_ORDERS + 1 end }
+    end
     for i = 1, math.min(#foes, 40) do
         local e = foes[i]
-        items[#items + 1] = { key = "f:" .. e.key, name = GK.Show(e.key), face = { c = e.f.c },
-            desc = Short(e.f.l, e.f.c, e.f.r), sub = "last met " .. GK.Ago(e.f.last),
-            c1 = tostring(e.f.k or 0), c2 = tostring(e.f.d or 0), select = PosterSpec(e.key, e.f),
-            you = e.f.k or 0, they = e.f.d or 0, ts = e.f.last, own = true }
+        local you, they = e.f.k or 0, e.f.d or 0
+        -- what happened last, and where: "killed you 11 min ago · Ashenvale" says more than "last met"
+        local last = lastOf[e.key]
+        local sub
+        if last then
+            sub = (last.k == "K" and "you killed them " or "killed you ") .. GK.Ago(last.t)
+                .. (last.z and (" \194\183 " .. last.z) or "")
+        else
+            sub = "last met " .. GK.Ago(e.f.last)
+        end
+        items[#items + 1] = { key = "f:" .. e.key, name = e.name, face = { key = e.key, c = e.f.c },
+            desc = Short(e.f.l, e.f.c, e.f.r), sub = sub, score = { you, they }, select = PosterSpec(e.key, e.f),
+            you = you, they = they, ts = e.f.last, own = true }
     end
     if #c.log > 0 then items[#items + 1] = { header = true, name = "Lately" } end
     for i, e in ipairs(c.log) do
-        local it = { key = "l:" .. i, face = { c = e.c }, select = PosterSpec(e.n, e), ts = e.t, own = true,
+        local it = { key = "l:" .. i, face = { key = e.n, c = e.c }, select = PosterSpec(e.n, e), ts = e.t, own = true,
             sub = table.concat({ e.z or "", GK.Ago(e.t) }, e.z and " - " or "") }
         if e.k == "K" then
             it.name = "Killed " .. GK.Show(e.n)
             it.right = (e.p or 0) > 0 and ("+%d"):format(e.p) or "no points"
         else
-            it.name, it.right, it.rightColour = "Slain by " .. GK.Show(e.n), e.s or "", BLOOD
+            -- the spell at the end of the line under the name, not in the right-hand column: there
+            -- "Judgement of Righteousness" left the name "Slain by I..." and the place "Wetlands -..."
+            -- (the owner, 2026-11-06). At the end it is what gets cut, if anything does.
+            it.name = "Slain by " .. GK.Show(e.n)
+            if e.s then it.sub = it.sub .. " - " .. e.s end
         end
         items[#items + 1] = it
     end
@@ -172,7 +301,10 @@ end
 local function NewsItems()
     local items = {}
     for i, e in ipairs(GK.Store().feed) do
-        local who, target = GK.Show(e.who), GK.Show(e.n)
+        -- your own news says You: your full name and surname first left "Critical Mango killed Seedkek..."
+        -- no room for whom (the owner, 2026-11-06)
+        local mine = e.who ~= nil and LIB.IsMyStoredName(e.who)
+        local who, target = mine and "You" or GK.Show(e.who), GK.Show(e.n)
         local line, right
         if e.kind == "K" then
             line = ("%s killed %s"):format(who, target)
@@ -183,7 +315,7 @@ local function NewsItems()
             line = ("%s fulfilled the order on %s"):format(who, target)
             right = (e.p or 0) > 0 and GK.MoneyText(e.p) or nil
         elseif e.kind == "C" and e.au then
-            line, right = ("%s's death put a price on %s"):format(who, target), "honour"
+            line, right = ("%s death put a price on %s"):format(mine and "Your" or (who .. "'s"), target), "honour"
         elseif e.kind == "C" then
             line = ("%s put a price on %s"):format(who, target)
             right = (e.p or 0) > 0 and GK.MoneyText(e.p) or "honour"
@@ -191,7 +323,7 @@ local function NewsItems()
             line, right = ("%s added to the pot on %s"):format(who, target), GK.MoneyText(e.p or 0)
         end
         if line then
-            items[#items + 1] = { key = "n:" .. i, name = line, face = { c = e.c }, right = right,
+            items[#items + 1] = { key = "n:" .. i, name = line, face = { key = e.n, c = e.c }, right = right,
                 sub = table.concat({ e.z or "", GK.Ago(e.t) }, e.z and " - " or ""), select = PosterSpec(e.n, e),
                 ts = e.t, own = e.who and LIB.IsMyStoredName(e.who) or nil }
         end
@@ -223,6 +355,11 @@ GK.LedgerPages = {
     { name = "Kill orders", items = OrderItems,
       headings = { { "Name", 48, nil, "name", "name, A to Z" }, { "Bounty", COL_RIGHT, "RIGHT", "bounty", "bounty" } },
       sortable = true, add = { text = "Post a kill order", kind = "order" },
+      -- with nothing on the page at all, your own record rather than a blank page; otherwise the first
+      -- open order, or the first of who killed us most (a closed order alone is not chosen by itself)
+      default = function(items)
+          if #items == 0 then return { key = "me", select = { kind = "record", key = LIB.Me() } } end
+      end,
       sub = function()
           local rank, of = GK.MyRank()
           return ("%s  -  you: %s, #%d of %d"):format(Plural(#GK.OpenOrders(), "open order"),
@@ -241,9 +378,14 @@ GK.LedgerPages = {
               if it.mine then return it end
           end
       end },
-    { name = "Grudges", items = GrudgeItems, sortable = true,
-      headings = { { "Name", 48, nil, "name", "name, A to Z" }, { "You", COL1, "CENTER", "you", "your kills" },
-          { "They", COL2, "CENTER", "they", "their kills" } },
+    { name = "Most wanted", items = WantedItems, sortable = true,
+      headings = { { "Name", 48, nil, "name", "name, A to Z" },
+          { "Killed us", COL1, "CENTER", "killed", "how often they killed us" },
+          { "Bounty", COL_RIGHT, "RIGHT", "bounty", "bounty" } },
+      add = { text = "Post a kill order", kind = "order" },
+      sub = function() return "Who has killed the guild most" end },
+    -- no heading row: each grudge says its own score, and the order is a word on the section's line
+    { name = "Grudges", items = GrudgeItems, headings = {},
       sub = function() return "Everyone you have a history with" end,
       default = function() return { key = "me", select = { kind = "record", key = LIB.Me() } } end },
     { name = "News", items = NewsItems, sortable = true,
@@ -327,17 +469,24 @@ local function DetailCard(spec)
     local o = spec.order
     if o and o.state ~= "o" then
         local me = LIB.Me()
-        table.insert(d.lines, 1, ("The order is closed: %s%s, %s."):format(STATE_WORD[o.state] or "",
-            o.doneBy and (" by " .. GK.Show(o.doneBy)) or "", GK.Ago(o.paidAt or o.doneAt)))
+        local word = STATE_WORD[o.state] or "CLOSED"
+        local rows = { { "Closed", ("%s%s, %s"):format(word:sub(1, 1) .. word:sub(2):lower(),
+            o.doneBy and (" by " .. GK.Show(o.doneBy)) or "", GK.Ago(o.paidAt or o.doneAt)) } }
         local owe = 0
         for _, e in ipairs(GK.Owed()) do
             if e.o == o then owe = owe + e.share end
         end
         if owe > 0 and o.doneBy ~= me then
-            table.insert(d.lines, 2, ("You owe %s %s - at a mailbox, Pay bounty fills it in."):format(
-                GK.Show(o.doneBy), GK.MoneyText(owe)))
+            rows[2] = { "You owe", ("%s %s - at a mailbox, Pay bounty fills it in."):format(GK.Show(o.doneBy),
+                GK.MoneyText(owe)) }
             d.buttons = { { "Mark as paid", function() GK.PayShare(o) end } }
         end
+        -- the order's own section first, and the kicker says it is over ("ORDER FULFILLED") - unless a
+        -- newer order on them is open, which keeps its own WANTED and its own section
+        local open = d.title == "WANTED"
+        table.insert(d.rich.sections, open and 2 or 1,
+            { head = open and "An earlier order" or "The order", kind = "facts", rows = rows })
+        if not open then d.rich.kicker = "Order " .. word:lower() end
     end
     return d
 end
@@ -424,15 +573,47 @@ local function BuildRow(parent, i)
     end
     row.c1, row.c2 = Col(COL1, "CENTER"), Col(COL2, "CENTER")
     row.wide, row.right = Col(COL_WIDE), Col(COL_RIGHT, "RIGHT")
+    -- A grudge's score, read like a match's: "0 - 1", the leader's number in colour, and under it who
+    -- leads. Two bare columns of 0 and 1 under YOU and THEY were "litt dårlig vist" (the owner,
+    -- 2026-11-07), and their heading row stood over the page's own big headings.
+    row.score = row:CreateFontString(nil, "ARTWORK")
+    Ink(row.score, INK, TITLE_FONT, 17)
+    row.score:SetPoint("CENTER", row, "LEFT", SCORE_X, 5)
+    row.lead = row:CreateFontString(nil, "ARTWORK")
+    Ink(row.lead, FADED, TEXT_FONT, 10)
+    row.lead:SetPoint("CENTER", row, "LEFT", SCORE_X, -10)
+    -- a heading's own order, a word to click at its right ("most fought first"), where a page has no
+    -- heading row
+    row.order = row:CreateFontString(nil, "ARTWORK")
+    Ink(row.order, FADED, TEXT_FONT, 10)
+    row.order:SetPoint("BOTTOMRIGHT", row, "BOTTOMLEFT", COL_RIGHT - 4, 6)
     row.open = row:CreateFontString(nil, "ARTWORK")        -- folded: "this turns the page"
     Ink(row.open, FADED, TEXT_FONT, 13)
     row.open:SetPoint("RIGHT", -4, 0)
     row.open:SetText("\194\187")                            -- », in the game's Latin-1 fonts
-    row:SetScript("OnClick", function(self) if self.item and not self.item.header then Select(self.item) end end)
-    row:SetScript("OnEnter", function(self)
-        if self.item and not self.item.header and not self.chosen then Wash(self.wash, 0.07) end
+    row:SetScript("OnClick", function(self)
+        local it = self.item
+        if it and not it.header then
+            Select(it)
+        elseif it and it.click then            -- a heading's order word: the next order
+            it.click()
+            Refresh()
+        end
     end)
-    row:SetScript("OnLeave", function(self) if self.fill then self.fill() end end)
+    row:SetScript("OnEnter", function(self)
+        local it = self.item
+        if it and not it.header and not self.chosen then Wash(self.wash, 0.07) end
+        if it and it.header and it.click then
+            Wash(self.wash, 0.05)
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:AddLine(it.clickTip or "Click to sort", 1, 1, 1)
+            GameTooltip:Show()
+        end
+    end)
+    row:SetScript("OnLeave", function(self)
+        if self.fill then self.fill() end
+        if self.item and self.item.click then GameTooltip:Hide() end
+    end)
     return row
 end
 
@@ -459,9 +640,33 @@ local function FillRow(row, it, chosen)
         row.open:Hide()
         row.rule:Show()
         row.c1:SetText("") row.c2:SetText("") row.wide:SetText("") row.right:SetText("")
+        row.score:SetText("") row.lead:SetText("")
+        row.order:SetText(it.order or "")
         return
     end
     row.rule:Hide()
+    row.order:SetText("")
+    -- the score: the leader's number in their colour, the other faded, and who leads under it
+    local sc = it.score
+    if sc then
+        local you, they = sc[1], sc[2]
+        local mine = you > they and SCORE_YOU or (you > 0 and you == they and SCORE_INK or SCORE_DIM)
+        local theirs = they > you and SCORE_THEM or (they > 0 and you == they and SCORE_INK or SCORE_DIM)
+        row.score:SetText(("|cff%s%d|r |cff%s-|r |cff%s%d|r"):format(mine, you, SCORE_DIM, theirs, they))
+        if you > they then
+            row.lead:SetText("you lead")
+            row.lead:SetTextColor(LEAD_YOU[1], LEAD_YOU[2], LEAD_YOU[3])
+        elseif they > you then
+            row.lead:SetText("they lead")
+            row.lead:SetTextColor(BLOOD[1], BLOOD[2], BLOOD[3])
+        else
+            row.lead:SetText("even")
+            row.lead:SetTextColor(FADED[1], FADED[2], FADED[3])
+        end
+    else
+        row.score:SetText("")
+        row.lead:SetText("")
+    end
     row.name:SetPoint("TOPLEFT", 74, -4)
     Ink(row.name, it.mine and BLOOD or (it.faded and FADED or INK), TEXT_FONT, 13)
     row.name:SetText(it.name or "")
@@ -473,7 +678,7 @@ local function FillRow(row, it, chosen)
     -- The name runs to whichever column is there. Before a right-hand number it stops at that number's
     -- own width, not a fixed 70 kept for "12g 34s": a "+2" in the news cut "Seedkek One" to "Seedke..."
     -- with half the row empty (2026-11-05), and a long sum ran past the fixed stop into the name.
-    local stop = (it.c1 and COL1 - 20) or (it.wide and COL_WIDE - 8)
+    local stop = (it.score and SCORE_X - 40) or (it.c1 and COL1 - 20) or (it.wide and COL_WIDE - 8)
         or (it.right and COL_RIGHT - 4 - row.right:GetStringWidth() - 12) or (PAGE_W - 24)
     row.name:SetWidth(stop - 74)
     row.sub:SetWidth(stop - 74)
@@ -635,6 +840,7 @@ local function BuildList(page)
     underline:SetHeight(1)
     underline:SetPoint("TOPLEFT", 8, -(LIST_TOP - 4))
     underline:SetPoint("TOPRIGHT", -8, -(LIST_TOP - 4))
+    page.underline = underline                         -- a page with no heading row has no line under it
     page.rows = {}
     for i = 1, ROWS do page.rows[i] = BuildRow(page, i) end
     page.empty = page:CreateFontString(nil, "ARTWORK")
@@ -654,7 +860,7 @@ local function BuildList(page)
         b:SetPushedTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. kind .. "Page-Down")
         b:SetDisabledTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. kind .. "Page-Disabled")
         b:SetScript("OnClick", function()
-            offset = math.max(0, offset + dir * ROWS)
+            offset = GK.TurnPage(page.starts, offset, dir)
             Refresh()
         end)
         return b
@@ -664,8 +870,9 @@ local function BuildList(page)
     page.next = Arrow("Next", 1)
     page.next:SetPoint("LEFT", page.prev, "RIGHT", -2, 0)
     page:EnableMouseWheel(true)
+    -- the wheel turns a page too: a few rows at a time left pages that began anywhere
     page:SetScript("OnMouseWheel", function(_, delta)
-        offset = math.max(0, offset - delta * 3)
+        offset = GK.TurnPage(page.starts, offset, delta > 0 and -1 or 1)
         Refresh()
     end)
     -- Letters and Settings: the game's red buttons at the foot of the list, as previewed (2026-11-06).
@@ -702,12 +909,208 @@ end
 
 -- Where the card's parts sit, in units from the page's top left. The ledger's right page has these; the
 -- Inspect tab (Inspect.lua) has a smaller page and lays the same card out tighter, at the same type
--- sizes rather than scaled down (scaled to fit, 12pt ink came out under 10). statsY: the card's stats
--- (Profile.lua), side by side statsW apart, under the face where the one big number goes on a page
--- without them. h: the page's height, for the buttons that follow the lines (else they sit at the foot).
-local DETAIL = { w = PAGE_W, h = PAGE_H, face = 92, faceX = 70, faceY = 86, bigY = 138, bigSize = 26,
-    titleX = 128, titleY = 44, titleSize = 24, seal = 46, sealX = 26, sealY = 40, statsY = 146, statsW = 110,
-    ruleY = 194, linesY = 206, padX = 24, valueX = 120, signY = 24, buttonY = 18 }
+-- sizes rather than scaled down (scaled to fit, 12pt ink came out under 10). h: the page's height, for
+-- the buttons that follow the lines (else they sit at the foot). rich: the page has room for a card's
+-- rich form (Profile.lua's d.rich, FillRich below): its tiles start tilesY down, and a fact's value
+-- factX in. A card without one - a note card - is drawn as lines here too.
+local DETAIL = { w = PAGE_W, h = PAGE_H, face = 84, faceX = 66, faceY = 76, bigY = 128, bigSize = 26,
+    titleX = 124, titleY = 48, titleSize = 24, seal = 46, sealX = 26, sealY = 36, ruleY = 194, linesY = 206,
+    padX = 24, valueX = 120, signY = 24, buttonY = 18, rich = true, tilesY = 130, factX = 128 }
+
+-- ---------------------------------------------------------------------------
+-- The rich card: tiles, the way to the next title, and sections of facts, pairs or news, as previewed
+-- with the owner (2026-11-06). Its texts and textures come from pools on the page and go back at every
+-- fill, so a card with more rows than the last makes what it needs once and keeps it.
+-- ---------------------------------------------------------------------------
+local CLASS_ICONS = "Interface\\TargetingFrame\\UI-Classes-Circles"
+local SEAL_INK = { 0.23, 0.14, 0.02 }         -- a number on a wax seal, as on the leaderboard's rows
+
+local function Take(pool)
+    pool.n = pool.n + 1
+    local x = pool[pool.n]
+    if not x then
+        x = pool.make()
+        pool[pool.n] = x
+    end
+    x:ClearAllPoints()
+    x:Show()
+    return x
+end
+
+local function Reset(pool)
+    for i = 1, #pool do pool[i]:Hide() end
+    pool.n = 0
+end
+
+--- A text's height, never less than its type size: offline (and for an empty string) it can say 0.
+local function Height(fs, least) return math.max(least, fs:GetStringHeight() or 0) end
+
+local function Text(page, colour, size, width, lines)
+    local fs = Take(page.richParts.texts)
+    Ink(fs, colour, TEXT_FONT, size)
+    fs:SetWidth(width or 0)
+    fs:SetJustifyH("LEFT")
+    fs:SetWordWrap(lines ~= 1)
+    if fs.SetMaxLines then fs:SetMaxLines(lines or 0) end
+    fs:SetSpacing(0)
+    return fs
+end
+
+local function Flat(page, role, a, sub)
+    local t = Take(page.richParts.paint)
+    Paint(t, role, a)
+    t:SetDrawLayer("BORDER", sub or 0)
+    return t
+end
+
+--- Draw d.rich on a page built with a rich layout. Returns how far down it went, for the buttons.
+local function FillRich(page, d, L)
+    local rich = d.rich
+    local w, pad = L.w, L.padX
+    local inner = w - 2 * pad
+    local y = L.tilesY
+    -- the tiles: a number, what it counts, and a line that says something about it
+    local n = #rich.tiles
+    if n > 0 then
+        local tw = inner / n
+        local tallest, divs = 0, {}
+        for i, tile in ipairs(rich.tiles) do
+            local v = Text(page, INK, 20)
+            v:SetText(tile[1])
+            v:SetPoint("TOP", page, "TOPLEFT", pad + (i - 0.5) * tw, -y)
+            local k = Text(page, FADED, 9)
+            k:SetText(tile[2]:upper())
+            k:SetPoint("TOP", v, "BOTTOM", 0, -2)
+            -- a zone's name may take two lines; a line under it (when the last was) has its own, so a
+            -- long guild name is cut rather than pushing the time off the tile
+            local s = Text(page, FADED, 10, tw - 6, tile[4] and 1 or 2)
+            s:SetJustifyH("CENTER")
+            s:SetText(tile[3] or "")
+            s:SetPoint("TOP", k, "BOTTOM", 0, -2)
+            local h = Height(v, 20) + Height(k, 10) + Height(s, 11) + 4
+            if tile[4] then
+                local s2 = Text(page, FADED, 10, tw - 6, 1)
+                s2:SetJustifyH("CENTER")
+                s2:SetText(tile[4])
+                s2:SetPoint("TOP", s, "BOTTOM", 0, -1)
+                h = h + Height(s2, 11) + 1
+            end
+            tallest = math.max(tallest, h)
+            if i > 1 then
+                local div = Flat(page, "rule")
+                div:SetPoint("TOPLEFT", page, "TOPLEFT", pad + (i - 1) * tw, -(y + 2))
+                divs[#divs + 1] = div
+            end
+        end
+        for _, div in ipairs(divs) do div:SetSize(1, tallest - 2) end
+        y = y + tallest + 12
+    end
+    -- the way to the next title
+    local bar = rich.bar
+    if bar then
+        local track = Flat(page, "rule", 0.3)
+        track:SetPoint("TOPLEFT", page, "TOPLEFT", pad, -y)
+        track:SetSize(inner, 7)
+        if bar.frac > 0 then
+            local fill = Flat(page, "blood", 0.85, 1)
+            fill:SetPoint("TOPLEFT", track, "TOPLEFT")
+            fill:SetSize(math.max(1, math.min(1, bar.frac) * inner), 7)
+        end
+        local left = Text(page, FADED, 10)
+        left:SetText(bar.left)
+        left:SetPoint("TOPLEFT", page, "TOPLEFT", pad, -(y + 10))
+        local right = Text(page, FADED, 10)
+        right:SetText(bar.right)
+        right:SetPoint("TOPRIGHT", page, "TOPLEFT", w - pad, -(y + 10))
+        y = y + 35
+    end
+    -- the sections, as many as fit above the buttons and the signature: the last ones give way first
+    local limit = L.h - L.signY - 22 - (#d.buttons > 0 and 34 or 0)
+    for _, sec in ipairs(rich.sections) do
+        if y + 32 > limit then break end
+        -- the section's name in red capitals, its rows' labels in plain grey words: in the same small grey
+        -- capitals, every label read as one more heading (the owner, 2026-11-06)
+        local head = Text(page, BLOOD, 10)
+        head:SetText(sec.head:upper())
+        head:SetPoint("TOPLEFT", page, "TOPLEFT", pad, -y)
+        local after = pad + math.ceil(TextWidth(head)) + 6
+        local line = Flat(page, "rule")
+        line:SetPoint("TOPLEFT", page, "TOPLEFT", after, -(y + 5))
+        line:SetSize(math.max(1, w - pad - after), 1)
+        y = y + 17
+        if sec.kind == "events" then
+            for i, e in ipairs(sec.rows) do
+                if y + 28 > limit then break end
+                if i % 2 == 0 then
+                    local stripe = Flat(page, "stripe")
+                    stripe:SetPoint("TOPLEFT", page, "TOPLEFT", pad - 4, -(y - 1))
+                    stripe:SetSize(inner + 8, 30)
+                end
+                local icon = Take(page.richParts.icons)
+                icon:SetSize(22, 22)
+                icon:SetPoint("TOPLEFT", page, "TOPLEFT", pad, -(y + 3))
+                local coords = e.c and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[e.c]
+                if coords then
+                    icon:SetTexture(CLASS_ICONS)
+                    icon:SetTexCoord(unpack(coords))
+                else
+                    icon:SetTexture(MEDIA .. "portrait")
+                    icon:SetTexCoord(0, 1, 0, 1)
+                end
+                local room = inner - 30
+                if e.right then
+                    local r = Text(page, INK, 12)
+                    r:SetText(e.right)
+                    r:SetPoint("TOPRIGHT", page, "TOPLEFT", w - pad, -(y + 8))
+                    room = room - math.ceil(TextWidth(r)) - 10
+                end
+                local t = Text(page, INK, 12, room, 1)
+                t:SetText(e.text)
+                t:SetPoint("TOPLEFT", page, "TOPLEFT", pad + 30, -(y + 2))
+                local s = Text(page, FADED, 10, room, 1)
+                s:SetText(e.under or "")
+                s:SetPoint("TOPLEFT", page, "TOPLEFT", pad + 30, -(y + 17))
+                y = y + 30
+            end
+        else
+            -- facts: a label in plain words, its value beside it, and after the value - on its line when it
+            -- fits, else under it - a grey word on it ("best ever 11"); a row with no label is a paragraph
+            local room = w - L.factX - pad
+            for _, row in ipairs(sec.rows) do
+                if y + 14 > limit then break end
+                local v
+                if row[1] then
+                    local k = Text(page, FADED, 11)
+                    k:SetText(row[1])
+                    k:SetPoint("TOPLEFT", page, "TOPLEFT", pad, -(y + 1))
+                    v = Text(page, INK, 12, room)
+                    v:SetPoint("TOPLEFT", page, "TOPLEFT", L.factX, -y)
+                else
+                    v = Text(page, INK, 12, inner)
+                    v:SetPoint("TOPLEFT", page, "TOPLEFT", pad, -y)
+                end
+                v:SetSpacing(2)
+                v:SetText(row[2] or "")
+                local h = Height(v, 13)
+                if row[1] and row[3] then
+                    local more = Text(page, FADED, 11, nil, 1)
+                    more:SetText(row[3])
+                    local used = math.ceil(TextWidth(v))
+                    if h <= 16 and used + 8 + TextWidth(more) <= room then
+                        more:SetPoint("TOPLEFT", page, "TOPLEFT", L.factX + used + 8, -(y + 1))
+                    else
+                        more:SetWidth(room)
+                        more:SetPoint("TOPLEFT", page, "TOPLEFT", L.factX, -(y + h + 2))
+                        h = h + 2 + Height(more, 11)
+                    end
+                end
+                y = y + math.max(18, h + 5)
+            end
+        end
+        y = y + 6
+    end
+    return y
+end
 
 local function BuildDetail(page, L)
     L = L or DETAIL
@@ -722,7 +1125,7 @@ local function BuildDetail(page, L)
         turned = false
         Refresh()
     end)
-    page.face = MakePortrait(page, L.face)
+    page.face = MakePortrait(page, L.face, 2)
     page.face.tex:SetPoint("CENTER", page, "TOPLEFT", L.faceX, -L.faceY)
     page.big = page:CreateFontString(nil, "ARTWORK")
     Ink(page.big, BLOOD, TITLE_FONT, L.bigSize)
@@ -750,42 +1153,22 @@ local function BuildDetail(page, L)
     page.info = page:CreateFontString(nil, "ARTWORK")
     Ink(page.info, FADED, TEXT_FONT, 11)
     page.info:SetPoint("TOPLEFT", page.name, "BOTTOMLEFT", 0, -3)
-    -- the stats: a small capital label over each number, as previewed (2026-11-06)
-    page.stats = {}
-    for i = 1, L.statsY and 3 or 0 do
-        local s = {}
-        s.label = page:CreateFontString(nil, "ARTWORK")
-        Ink(s.label, FADED, TEXT_FONT, 10)
-        s.label:SetPoint("TOPLEFT", L.padX + (i - 1) * L.statsW, -L.statsY)
-        s.value = page:CreateFontString(nil, "ARTWORK")
-        Ink(s.value, INK, TEXT_FONT, 18)
-        s.value:SetPoint("TOPLEFT", s.label, "BOTTOMLEFT", 0, -3)
-        page.stats[i] = s
+    -- A page with room for the rich card: the small red line over the name, the number on a rank's wax
+    -- seal, and the pools FillRich draws the rest from.
+    if L.rich then
+        page.kicker = page:CreateFontString(nil, "ARTWORK")
+        Ink(page.kicker, BLOOD, TEXT_FONT, 10)
+        page.kicker:SetPoint("BOTTOMLEFT", page.title, "TOPLEFT", 1, 2)
+        page.sealNum = page:CreateFontString(nil, "OVERLAY")
+        Ink(page.sealNum, SEAL_INK, TITLE_FONT, 16)
+        page.sealNum:SetPoint("CENTER", page.seal, "CENTER", 0, 1)
+        page.richParts = {
+            texts = { n = 0, make = function() return page:CreateFontString(nil, "ARTWORK") end },
+            paint = { n = 0, make = function() return page:CreateTexture(nil, "BORDER") end },
+            icons = { n = 0, make = function() return page:CreateTexture(nil, "ARTWORK") end },
+        }
     end
-    -- A guildie's record as a small table where the stats go: all time and this week down the side, the
-    -- points, kills, deaths and place on the board across - so the place reads beside what it counts, in
-    -- the card rather than squeezed into the line under the name ("bak det inn i hovedområdet", the owner,
-    -- 2026-11-06). Columns: the row's name; Points, Kills and Deaths centred; Place to the right edge.
-    page.grid = { heads = {}, rows = {} }
-    if L.statsY then
-        local GX = { L.padX, 152, 210, 268, L.w - L.padX }
-        local function Cell(i, y, colour, size)
-            local fs = page:CreateFontString(nil, "ARTWORK")
-            Ink(fs, colour, TEXT_FONT, size)
-            if i == 1 then fs:SetPoint("TOPLEFT", page, "TOPLEFT", GX[1], -y)
-            elseif i == 5 then fs:SetPoint("TOPRIGHT", page, "TOPLEFT", GX[5], -y)
-            else fs:SetPoint("TOP", page, "TOPLEFT", GX[i], -y) end
-            return fs
-        end
-        for i = 2, 5 do page.grid.heads[i] = Cell(i, L.statsY, FADED, 10) end
-        for r = 1, 2 do
-            local y = L.statsY + 16 + (r - 1) * 20
-            local row = { Cell(1, y + 3, FADED, 10) }
-            for i = 2, 5 do row[i] = Cell(i, y, INK, 14) end
-            page.grid.rows[r] = row
-        end
-    end
-    -- below the portrait's number and its caption (on the ledger they end about 182 down), or the stats
+    -- below the portrait's number and its caption (on the ledger they end about 172 down)
     page.rule = page:CreateTexture(nil, "BORDER")
     Paint(page.rule, "rule")
     page.rule:SetHeight(1)
@@ -818,7 +1201,14 @@ end
 --- With no card, the page is blank but for the signature: no rule under nothing, and "choose a row" only
 --- when the list has rows to choose (in the game it sat beside "0 open orders").
 local function FillDetail(page, d, anyRows)
-    page.rule:SetShown(d ~= nil)
+    local L = page.layout
+    local rich = L.rich and d and d.rich or nil
+    if page.richParts then
+        for _, pool in pairs(page.richParts) do Reset(pool) end
+        page.kicker:SetText("")
+        page.sealNum:SetText("")
+    end
+    page.rule:SetShown(d ~= nil and not rich)
     if not d then
         page.face:SetShown(false)
         page.title:SetText("")
@@ -828,66 +1218,50 @@ local function FillDetail(page, d, anyRows)
         page.caption:SetText("")
         page.seal:Hide()
         page.blood:Hide()
-        for _, s in ipairs(page.stats) do s.label:SetText("") s.value:SetText("") end
-        for i = 2, 5 do if page.grid.heads[i] then page.grid.heads[i]:SetText("") end end
-        for _, row in ipairs(page.grid.rows) do for i = 1, 5 do row[i]:SetText("") end end
         for i = 1, #page.labels do page.labels[i]:SetText("") page.values[i]:SetText("") end
         for _, b in ipairs(page.buttons) do b:Hide() end
         return
     end
-    local L = page.layout
     page.face:SetShown(true)
     page.face:Set(d)
+    -- the rich card's head: its kicker over the name, the name, and under it the title or the nemesis
+    local title, sub, seal
+    if rich then title, sub, seal = rich.head, rich.sub or "", rich.seal
+    else title, sub, seal = d.title or "", d.name or "", d.seal end
     -- The title on one line, beside the seal (or to the edge without one): a long name steps down in size
     -- until it fits rather than breaking in two ("Kriger-" over "Skaalvik" in the Inspect tab, 2026-11-05).
-    local room = L.w - L.titleX - (d.seal and (L.sealX + L.seal + 4) or L.padX)
+    local room = L.w - L.titleX - (seal and (L.sealX + L.seal + 4) or L.padX)
     page.title:SetWidth(room)
-    page.title:SetText(d.title or "")
+    page.title:SetText(title)
     local size = L.titleSize
     Ink(page.title, BLOOD, TITLE_FONT, size)
     while size > 14 and TextWidth(page.title) > room do
         size = size - 1
         Ink(page.title, BLOOD, TITLE_FONT, size)
     end
-    page.name:SetText(d.name or "")
-    -- Where the page has room: a record's table (d.grid), else the stats in a row (d.stats), and then
-    -- not the big number they stand in for. Under the name, with the table, what they are (d.gridInfo)
-    -- instead of their place, which the table says.
-    local grid = page.grid.rows[1] and d.grid or nil
-    local stats = not grid and #page.stats > 0 and d.stats or nil
-    page.info:SetText(grid and d.gridInfo or d.info or "")
-    page.big:SetText((stats or grid) and "" or (d.big or ""))
-    page.caption:SetText((stats or grid) and "" or (d.caption or ""))
-    for i, s in ipairs(page.stats) do
-        local v = stats and stats[i]
-        s.label:SetText(v and v[1]:upper() or "")
-        s.value:SetText(v and v[2] or "")
-    end
-    for i = 2, 5 do
-        if page.grid.heads[i] then page.grid.heads[i]:SetText(grid and grid.cols[i - 1] and grid.cols[i - 1]:upper() or "") end
-    end
-    for r, row in ipairs(page.grid.rows) do
-        local data = grid and grid.rows[r]
-        row[1]:SetText(data and data[1]:upper() or "")
-        for i = 2, 5 do row[i]:SetText(data and data[i] or "") end
-    end
-    page.seal:SetShown(d.seal ~= nil)
-    if d.seal then page.seal:SetTexture(MEDIA .. d.seal) end
+    page.name:SetText(sub)
+    -- what they are right under the name when nothing stands between (a poster's enemy who is no nemesis)
+    page.info:ClearAllPoints()
+    page.info:SetPoint("TOPLEFT", sub ~= "" and page.name or page.title, "BOTTOMLEFT", 0, -3)
+    page.info:SetText((rich and rich.info) or d.info or "")
+    page.big:SetText(rich and "" or (d.big or ""))
+    page.caption:SetText(rich and "" or (d.caption or ""))
+    page.seal:SetShown(seal ~= nil)
+    if seal then page.seal:SetTexture(MEDIA .. seal) end
     page.blood:SetShown(d.blood == true)
-    -- the rule and the lines a little lower under the table, which is one row taller than the stats
-    local drop = grid and 14 or 0
-    page.rule:ClearAllPoints()
-    page.rule:SetPoint("TOPLEFT", L.padX, -(L.ruleY + drop))
-    page.rule:SetPoint("TOPRIGHT", -L.padX, -(L.ruleY + drop))
-    -- the lines: a short "Label: value" as two columns, anything else as a paragraph; with the stats or
-    -- the table shown, a line they already say gives way to its shorter form, or goes (d.withStats)
-    local lines, swap = {}, (stats or grid) and d.withStats or {}
-    for _, line in ipairs(d.lines) do
-        local alt = swap[line]
-        if alt ~= false then lines[#lines + 1] = alt or line end
+    local y
+    if rich then
+        page.kicker:SetText((rich.kicker or ""):upper())
+        page.sealNum:SetText(rich.sealNum or "")
+        for i = 1, #page.labels do page.labels[i]:SetText("") page.values[i]:SetText("") end
+        y = FillRich(page, d, L)
+    else
+        y = L.linesY
     end
-    local y = L.linesY + drop
-    for i = 1, #page.labels do
+    -- a card without a rich form, as lines: a short "Label: value" as two columns, anything else as a
+    -- paragraph
+    local lines = rich and {} or d.lines
+    for i = 1, rich and 0 or #page.labels do
         local l, v = page.labels[i], page.values[i]
         local line = lines[i]
         l:ClearAllPoints()
@@ -983,10 +1357,25 @@ local function PlaceTabs(folded)
             if t ~= chosen then PanelTemplates_TabResize(t, 0, share) end
         end
     end
+    -- Open, the friendly pages sit at the frame's right edge, apart from the enemy's ("skyv shame og kudos
+    -- lenger ut til høyre", the owner, 2026-11-07); folded, the row runs on from the left as before.
+    local firstRight
+    if not folded then
+        for i, t in ipairs(row) do
+            if t.side == "right" then firstRight = i break end
+        end
+    end
     for i, t in ipairs(row) do
         t:ClearAllPoints()
         if i == 1 then t:SetPoint("TOPLEFT", win, "BOTTOMLEFT", 12, 2)
-        else t:SetPoint("TOPLEFT", row[i - 1], "TOPRIGHT", t.gap, 0) end
+        elseif not firstRight or i < firstRight then t:SetPoint("TOPLEFT", row[i - 1], "TOPRIGHT", t.gap, 0) end
+    end
+    if firstRight then
+        for i = #row, firstRight, -1 do
+            local t = row[i]
+            if i == #row then t:SetPoint("TOPRIGHT", win, "BOTTOMRIGHT", -12, 2)
+            else t:SetPoint("TOPRIGHT", row[i + 1], "TOPLEFT", -row[i + 1].gap, 0) end
+        end
     end
 end
 
@@ -1268,12 +1657,21 @@ Refresh = function()
     list.sub:SetWidth(last and 0 or (PAGE_W - 24 - (sortable and list.mine.width + 10 or 0)))
     list.sub:SetText(def.sub and def.sub(items) or "")
     list.add:SetShown(def.add ~= nil)
+    list.underline:SetShown(#def.headings > 0)
+    -- A page with no heading row starts its list where the headings would be: the Grudges page's list
+    -- sat a heading row's height too far down ("trenger ikke bli dytta så langt inn", the owner, 2026-11-07).
+    local top = #def.headings > 0 and LIST_TOP or LIST_TOP - 30
+    if list.top ~= top then
+        list.top = top
+        for i, row in ipairs(list.rows) do row:SetPoint("TOPLEFT", 4, -(top + (i - 1) * ROW_H)) end
+    end
     if def.add then list.add:Set(def.add) end
     local sortKey = GK.SortKey(def)
     for i, b in ipairs(list.heads) do
         local h = def.headings[i]
         b:ClearAllPoints()
         b:SetShown(h ~= nil)
+        if not h then b.key, b.on = nil, false end
         if h then
             b.key, b.tip = sortable and h[4] or nil, h[5]
             b.on = b.key ~= nil and b.key == sortKey
@@ -1287,9 +1685,17 @@ Refresh = function()
             else b:SetPoint("BOTTOMLEFT", list, "TOPLEFT", h[2], -(LIST_TOP - 6)) end
         end
     end
-    offset = math.max(0, math.min(offset, math.max(0, #items - ROWS)))
+    -- whole pages: the page the offset falls in, and where it stops
+    local starts = GK.PageStarts(items)
+    list.starts = starts
+    local at = 1
+    for i, s in ipairs(starts) do
+        if s <= offset then at = i end
+    end
+    offset = starts[at]
+    local stop = starts[at + 1] or #items              -- the last item on this page
     for i, row in ipairs(list.rows) do
-        local it = items[i + offset]
+        local it = offset + i <= stop and items[i + offset] or nil
         if it then
             row:Show()
             FillRow(row, it, chosen ~= nil and it.key == chosen.key)
@@ -1298,14 +1704,15 @@ Refresh = function()
         end
     end
     list.empty:SetText(#items == 0 and empty or "")
-    local more = #items > ROWS
+    local more = #starts > 1
     list.count:SetShown(more)
     list.prev:SetShown(more)
     list.next:SetShown(more)
     if more then
-        list.count:SetText(("%d-%d of %d"):format(offset + 1, math.min(offset + ROWS, #items), #items))
-        list.prev:SetEnabled(offset > 0)
-        list.next:SetEnabled(offset + ROWS < #items)
+        list.count:SetText(offset + 1 == stop and ("%d of %d"):format(stop, #items)
+            or ("%d-%d of %d"):format(offset + 1, stop, #items))
+        list.prev:SetEnabled(at > 1)
+        list.next:SetEnabled(at < #starts)
     end
     local unread = GK.Unread()
     list.letters:Set(unread > 0 and ("Letters \194\183 %d new"):format(unread) or "Letters")      -- "Letters · 2 new"

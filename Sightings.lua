@@ -3,8 +3,8 @@
 -- seen when their nameplate comes up (enemy nameplates have to be on), or you target or mouse over
 -- them. What we saw - level, class, race, GUID - is kept for a while, because a kill or a death only
 -- names someone, and the level has to come from having seen them.
--- Anyone with an open kill order on them gets a skull over their nameplate. The target of an order
--- you took or posted also lights up the notice scroll (Notice.lua), with a sound - never a popup.
+-- Anyone with an open kill order on them gets a skull over their nameplate, and lights up the notice
+-- scroll (Notice.lua) with a sound - never a popup. Nobody takes an order: every guildie is the hunter.
 local ADDON, GK = ...
 local LIB = LibStub("LibForever-1.0")
 local Secret = GK.Secret
@@ -42,14 +42,28 @@ function GK.SeenList()
     return out
 end
 
---- The latest enemy player we saw under this name (GK.SameName), or nil.
+--- The enemy player we saw lately under this name (the death recap's): the one whose name is exactly
+--- it, else the one GK.SameName takes for it - a name with its surname left off on one side. nil, and
+--- "several", when that is more than one player: "Unc" could be Unc Shark or Unc Allayra, and naming
+--- the wrong one put a shaman's name on a hunter's Arcane Shot (2026-11-06). A death not counted is
+--- better than a grudge against the wrong player.
 function GK.SeenByName(name)
-    local best
+    local exact, loose, several
     local now = GetTime()
     for key, s in pairs(seen) do
-        if now - s.t <= SEEN_FOR and GK.SameName(key, name) and (not best or s.t > best.t) then best = s end
+        if now - s.t <= SEEN_FOR then
+            local shown = s.shown or key
+            if shown == name or key == name then
+                if not exact or s.t > exact.t then exact = s end
+            elseif GK.SameName(shown, name) then
+                several = several or (loose ~= nil)
+                if not loose or s.t > loose.t then loose = s end
+            end
+        end
     end
-    return best
+    if exact then return exact end
+    if several then return nil, "several" end
+    return loose
 end
 
 -- Over the cap: forget whoever we saw longest ago.
@@ -87,7 +101,7 @@ end
 --- need nothing more (the nameplate skulls, the tooltip) - no table made per call.
 function GK.UnitIdentity(unit)
     if not Hostile(unit) then return nil end
-    local key = LIB.UnitKey(unit)
+    local key = GK.UnitKey(unit)
     if not key then return nil end
     return key, GuidOf(unit)
 end
@@ -108,6 +122,86 @@ function GK.ReadUnit(unit)
         rf = not Secret(raceFile) and raceFile or nil,
         l = not Secret(level) and GK.ValidLevel(level) or nil,
     }
+end
+
+-- ---------------------------------------------------------------------------
+-- What they look like
+-- ---------------------------------------------------------------------------
+-- Race and sex are all of a player's looks an addon can keep: their face is drawn from a unit and
+-- nothing reads it back (Letters.lua, faces met this session). With those two a card shows their race's
+-- face (raceicon128-*) instead of their class crest, after a reload too. Kept only for players the guild
+-- has a record of, so not every nameplate in the world goes into the saved file, and written over at
+-- the next look: the barber changes sex (the owner, 2026-11-07).
+local MAX_LOOKS = 2000
+local looksCount
+
+--- A player the guild keeps a record of: a grudge, an order, a kill or death of the guild's, a note.
+--- Exact keys only - this runs at every look.
+local function Recorded(key, f, order)
+    if f or order then return true end
+    local s = GK.Store()
+    return s.wanted[key] ~= nil or s.slain[key] ~= nil or (GK.Person and GK.Person(key, false)) ~= nil
+end
+
+--- Keep race and sex from what we saw of a player (s, a record of GK.See's). True once they are kept.
+function GK.KeepLooks(key, s)
+    local looks = GK.db and GK.db.looks
+    if not (looks and type(key) == "string" and s and s.rf and s.sx) then return false end
+    local v = s.rf .. s.sx
+    if looks[key] == v then return true end
+    if looks[key] == nil then
+        if not looksCount then
+            looksCount = 0
+            for _ in pairs(looks) do looksCount = looksCount + 1 end
+        end
+        if looksCount >= MAX_LOOKS then
+            looks[next(looks)] = nil        -- any one: the cap only stops a runaway, and a race's face is cheap to lose
+        else
+            looksCount = looksCount + 1
+        end
+    end
+    looks[key] = v
+    return true
+end
+
+--- What a portrait draws for a player: { key, rf, sx, c }. Race and sex from a look this session (an
+--- old one still says what they look like), else a note's record, else the looks we kept. The saved
+--- file is data: a value that isn't a race file and a sex is no face.
+function GK.FaceOf(key, c)
+    local rf, sx
+    local s = type(key) == "string" and seen[key] or nil
+    if s then rf, sx = s.rf, s.sx end
+    if not (rf and sx) and type(key) == "string" then
+        local p = GK.Person and GK.Person(key, false)
+        if p and p.rf and p.sx then
+            rf, sx = p.rf, p.sx
+        else
+            local v = GK.db and GK.db.looks and GK.db.looks[key]
+            local a, b
+            if type(v) == "string" then a, b = v:match("^(%a+)([23])$") end    -- not "x and match": that keeps one value
+            if a and #a <= 20 then rf, sx = a, tonumber(b) end
+        end
+    end
+    return { key = key, rf = rf, sx = sx, c = c or (s and s.c) or nil }
+end
+
+--- Take the face of a unit we're looking at closely (target, mouseover) - only these: the face the
+--- owner tested was a target's, and a far nameplate's would be no face at all - and only one the game
+--- shows us (UnitIsVisible), for a player we keep a record of. force: their portrait just changed.
+local function TakeFace(unit, key, force)
+    if unit ~= "target" and unit ~= "mouseover" and unit ~= "player" then return end
+    local ok, visible = pcall(UnitIsVisible, unit)
+    if not ok or Secret(visible) or not visible then return end
+    GK.TakeFace(unit, key, force)
+end
+
+--- A guildie we target or mouse over: their face, for their record and the leaderboard, this session.
+local function SeeGuildie(unit)
+    if not (GK.char and GK.TakeFace) or not UnitExists(unit) or Hostile(unit) then return end
+    local ok, isPlayer = pcall(UnitIsPlayer, unit)
+    if not ok or Secret(isPlayer) or not isPlayer then return end
+    local key = GK.UnitKey(unit)
+    if key and GK.Store().board[key] then TakeFace(unit, key) end
 end
 
 -- ---------------------------------------------------------------------------
@@ -168,17 +262,12 @@ end
 -- ---------------------------------------------------------------------------
 -- Seeing someone
 -- ---------------------------------------------------------------------------
---- Is this order yours to hunt: one you took, or one you posted (your own, or one your death posted)?
---- Your own orders can't be "taken" - their buttons offer Withdraw instead - so before this, the
---- camper whose order your death posted could walk right up to you unannounced (the user, 2026-11-04).
-function GK.Hunting(order)
-    return GK.char.accepted[order.key] or order.by == LIB.Me()
-end
-
--- The target of an open order is in sight: warn (if it's yours to hunt) and tell the guild where.
+-- The target of an open order is in sight: warn, and tell the guild where. Every order, whoever posted
+-- it: there is no taking an order any more - "hey, we put out an order, kill this one" is the whole of
+-- it (the owner, 2026-11-07). Before, only orders you took or posted warned you.
 local function Spotted(order, s)
     local now = GetTime()
-    if (GK.Hunting(order) and GK.db.alertNear) or GK.db.alertAll then
+    if GK.db.alertNear then
         if not alerted[order.key] or now - alerted[order.key] > ALERT_GAP then
             alerted[order.key] = now
             GK.Warn(("%s is near!"):format(GK.Show(order.n)), true)
@@ -222,6 +311,16 @@ function GK.See(unit)
         seen[key] = s
         count = count + 1
     end
+    -- Their name as the game writes it, both words: "Unc Shark". The key can't be trusted for that on
+    -- the live servers - a player on another of the server's realms comes back from LibForever as
+    -- "Unc-Shark", the surname read as a realm - and then every "Unc" looked like the same player to
+    -- GK.SameName (2026-11-06). Once per player we keep, not per look.
+    if not s.shown then
+        local name, second = (UnitNameUnmodified or UnitName)(unit)
+        if type(name) == "string" and not Secret(name) and not Secret(second) then
+            s.shown = (type(second) == "string" and second ~= "") and (name .. " " .. second) or name
+        end
+    end
     s.guid = guid or s.guid
     local _, class = UnitClass(unit)
     if not Secret(class) then s.c = GK.ValidClass(class) or s.c end
@@ -244,6 +343,15 @@ function GK.See(unit)
     if plates[unit] then
         if order then Mark(unit) else Unmark(unit) end
     end
+    -- Someone the guild has a record of: keep what they look like, and their face up close. Kept again
+    -- when it changed, so a barber's new sex is written at the next look; nothing written when it didn't.
+    if s.known or Recorded(key, f, order) then
+        s.known = true
+        if s.rf and s.sx and (s.keptRf ~= s.rf or s.keptSx ~= s.sx) and GK.KeepLooks(key, s) then
+            s.keptRf, s.keptSx = s.rf, s.sx
+        end
+        TakeFace(unit, key)
+    end
     if order then Spotted(order, s) end
 end
 
@@ -258,8 +366,28 @@ function GK.StartSightings()
         plates[unit] = nil
         Unmark(unit)
     end)
-    LIB.On("PLAYER_TARGET_CHANGED", function() GK.See("target") end)
-    LIB.On("UPDATE_MOUSEOVER_UNIT", function() GK.See("mouseover") end)
+    LIB.On("PLAYER_TARGET_CHANGED", function()
+        GK.See("target")
+        SeeGuildie("target")
+    end)
+    LIB.On("UPDATE_MOUSEOVER_UNIT", function()
+        GK.See("mouseover")
+        SeeGuildie("mouseover")
+    end)
+    -- A face taken before the game had their model is blank; it says when the portrait is ready, and a
+    -- barber or a shapeshift changes it. Only for faces we already hold.
+    LIB.On("UNIT_PORTRAIT_UPDATE", function(unit)
+        if GK.FaceCount() == 0 or (unit ~= "target" and unit ~= "mouseover" and unit ~= "player") then return end
+        local key = unit == "player" and LIB.Me() or GK.UnitKey(unit)
+        if key and GK.HasFace(key) then TakeFace(unit, key, true) end
+    end)
+    -- our own face, for our own row on the leaderboard: once the world is there
+    LIB.On("PLAYER_ENTERING_WORLD", function()
+        C_Timer.After(2, function()
+            local me = LIB.Me()
+            if me then TakeFace("player", me) end
+        end)
+    end)
     -- Once per burst of changes (GK.Changed gathers them); RefreshMarks itself skips unless orders changed.
     LIB.Listen("GRUDGEKEEPER_CHANGED", RefreshMarks)
 end
