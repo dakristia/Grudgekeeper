@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.0
+
+- **The first release.** Out of beta: the same addon as 0.1.0-beta4, whose notes are below.
+
 ## 0.1.0-beta4
 
 - **Forget a grudge.** A player you have a grudge with has a Forget grudge button on their card; click it twice to confirm. It takes your record of them away: the grudge, its lines in your log, your kills and deaths in the guild's Most wanted and your news about them. The guild is asked to drop your part too, and only your part: what a guildie wrote down about them stays. Your score stays as it was. Before, a wrong grudge was there for good, like a death a hunter dealt that was written down as a shaman's before the death recap was fixed.
