@@ -1,11 +1,12 @@
 -- Grudgekeeper - notes on players: what the guild writes down about the people it meets. A free-text
--- note with a tag, a mark that puts a player on one of three lists (Marked, Shame, Kudos), and
--- votes on notes. This file is the data and the
+-- note with a tag, a mark that puts a player on one of three lists (Marked, Shame, Kudos), votes on
+-- notes, and the enemy guild on watch. This file is the data and the
 -- wire only; it makes no frames. The pages, menus and tooltip lines that show it are elsewhere.
 -- (Guild Grudge's list of funny character names came with the merge and was left out, 2026-11-05: it
 -- waits in BACKLOG.md, and its code is at the merged PR's head, ad2b348.)
 -- It follows Guild.lua's rule: everyone sends only their OWN things - their notes, their marks, their
--- votes - and the author of a record is always the SENDER of the message, never a
+-- votes; the one exception is the guild's watched guild, below - and the author of a record is always the
+-- SENDER of the message, never a
 -- field in it, so nobody can write in another player's name. A client never re-sends what someone
 -- else wrote. Every record is last-writer-wins by the author's time, per author and id; a delete is a
 -- record kept 30 days (a tombstone) so a late sync can't bring the note back.
@@ -15,10 +16,13 @@
 --   N;1;key;id;ts;del;tag;c;r;l;text        my note (del: 1 or empty)
 --   L;1;key;list;ts;del;c;r;l               my mark: which list I put them on
 --   V;1;key;author;id;v;ts                  my vote on author's note id (v: 1, -1 or 0 to take it back)
+--   W;1;guild;ts;del;by                     the guild's watched enemy guild, set by an officer (by), and
+--                                           passed on by anyone (del: taken off, the guild empty)
 --   Q;1                                     tell me yours (at login)
 -- (M, G and H were the nice names' messages; a client that still sends them is ignored.)
 -- Worst case a guild can make us keep: 500 people, 20 live notes and 40 note ids (live and
--- deleted) per author per player, 5000 note ids in all, 100 voted-on notes per player, 300 voters on one.
+-- deleted) per author per player, 5000 note ids in all, 100 voted-on notes per player, 300 voters on one,
+-- and one watched guild.
 -- Every sender is also held to LibForever's 30 messages / 10 s, and so are we: everything we send
 -- goes through one queue (see "The outbound queue").
 local ADDON, GK = ...
@@ -626,6 +630,99 @@ function GK.SetMark(key, list)
 end
 
 -- ---------------------------------------------------------------------------
+-- The watched guild
+-- ---------------------------------------------------------------------------
+-- An enemy guild the guild knows - "vi har en bekjent gjeng på motsatt faction og vi vet guildnavnet
+-- dems. vi vil få varsel om noen er i nærheten" (the owner, 2026-11-07) - put on watch: anyone of theirs
+-- seen near warns you (Sightings.lua). The game names an enemy player's guild, from a target and from a
+-- nameplate (the owner's tests, the same day). One guild at a time, for the whole guild, and only an
+-- officer or the guild master puts one on watch or takes it off: "kanskje bare officers+ kan legge til en
+-- hel guild på watchlist og kanskje max 1 guild?" (the owner, the same day). A new one replaces the old.
+-- One record in the guild's store, { name, by, ts }, with no name once it is taken off; the latest wins
+-- (W). It is the guild's rather than one guildie's, so everyone passes it on in their answer to a login,
+-- and it outlives its officer logging out.
+-- Only the officer's own client checks they are one: no client can read another player's rank, and the
+-- roster can't be required (CLAUDE.md). A guildie with an altered client could put a guild on watch, which
+-- only makes the warnings ring for that guild, and any officer's newer word undoes it.
+local MAX_GUILD_NAME = 24                   -- the game's own limit on a guild's name
+
+--- A guild's name as a client may send it: clean, not empty, no longer than the game allows. nil otherwise.
+local function GuildName(s)
+    s = GK.Clean(s, MAX_GUILD_NAME)
+    if not s then return nil end
+    s = s:match("^%s*(.-)%s*$")
+    return s ~= "" and s or nil
+end
+
+--- The watch as the guild's store holds it - { name (nil once taken off), by, ts } - or nil if never set.
+--- Read at every enemy Sightings looks at, so a plain field.
+local function Watch()
+    return GK.Store().watch
+end
+
+--- The watched guild's name, who put it on watch and when; nil while none is.
+function GK.WatchedGuild()
+    local w = Watch()
+    if not (w and w.name) then return nil end
+    return w.name, w.by, w.ts
+end
+
+--- Is this the watched guild?
+function GK.IsGuildWatched(name)
+    local w = Watch()
+    return type(name) == "string" and w ~= nil and w.name == name
+end
+
+--- Is a guild watched at all? While none is, nobody's guild is even read.
+function GK.AnyGuildWatched()
+    local w = Watch()
+    return w ~= nil and w.name ~= nil
+end
+
+--- May I put a guild on watch, or take it off? An officer or the guild master; the game says which of
+--- them we are, and nobody else (C_GuildInfo.IsGuildOfficer, IsGuildLeader: no unit, no secret).
+function GK.CanWatchGuild()
+    local info = C_GuildInfo
+    if info and info.IsGuildOfficer then
+        local ok, officer = pcall(info.IsGuildOfficer)
+        if ok and officer == true then return true end
+    end
+    if IsGuildLeader then
+        local ok, leader = pcall(IsGuildLeader)
+        if ok and leader == true then return true end
+    end
+    return false
+end
+
+--- The watch, rec = { name (nil: taken off), by, ts }. The latest wins.
+function Put.Watch(rec)
+    local s = GK.Store()
+    local old = s.watch
+    if old and rec.ts <= old.ts then return false end
+    s.watch = { name = rec.name, by = rec.by, ts = rec.ts }
+    return true
+end
+
+--- The watch on the wire: the guild (empty once taken off), when, taken off, and who put it there.
+function Encode.W(w)
+    return Msg("W", PROTO, w.name, w.ts, w.name == nil and 1 or nil, w.by)
+end
+
+--- Put a guild on watch - it replaces the one before - or take it off (on false). Only for an officer or
+--- the guild master. True when done, or when there was nothing to do.
+function GK.WatchGuild(name, on)
+    local me = LIB.Me()
+    name = GuildName(name)
+    if not (me and name) or not GK.CanWatchGuild() then return false end
+    local current = GK.WatchedGuild()
+    if (on and current == name) or (not on and current ~= name) then return true end
+    if not Put.Watch({ name = on and name or nil, by = me, ts = NextTs(Watch()) }) then return false end
+    Send(Encode.W(Watch()))
+    GK.Changed()
+    return true
+end
+
+-- ---------------------------------------------------------------------------
 -- Notes
 -- ---------------------------------------------------------------------------
 local function NoteScoreOf(p, author, id)
@@ -822,12 +919,23 @@ local function OnVote(sender, f)
     return false
 end
 
+--- The watch, from the officer who set it or passed on by anyone (it is the guild's). Who set it is the
+--- field after; with none, the sender. An older word never undoes a newer one.
+local function OnGuildWatch(sender, f)
+    local ts, del = Ts(f[4]), f[5] == "1"
+    local name = GuildName(f[3])
+    if not ts or (not del and not name) then return false end
+    local by = ValidKey(f[6])
+    by = by and GK.LocalKey(by) or sender
+    return Put.Watch({ name = (not del) and name or nil, by = by, ts = ts })
+end
+
 -- ---------------------------------------------------------------------------
 -- Answering a Q: my own records, newest first, a few at a time
 -- ---------------------------------------------------------------------------
 -- Players are told about before the votes on their notes, because a vote on a player we don't know is
 -- dropped; the cap still keeps the newest 150 of everything.
-local RANK = { N = 1, L = 2, V = 3 }
+local RANK = { N = 1, L = 2, W = 2, V = 3 }
 
 local function OwnRecords()
     local me, out = LIB.Me(), {}
@@ -848,6 +956,9 @@ local function OwnRecords()
             end
         end
     end
+    -- the watched guild, whoever set it: it is the guild's, and so outlives its officer logging out
+    local w = Watch()
+    if w then add(w.ts, Encode.W(w)) end
     table.sort(out, function(a, b)
         if a.ts ~= b.ts then return a.ts > b.ts end
         return a.text < b.text
@@ -901,7 +1012,7 @@ local function OnAsk()
     return false
 end
 
-local HANDLERS = { N = OnNote, L = OnMark, V = OnVote, Q = OnAsk }
+local HANDLERS = { N = OnNote, L = OnMark, V = OnVote, W = OnGuildWatch, Q = OnAsk }
 
 local function OnMessage(_, text, dist, sender)
     if dist ~= "GUILD" or type(text) ~= "string" or #text > 600 or not (GK.char and GK.db) then return end
@@ -956,6 +1067,13 @@ function GK.PruneNotes()
         end
         if next(p.marks) == nil and next(p.notes) == nil and next(p.votes) == nil then s.people[key] = nil end
     end
+    -- a watch taken off long enough ago that no late answer can bring the old one back; and the
+    -- per-guildie lists of the first build of it, which never shipped
+    if s.watch and not s.watch.name and s.watch.ts < cutoff then
+        s.watch = nil
+        gone = gone + 1
+    end
+    s.guilds = nil
     if gone > 0 then GK.Changed() end
     return gone
 end

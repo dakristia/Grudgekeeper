@@ -163,7 +163,7 @@ function GK.LetterLine(L)
     if L.kind == "complete" then return "Order complete: " .. who end
     if L.kind == "paid" then return "Bounty paid: " .. who end
     if L.kind == "expired" then return "Order expired: " .. who end
-    if L.kind == "kill" then return ("You killed %s (+%d)"):format(who, L.p or 0) end
+    if L.kind == "kill" then return L.title and ("A new title: " .. L.title) or ("You killed " .. who) end
     if L.kind == "slain" then return "Slain by " .. who end
     return who
 end

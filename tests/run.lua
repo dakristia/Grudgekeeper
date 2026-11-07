@@ -834,13 +834,15 @@ local function bootSheets(opts)
     return GK
 end
 
-test("letter content: a kill letter is a note with its closing line after a blank line", function()
+-- A kill gets a letter only for a new title, in three short lines (the owner, 2026-11-07: "kanskje ikke så
+-- mye text?" - seven lines ran into the seal).
+test("letter content: a kill letter is a note: the title, the kill, where you stand, then its closing line", function()
     local GK = bootSheets({ me = ME })
-    local L = { id = 2, kind = "kill", n = GANK, c = "ROGUE", r = "Orc", l = 35, p = 2, z = "Hillsbrad",
+    local L = { id = 2, kind = "kill", n = GANK, c = "ROGUE", r = "Orc", l = 35, z = "Hillsbrad", title = "Bloodhound",
         rank = 4, of = 12, total = 31, sample = true }
     local d = GK.LetterContent(L)
     eq(d.note, true)
-    eq(d.title, "Blood drawn")
+    eq(d.title, "A new title")
     eq(d.seal, "seal_red")
     eq(d.blood, false)
     eq(d.key, GANK)
@@ -848,17 +850,18 @@ test("letter content: a kill letter is a note with its closing line after a blan
     eq(d.sample, true)
     eq(#d.buttons, 1)
     eq(d.buttons[1][1], "Leaderboard")
-    eq(table.concat(d.lines, "\n"), "You killed Gank Master, a level 35 Orc in Hillsbrad.\n"
-        .. "Worth 2 points.\nThat puts you at 31 points - #4 of 12 in the guild.\n\nKeep them coming.")
+    eq(table.concat(d.lines, "\n"), "You are now a Bloodhound.\nGank Master in Hillsbrad was the kill that did it.\n"
+        .. "31 points - #4 of 12 in the guild.\n\nKeep them coming.")
 end)
 
-test("letter content: a long note leaves the closing line out", function()
+test("letter content: a kill letter from before titles says the kill and where you stand", function()
     local GK = bootSheets({ me = ME })
     local L = { id = 1, kind = "kill", n = GANK, p = 2, revenge = 2, avenged = KARI, streak = 5, of = 3, rank = 1,
         total = 40 }
     local d = GK.LetterContent(L)
-    eq(#d.lines, 6)
-    eq(d.lines[#d.lines], "That puts you at 40 points - #1 of 3 in the guild.")
+    eq(d.title, "Blood drawn")
+    eq(table.concat(d.lines, "\n"), "You killed Gank Master.\n40 points - #1 of 3 in the guild.\n\n"
+        .. "They'll remember your name.")
 end)
 
 test("letter content: a slain letter has blood, a black seal and no buttons when it cannot act", function()
@@ -874,7 +877,9 @@ test("letter content: a slain letter has blood, a black seal and no buttons when
     eq(e.blood, false)
 end)
 
-test("letter content: an order is a scroll with a name, a foot and Take the order", function()
+-- The scroll's own buttons are only what it asks of you; Open kill orders and Close are the bar under it
+-- (Letters.lua, BuildScroll; "X oppe i høyre funker ikke så bra", the owner, 2026-11-07).
+test("letter content: an order is a scroll with a name and a foot, and no buttons of its own to read it", function()
     local GK = bootSheets({ me = ME })
     local d = GK.LetterContent({ id = 1, kind = "order", n = GANK, c = "MAGE", l = 60, by = KARI, reward = 20000,
         note = "Camps the flight master.", times = 3 })
@@ -886,8 +891,7 @@ test("letter content: an order is a scroll with a name, a foot and Take the orde
     eq(d.stamp, nil)
     eq(d.lines[1], '"Camps the flight master."')
     eq(d.lines[2], "Has killed Kari 3 times.")
-    eq(#d.buttons, 1)
-    eq(d.buttons[1][1], "Hitlist")
+    eq(#d.buttons, 0)
     local done = GK.LetterContent({ id = 2, kind = "complete", n = GANK, by = KARI, doneBy = ME, z = "Hillsbrad" })
     eq(done.title, "ORDER COMPLETE")
     eq(done.name, "Gank Master is dead")
@@ -895,7 +899,7 @@ test("letter content: an order is a scroll with a name, a foot and Take the orde
     eq(done.seal, "seal_broken")
     eq(done.lines[1], "You collected the bounty in Hillsbrad.")
     eq(done.buttons[1][1], "Tell the guild")
-    eq(done.buttons[2][1], "Hitlist")
+    eq(done.buttons[2], nil)
 end)
 
 test("kill order sheet: a new order, one of yours, and someone else's pot", function()

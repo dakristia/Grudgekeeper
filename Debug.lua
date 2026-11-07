@@ -82,38 +82,6 @@ end
 
 local KARI_ORDER = 901
 
--- A question only the game can answer (VERIFY.md, 2026-11-06): does a face drawn with SetPortraitTexture
--- stay in its texture after the player has gone - target cleared, out of sight? If it does, a poster can
--- keep the real face of the one you hate for the rest of the session; if not, there is nothing to keep.
--- Every face call in the client takes a unit, so nothing keeps a face past a reload either way.
-local faceProbe
-local function KeepTargetFace()
-    if not UnitExists("target") or not UnitIsPlayer("target") then
-        Say("target a player first - friend or foe.")
-        return
-    end
-    if not faceProbe then
-        local f = CreateFrame("Button", "GrudgekeeperFaceProbe", UIParent)
-        f:SetSize(110, 128)
-        f:SetPoint("CENTER", 0, 180)
-        f:SetFrameStrata("DIALOG")
-        f.face = f:CreateTexture(nil, "ARTWORK")
-        f.face:SetSize(96, 96)
-        f.face:SetPoint("TOP")
-        f.name = f:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-        f.name:SetPoint("TOP", f.face, "BOTTOM", 0, -4)
-        f.name:SetWidth(110)
-        f:SetScript("OnClick", function(self) self:Hide() end)
-        if LIB.RegisterPopup then LIB.RegisterPopup(f) end
-        faceProbe = f
-    end
-    local ok = pcall(SetPortraitTexture, faceProbe.face, "target")
-    local key = GK.UnitKey("target")
-    faceProbe.name:SetText(ok and (key and GK.Show(key) or "?") or "the game refused the face")
-    faceProbe:Show()
-    Say("now clear your target and walk out of sight: does the face stay? Click it to close.")
-end
-
 -- { label } is a heading; { label, fn } a button.
 local ACTIONS = {
     { "Letters and the notice" },
@@ -121,7 +89,6 @@ local ACTIONS = {
     { "Your target is near", function() GK.Warn(GK.Show(TheEnemy().key) .. " is near!", true) end },
     { "Place the letter icon", function() GK.PlaceNotice() end },
     { "Open the window", function() GK.OpenWindow(1) end },
-    { "Keep your target's face", KeepTargetFace },
 
     { "You" },
     { "Kill your target", function() GK.RecordKill(TheEnemy()) end },

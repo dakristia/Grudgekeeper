@@ -274,6 +274,41 @@ function GK.NotesItems(list)
     return items, EMPTY[list]
 end
 
+-- ---------------------------------------------------------------------------
+-- The watched guild (Notes.lua), as a section of the kill orders page under Marked, and its card
+-- ---------------------------------------------------------------------------
+--- The card for the watched guild: who put it on watch and when, who of theirs we saw lately, and for an
+--- officer the way to take it off. nil when it is not the watched guild (any more).
+function GK.GuildCard(guild)
+    local name, by, ts = GK.WatchedGuild()
+    if name ~= guild then return nil end
+    local d = { title = "WATCHED GUILD", name = "<" .. guild .. ">", info = "Anyone of theirs near warns you.",
+        lines = {}, buttons = {}, seal = "mark" }
+    d.lines[1] = ("Put on watch by %s, %s."):format(by and Who(by) or "an officer", GK.Ago(ts))
+    local seenNow = GK.GuildSeen and GK.GuildSeen(guild, 5) or {}
+    if #seenNow == 0 then
+        d.lines[2] = "Nobody of theirs seen in the last 15 minutes."
+    else
+        for _, s in ipairs(seenNow) do
+            d.lines[#d.lines + 1] = ("Seen: %s%s"):format(GK.Show(s.key), s.z and (", " .. s.z) or "")
+        end
+    end
+    if GK.CanWatchGuild() then
+        d.buttons[1] = { "Stop watching", function() GK.WatchGuild(guild, false) end }
+    end
+    return d
+end
+
+--- The kill orders page's row for the watched guild, or none.
+function GK.WatchedGuildItems()
+    local name, by = GK.WatchedGuild()
+    if not name then return {} end
+    return { { key = "g:" .. name, name = "<" .. name .. ">", face = {},
+        sub = "on watch - put there by " .. (by and Who(by) or "an officer"), right = "",
+        own = (by ~= nil and by == LIB.Me()) or nil,
+        select = { kind = "card", make = function() return GK.GuildCard(name) end } } }
+end
+
 -- The friendly lists have pages of their own, at the right. Marked has none since 2026-11-07: it is a
 -- section of the kill orders page (Window.lua), as kill orders and Most wanted say the rest of it.
 for _, list in ipairs({ "watch", "kudos" }) do

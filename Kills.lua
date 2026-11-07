@@ -29,7 +29,7 @@ end
 -- ---------------------------------------------------------------------------
 -- Kills
 -- ---------------------------------------------------------------------------
---- One kill of ours: points, the log, the guild, any order it fulfils, a letter.
+--- One kill of ours: points, the log, the guild, any order it fulfils, a letter when it earns a title.
 --- v = { key, guid, c, r, l }
 function GK.RecordKill(v)
     local now = time()
@@ -45,7 +45,7 @@ function GK.RecordKill(v)
     local avenged = GK.Avenged(v.key, now)
     local c = GK.char
     local titleBefore = GK.Title(c.points)
-    local points, con = GK.Points(UnitLevel("player"), v.l, today, #orders > 0, revenge, avenged)
+    local points = GK.Points(UnitLevel("player"), v.l, today, #orders > 0, revenge, avenged)
     f.hits[#f.hits + 1] = now
     f.k = f.k + 1
     f.lastKill = now
@@ -62,11 +62,13 @@ function GK.RecordKill(v)
     GK.SendKill(v, zone, points, avenged, f.k)
     GK.SendBoard()
     if (#orders > 0 and GK.db.shotFulfil) or GK.db.shotEveryKill then GK.Shot(0.3) end
+    -- A letter only for the kill that earns a new title. One for every kill was one after every fight ("den
+    -- kan bli litt spam"), and a narrower rule - above your level, revenge, a streak - still sent too many:
+    -- "kanskje for kills så kommer melding bare når man ranker opp?" (the owner, 2026-11-07). Every kill
+    -- still counts, and the ledger's Grudges and News have them all.
     if #orders == 0 and GK.db.myLetters then
         local title = GK.Title(c.points)
-        GK.KillLetter(v, points, con, today, zone, {
-            revenge = revenge and f.d or nil, avenged = avenged, streak = c.streak,
-            title = title ~= titleBefore and title or nil })
+        if title ~= titleBefore then GK.KillLetter(v, zone, title) end
     end
     GK.Changed()
 end

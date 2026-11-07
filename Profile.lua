@@ -149,6 +149,49 @@ end
 --   kind "facts": rows { label, value, more } (no label: a paragraph; more: a grey word after the
 --   value); "events": { c, text, under, right }, each with their class's crest.
 -- ---------------------------------------------------------------------------
+
+-- Who put what in a pot. The bounty tile said "from 2 guildies" and no more ("se hvem som har lagt til i
+-- potten", the owner, 2026-11-07): the card says it in a section of its own rather than behind a button,
+-- since a card has the room and nobody has to know to click.
+local MAX_POT_ROWS = 4
+
+--- An order's pot as rows for a card's facts, the most first: { amount, who, a grey word }. The poster's
+--- reward is theirs and says so; on a fulfilled order each share says whether it is paid. More givers
+--- than MAX_POT_ROWS end on one row for the rest. nil when nobody but the poster put gold in: the bounty
+--- tile and Posted by say all there is then.
+function GK.PotRows(o)
+    if not (o and o.pot and next(o.pot)) then return nil end
+    local givers = {}
+    if (o.reward or 0) > 0 then givers[1] = { who = o.by, copper = o.reward, poster = true } end
+    for who, copper in pairs(o.pot) do givers[#givers + 1] = { who = who, copper = copper } end
+    table.sort(givers, function(a, b)
+        if a.copper ~= b.copper then return a.copper > b.copper end
+        return a.who < b.who
+    end)
+    local owed = o.state == "d" or o.state == "p"
+    local rows = {}
+    local shown = #givers <= MAX_POT_ROWS and #givers or MAX_POT_ROWS - 1
+    for i = 1, shown do
+        local g = givers[i]
+        local note = g.poster and "posted it" or nil
+        if owed then
+            local paid = g.poster and o.state == "p" or (not g.poster and o.paid and o.paid[g.who])
+            note = paid and "paid" or "not paid yet"
+        end
+        rows[#rows + 1] = { GK.Coins(g.copper), Upper(Who(g.who)), note }
+    end
+    if shown < #givers then
+        local rest = 0
+        for i = shown + 1, #givers do rest = rest + givers[i].copper end
+        rows[#rows + 1] = { GK.Coins(rest), Plural(#givers - shown, "other") }
+    end
+    return rows
+end
+
+-- Forget grudge, readied by a first click: whose, and until when (GetTime()).
+local FORGET_ARMED_FOR = 5
+local forgetArmed, forgetUntil = nil, 0
+
 --- An enemy player. t = { key, guid, c, r, l, unit }: whatever the caller knows. inLedger: drawn on
 --- the ledger's own page (Window.lua), where your own order's button withdraws it rather than
 --- opening the hitlist you are already looking at.
@@ -165,9 +208,9 @@ function GK.PosterCard(t, inLedger)
             or (w and w[field])
     end
     local c, r, l = Pick("c"), Pick("r"), Pick("l")
-    -- Their face: the one we met this session, else their race's from race and sex, seen or kept
-    -- (GK.FaceOf). Under whichever spelling we have them by - the card may be asked for a name alone.
-    local function Known(k) return k and (GK.HasFace(k) or GK.FaceOf(k).rf) and k or nil end
+    -- Their race's face, from race and sex seen or kept (GK.FaceOf), under whichever spelling we have
+    -- them by - the card may be asked for a name alone.
+    local function Known(k) return k and GK.FaceOf(k).rf and k or nil end
     local faceKey = Known(key) or Known(fkey) or Known(o and o.n) or key
     local look = GK.FaceOf(faceKey, c)
     local d = { key = key, unit = t.unit, c = c, name = GK.Show(key), info = GK.Describe(l, c, r), lines = {},
@@ -259,6 +302,8 @@ function GK.PosterCard(t, inLedger)
         if o.note and o.note ~= "" then order[#order + 1] = { "Why", o.note } end
         if o.exp then order[#order + 1] = { "Runs out", Until(o.exp) } end
         rich.sections[1] = { head = "The order", kind = "facts", rows = order }
+        local potRows = GK.PotRows(o)
+        if potRows then rich.sections[2] = { head = "The pot", kind = "facts", rows = potRows } end
         if o.by ~= me then
             d.buttons[1] = { (o.pot and me and o.pot[me]) and "Your share" or "Add to the pot", function()
                 GK.OpenPost({ key = o.n, guid = o.guid, c = o.c, r = o.r, l = o.l })
@@ -271,6 +316,21 @@ function GK.PosterCard(t, inLedger)
     else
         d.buttons[1] = { "Post a kill order", function()
             GK.OpenPost({ key = key, guid = guid, c = c, r = r, l = l })
+        end }
+    end
+    -- A grudge of yours can be forgotten (GK.ForgetGrudge, Guild.lua): a wrong one stayed for good before.
+    -- It asks twice - the first click readies it for a few seconds and the button says so.
+    if f and fkey and (f.k or 0) + (f.d or 0) > 0 then
+        local armed = forgetArmed == fkey and GetTime() < forgetUntil
+        d.buttons[#d.buttons + 1] = { armed and "Really forget?" or "Forget grudge", function()
+            if forgetArmed == fkey and GetTime() < forgetUntil then
+                forgetArmed = nil
+                GK.ForgetGrudge(fkey)
+                return
+            end
+            forgetArmed, forgetUntil = fkey, GetTime() + FORGET_ARMED_FOR
+            C_Timer.After(FORGET_ARMED_FOR + 0.1, GK.Changed)        -- back to Forget grudge
+            GK.Changed()
         end }
     end
     if not d.big and killedUs > 0 then d.big, d.caption = tostring(killedUs), "killed us" end
@@ -516,46 +576,20 @@ local function Build()
     -- The game's own X, as on the letter in the same frame; our own Hide, so closing works in combat too.
     GK.MakeGameCloseButton(f, function() f:Hide() end)
     if LIB.RegisterWindow then LIB.RegisterWindow(f, GK.db, "profile") end
-    -- The face we were lent went elsewhere: what the card shows without it.
-    function f.faceHost:Lost()
-        f.portrait:Show()
-        local badge = self.kind == "race" and self.coords
-        f.badge:SetShown(badge and true or false)
-        f.badgeRing:SetShown(badge and true or false)
-    end
     card = f
 end
 
---- The face of whoever the card is about, while the unit it was opened from is still them; else their
---- race's portrait when we know race and sex; else their class crest; else the Grudgekeeper himself.
+--- Their race's portrait when we know race and sex, with their class on its shoulder; else their class
+--- crest; else the Grudgekeeper himself. Never their own face, even with them targeted: the same player
+--- looked one way here and another everywhere else (GK.MakePortrait's note).
 local function Portrait(f, d)
     local coords = d.c and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[d.c]
-    local face = false
-    local unit = d.unit
-    if unit and SetPortraitTexture and UnitExists(unit) then
-        local key = GK.UnitKey(unit)
-        if key and GK.SameName(key, d.key) then face = pcall(SetPortraitTexture, f.portrait, unit) end
-    end
-    -- Not here now: the face we met them with this session (GK.LendFace), over their race's.
-    local host, lent = f.faceHost, false
-    host.coords = coords
-    if face then
+    local kind = GK.SetPortrait(f.portrait, d)
+    if kind == "seal" then
+        f.portrait:SetTexture(MEDIA .. "portrait")
         f.portrait:SetTexCoord(0, 1, 0, 1)
-        host.kind = "live"
-        GK.ReturnFace(host)
-    else
-        local kind = GK.SetPortrait(f.portrait, d)
-        host.kind = kind
-        if kind == "seal" then
-            f.portrait:SetTexture(MEDIA .. "portrait")
-            f.portrait:SetTexCoord(0, 1, 0, 1)
-        end
-        lent = GK.LendFace(d.faceKey or d.key, host)
-        if not lent then GK.ReturnFace(host) end
-        face = kind == "race" or lent
     end
-    f.portrait:SetShown(not lent)
-    local badge = face and coords
+    local badge = kind == "race" and coords
     f.badge:SetShown(badge and true or false)
     f.badgeRing:SetShown(badge and true or false)
     if badge then
@@ -678,6 +712,17 @@ local function OnEnemyMenu(_, root, ctx)
     -- and the kill order itself, one click from the enemy: opening the ledger to post one was too much
     -- work (the owner, 2026-11-05). The label says which of the sheet's three cases it will open.
     AddLine(root, function() GK.ShowPoster(t) end, GK.PostLabel(t), function() GK.OpenPost(t) end)
+    -- Their guild on watch, or off it, for an officer (Notes.lua): the right spelling comes from the game,
+    -- which typing one wouldn't. One guild at a time, so the line says which it replaces.
+    local ok, guild = pcall(GetGuildInfo, unit)
+    if ok and not GK.Secret(guild) and type(guild) == "string" and guild ~= "" and GK.CanWatchGuild
+        and GK.CanWatchGuild() then
+        local current = GK.WatchedGuild()
+        local label = (current == guild and ("Stop watching <%s>"):format(guild))
+            or (current and ("Watch <%s> instead of <%s>"):format(guild, current))
+            or ("Watch their guild <%s>"):format(guild)
+        root:CreateButton(label, function() GK.WatchGuild(guild, current ~= guild) end)
+    end
 end
 
 local function OnFriendlyMenu(_, root, ctx)

@@ -128,8 +128,8 @@ end
 -- What they look like
 -- ---------------------------------------------------------------------------
 -- Race and sex are all of a player's looks an addon can keep: their face is drawn from a unit and
--- nothing reads it back (Letters.lua, faces met this session). With those two a card shows their race's
--- face (raceicon128-*) instead of their class crest, after a reload too. Kept only for players the guild
+-- nothing reads it back, so we show none (GK.MakePortrait's note). With those two a card shows their
+-- race's face (raceicon128-*) instead of their class crest, after a reload too. Kept only for players the guild
 -- has a record of, so not every nameplate in the world goes into the saved file, and written over at
 -- the next look: the barber changes sex (the owner, 2026-11-07).
 local MAX_LOOKS = 2000
@@ -183,25 +183,6 @@ function GK.FaceOf(key, c)
         end
     end
     return { key = key, rf = rf, sx = sx, c = c or (s and s.c) or nil }
-end
-
---- Take the face of a unit we're looking at closely (target, mouseover) - only these: the face the
---- owner tested was a target's, and a far nameplate's would be no face at all - and only one the game
---- shows us (UnitIsVisible), for a player we keep a record of. force: their portrait just changed.
-local function TakeFace(unit, key, force)
-    if unit ~= "target" and unit ~= "mouseover" and unit ~= "player" then return end
-    local ok, visible = pcall(UnitIsVisible, unit)
-    if not ok or Secret(visible) or not visible then return end
-    GK.TakeFace(unit, key, force)
-end
-
---- A guildie we target or mouse over: their face, for their record and the leaderboard, this session.
-local function SeeGuildie(unit)
-    if not (GK.char and GK.TakeFace) or not UnitExists(unit) or Hostile(unit) then return end
-    local ok, isPlayer = pcall(UnitIsPlayer, unit)
-    if not ok or Secret(isPlayer) or not isPlayer then return end
-    local key = GK.UnitKey(unit)
-    if key and GK.Store().board[key] then TakeFace(unit, key) end
 end
 
 -- ---------------------------------------------------------------------------
@@ -261,6 +242,60 @@ end
 
 -- ---------------------------------------------------------------------------
 -- Seeing someone
+-- ---------------------------------------------------------------------------
+-- Someone of a watched guild in sight (Notes.lua, GK.WatchGuild): one warning a minute per guild, and it
+-- names everyone of theirs who came up in the moment before it - a group's nameplates come at once, and
+-- five warnings for one group would be four too many.
+local GUILD_GAP = 60          -- the same guild warns you at most this often
+local GUILD_GATHER = 2        -- seconds to wait for the rest of a group before warning
+local guildNear = {}          -- [guild] = { at = GetTime() of the last warning, due, who = { [key] = GetTime() } }
+
+--- "A", "A and B", "A, B and C", "A, B, C and 2 more".
+local function NameList(names)
+    local n = #names
+    if n <= 1 then return names[1] or "" end
+    if n <= 3 then return table.concat(names, ", ", 1, n - 1) .. " and " .. names[n] end
+    return ("%s and %d more"):format(table.concat(names, ", ", 1, 3), n - 3)
+end
+
+local function GuildNear(guild, key)
+    local now = GetTime()
+    local g = guildNear[guild]
+    if not g then
+        g = { who = {} }
+        guildNear[guild] = g
+    end
+    g.who[key] = now
+    if g.due or (g.at and now - g.at < GUILD_GAP) then return end
+    g.due = true
+    C_Timer.After(GUILD_GATHER, function()
+        g.due, g.at = false, GetTime()
+        local names = {}
+        for k, t in pairs(g.who) do
+            if g.at - t <= GUILD_GATHER + 1 then names[#names + 1] = GK.Show(k) end
+        end
+        g.who = {}
+        table.sort(names)
+        if #names > 0 and GK.IsGuildWatched(guild) then
+            GK.Warn(("<%s> near: %s"):format(guild, NameList(names)), true)
+        end
+    end)
+end
+
+--- Who of this guild we saw lately, the latest first: { key, z, t = GetTime() } records, at most `most`.
+function GK.GuildSeen(guild, most)
+    local out, now = {}, GetTime()
+    for _, s in pairs(seen) do
+        if s.g == guild and now - s.t <= SEEN_FOR then out[#out + 1] = s end
+    end
+    table.sort(out, function(a, b)
+        if a.t ~= b.t then return a.t > b.t end
+        return a.key < b.key
+    end)
+    for i = #out, (most or #out) + 1, -1 do out[i] = nil end
+    return out
+end
+
 -- ---------------------------------------------------------------------------
 -- The target of an open order is in sight: warn, and tell the guild where. Every order, whoever posted
 -- it: there is no taking an order any more - "hey, we put out an order, kill this one" is the whole of
@@ -334,6 +369,16 @@ function GK.See(unit)
     local level = UnitLevel(unit)
     if not Secret(level) then s.l = GK.ValidLevel(level) or s.l end
     s.t, s.z = GetTime(), GK.Zone()
+    -- Their guild, only while a guild is watched: the game names an enemy's (the owner's test, 2026-11-07).
+    -- Read at every look, not kept from the first: a player can leave a guild for another. No answer is
+    -- not "no guild" - a nameplate may not have it yet - so it leaves what we had.
+    if GK.AnyGuildWatched and GK.AnyGuildWatched() then
+        local ok, guild = pcall(GetGuildInfo, unit)
+        if ok and not Secret(guild) and type(guild) == "string" and guild ~= "" then
+            s.g = guild
+            if GK.IsGuildWatched(guild) then GuildNear(guild, key) end
+        end
+    end
     if s.guid then byGuid[s.guid] = s end
     Forget()
     -- keep our record of a known foe up to date with what we see now
@@ -343,14 +388,13 @@ function GK.See(unit)
     if plates[unit] then
         if order then Mark(unit) else Unmark(unit) end
     end
-    -- Someone the guild has a record of: keep what they look like, and their face up close. Kept again
-    -- when it changed, so a barber's new sex is written at the next look; nothing written when it didn't.
+    -- Someone the guild has a record of: keep what they look like. Kept again when it changed, so a
+    -- barber's new sex is written at the next look; nothing written when it didn't.
     if s.known or Recorded(key, f, order) then
         s.known = true
         if s.rf and s.sx and (s.keptRf ~= s.rf or s.keptSx ~= s.sx) and GK.KeepLooks(key, s) then
             s.keptRf, s.keptSx = s.rf, s.sx
         end
-        TakeFace(unit, key)
     end
     if order then Spotted(order, s) end
 end
@@ -366,28 +410,8 @@ function GK.StartSightings()
         plates[unit] = nil
         Unmark(unit)
     end)
-    LIB.On("PLAYER_TARGET_CHANGED", function()
-        GK.See("target")
-        SeeGuildie("target")
-    end)
-    LIB.On("UPDATE_MOUSEOVER_UNIT", function()
-        GK.See("mouseover")
-        SeeGuildie("mouseover")
-    end)
-    -- A face taken before the game had their model is blank; it says when the portrait is ready, and a
-    -- barber or a shapeshift changes it. Only for faces we already hold.
-    LIB.On("UNIT_PORTRAIT_UPDATE", function(unit)
-        if GK.FaceCount() == 0 or (unit ~= "target" and unit ~= "mouseover" and unit ~= "player") then return end
-        local key = unit == "player" and LIB.Me() or GK.UnitKey(unit)
-        if key and GK.HasFace(key) then TakeFace(unit, key, true) end
-    end)
-    -- our own face, for our own row on the leaderboard: once the world is there
-    LIB.On("PLAYER_ENTERING_WORLD", function()
-        C_Timer.After(2, function()
-            local me = LIB.Me()
-            if me then TakeFace("player", me) end
-        end)
-    end)
+    LIB.On("PLAYER_TARGET_CHANGED", function() GK.See("target") end)
+    LIB.On("UPDATE_MOUSEOVER_UNIT", function() GK.See("mouseover") end)
     -- Once per burst of changes (GK.Changed gathers them); RefreshMarks itself skips unless orders changed.
     LIB.Listen("GRUDGEKEEPER_CHANGED", RefreshMarks)
 end
@@ -409,5 +433,8 @@ function GK.PruneSeen()
     end
     for key, t in pairs(shared) do
         if now - t > SHARE_GAP then shared[key] = nil end
+    end
+    for guild, g in pairs(guildNear) do
+        if not g.due and now - (g.at or 0) > GUILD_GAP then guildNear[guild] = nil end
     end
 end

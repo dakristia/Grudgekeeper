@@ -110,7 +110,7 @@ local function Build(panel)
     local letters = Check(h1, "Kill orders as letters", "letters",
         "A small sealed letter where you put it; click it to read. Off: orders only show in the ledger.")
     local mine = Check(letters, "Letters for my own kills and deaths", "myLetters",
-        "Your points after a kill, and the death that put a kill order on your killer.")
+        "The kill that earns you a new title, and the death that put a kill order on your killer.")
     -- Placing the letter icon: it only shows when something came, so it needs a way to be shown now.
     local place = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     place:SetSize(170, 22)

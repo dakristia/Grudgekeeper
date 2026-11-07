@@ -11,7 +11,11 @@ leaderboard, and kill orders with a bounty on them.
   name you type. Click a column heading to sort by it.
 - `/grudge test` puts four sample letters in your pile.
 - Right-click a player and pick **Grudgekeeper profile**: a wanted poster for an enemy, the record of a
-  guildie. On an enemy, **Post a kill order** is right below it.
+  guildie. On an enemy, **Post a kill order** is right below it, and for an officer **Watch their guild**
+  when they are in one: the guild watches one enemy guild at a time, and anyone from it warns whoever
+  comes across them.
+- A grudge that is wrong goes with **Forget grudge** on that player's card (two clicks): your record of
+  them, here and in the guild's lists. Your score stays.
 - Inspect a guildie and the **Grudgekeeper** tab below the game's own shows their page of the ledger.
 - Right-click any player and pick **Grudgekeeper notes**: a note on them, or put them on Marked, Shame or
   Kudos with a tag. `/grudge note`, `/grudge shame` and `/grudge kudos` do the same from chat. The notes

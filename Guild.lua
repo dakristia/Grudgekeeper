@@ -21,11 +21,15 @@
 --   F;1;poster;id;zone                                         I fulfilled an order
 --   O;1;poster;<C's fields from id on>                         a guildie's order, passed on while
 --                                                              they are away (answering a Q)
+--   P;1;poster;id;backer;copper                                a guildie's share of an open order's
+--                                                              pot, passed on likewise
 --   R;1;guildie;<B's fields from points on>;heard              a guildie's board row, passed on
 --                                                              likewise, and when I last heard them
 --   S;1;poster;id;zone;level;map;x;y                           I saw an order's target, standing here
 --                                                              (x and y in thousandths of the map)
 --   T;1;poster;id;copper                                       my share of an order's pot is this
+--   U;1;name                                                   forget my kills, deaths and news about
+--                                                              this player (a grudge that was wrong)
 --   Y;1;poster;id                                              I paid my share of a fulfilled order
 -- Order states: o open, d fulfilled (a bounty may be owed), p paid, x withdrawn, e expired.
 -- The pot: the poster's own reward, plus what anyone else puts in (T). Each backer owns their share,
@@ -33,7 +37,8 @@
 -- paid with the order's state (p), as before the pot existed.
 -- Worst case a guild can make us keep: 150 orders (10 open per poster), 500 board rows, 200 wanted,
 -- 200 wanted (50 guildies each), 200 slain (enemies the guild has killed, 20 killers each), 40 feed
--- lines and 20 backers per order. Every sender is also held to LibForever's 30 messages / 10 s.
+-- lines and 20 backers per order (a share passed on, P, counts against the same 20). Every sender is
+-- also held to LibForever's 30 messages / 10 s.
 local ADDON, GK = ...
 local LIB = LibStub("LibForever-1.0")
 
@@ -525,6 +530,67 @@ function GK.SendDeath(v, zone, times)
     Send(Msg("D", PROTO, v.key, v.c, v.r, v.l, zone, times))
 end
 
+-- ---------------------------------------------------------------------------
+-- Forgetting a grudge
+-- ---------------------------------------------------------------------------
+-- A grudge that should never have been: before 2026-11-06 a death recap that said "Unc" went to whichever
+-- Unc we had seen, and a hunter's Arcane Shot was written down as a shaman's (Kills.lua) - and nothing could
+-- take it back ("hvordan fjerner jeg", the owner, 2026-11-07). Forgetting removes MY record of a player: my
+-- grudge with them and its lines in my log, and my part of what the guild keeps on them - their kills of me
+-- (Most wanted), my kills of them, my news about them - and asks the guild to do the same (U). Only ever the
+-- sender's own part: a peer may only change their own records. The score stays: those kills and deaths
+-- happened, whoever they were to.
+
+--- Take `who`'s part out of what the guild keeps on `key`.
+local function ForgetIn(who, key)
+    local s = GK.Store()
+    local w = s.wanted[key]
+    if w then
+        w.victims[who] = nil
+        if w.recent then
+            local kept = {}
+            for i = 1, #w.recent, 2 do
+                if w.recent[i] ~= who then
+                    kept[#kept + 1] = w.recent[i]
+                    kept[#kept + 1] = w.recent[i + 1]
+                end
+            end
+            w.recent = #kept > 0 and kept or nil
+        end
+        if next(w.victims) == nil then s.wanted[key] = nil end
+    end
+    local e = s.slain[key]
+    if e then
+        e.by[who] = nil
+        if next(e.by) == nil then s.slain[key] = nil end
+    end
+    local feed = s.feed
+    for i = #feed, 1, -1 do
+        local n = feed[i]
+        if n.who == who and n.n == key and (n.kind == "K" or n.kind == "D") then table.remove(feed, i) end
+    end
+end
+
+--- Forget my grudge with this player (their key, as my grudges have it), and tell the guild.
+function GK.ForgetGrudge(key)
+    local me = LIB.Me()
+    if not (me and type(key) == "string") then return false end
+    GK.char.foes[key] = nil
+    local log = GK.char.log
+    for i = #log, 1, -1 do
+        if log[i].n == key then table.remove(log, i) end
+    end
+    ForgetIn(me, key)
+    if GK.db.share then Send(Msg("U", PROTO, key)) end
+    GK.Changed()
+    return true
+end
+
+local function OnForget(sender, f)
+    local key = GK.PlayerKey(GK.Clean(f[3], 64))
+    if key then ForgetIn(sender, key) end
+end
+
 --- The guild's most wanted: who killed us, how often, and whom.
 function GK.NoteWanted(victim, key, c, r, l, times)
     if not (victim and key) then return end
@@ -811,11 +877,29 @@ local function OnPot(sender, f)
     if o.state ~= "o" and o.pot and o.pot[sender] then return end
     o.pot = o.pot or {}
     if not o.pot[sender] and Count(o.pot) >= MAX_BACKERS then return end
+    heard["t:" .. o.key .. ":" .. sender] = GetTime()
     local was = o.pot[sender]
     o.pot[sender] = copper > 0 and copper or nil
     if copper > 0 and not was then
         AddFeed({ t = time(), who = sender, kind = "T", n = o.n, c = o.c, l = o.l, p = copper })
     end
+end
+
+--- A guildie's share of an open order's pot, passed on by another while that backer is away (P). The
+--- poster's own answer brings the order but not what others put in it, so a bounty read 50s that was 70s
+--- once the backer of the other 20s had logged out. Only a share we have none of, on an open order we
+--- have: never over what we have - the backer's own word or a copy as good - and never ours, the
+--- poster's or the sender's own, which come as the order and as a T. Not news: it was before our time.
+local function OnRelayedPot(sender, f)
+    local o = OrderNamed(GK.Clean(f[3], 64), Int(f[4], 1, 2 ^ 31))
+    local backer = GuildieKey(GK.Clean(f[5], 64))
+    local copper = Int(f[6], 1, MAX_REWARD)
+    if not (o and backer and copper) or o.state ~= "o" then return end
+    if backer == sender or backer == o.by or LIB.IsMyStoredName(backer) then return end
+    heard["t:" .. o.key .. ":" .. backer] = GetTime()
+    o.pot = o.pot or {}
+    if o.pot[backer] or Count(o.pot) >= MAX_BACKERS then return end
+    o.pot[backer] = copper
 end
 
 local function OnSharePaid(sender, f)
@@ -848,16 +932,16 @@ end
 -- what they put in others' pots. That alone lost what belonged to someone who was away: an order whose
 -- poster had logged out never reached a guildie who logged in after it was posted, and neither did the
 -- poster's score ("påse at ... informasjon ikke blir borte om en person logger ut", the owner,
--- 2026-11-07). So an answer also passes on the open orders and the board's rows it knows of others, as
--- O and R: only what nobody has said since the ask, checked again as each one goes, so the guild's
--- answers don't all say the same thing.
+-- 2026-11-07). So an answer also passes on the open orders, the shares in their pots and the board's
+-- rows it knows of others, as O, P and R: only what nobody has said since the ask, checked again as each
+-- one goes, so the guild's answers don't all say the same thing.
 --
 -- And it is paced. LibForever drops a sender's messages past 30 in 10 seconds (WithinBudget), and one
 -- answer could run past that before - its tail was lost. Two a second is twenty in ten, with room left
 -- for a kill or a death, which still go out at once.
 local PACE = 0.5               -- seconds between two messages of an answer
 local MAX_PACED = 120
-local RELAY_ORDERS, RELAY_ROWS = 30, 25
+local RELAY_ORDERS, RELAY_SHARES, RELAY_ROWS = 30, 30, 25
 local RELAY_CLOSED = 2 * GK.DAY  -- a closed order is passed on this long, so an open copy elsewhere closes
 local REPLY_GAP = 30           -- one answer per this long, however many log in
 
@@ -926,6 +1010,29 @@ local function Answer()
                 o.doneBy, o.note, o.auto)
         end)
     end
+    -- what others put in the open orders' pots, ours too: after the orders, so whoever asked has the order
+    -- a share is on by the time it comes (they drop a share on an order they don't know). Only what its
+    -- backer hasn't said since the ask, and never our own, which went as a T above.
+    local shares = {}
+    for _, o in pairs(s.orders) do
+        if o.state == "o" and o.pot then
+            for who in pairs(o.pot) do
+                if who ~= me then shares[#shares + 1] = { o = o, who = who } end
+            end
+        end
+    end
+    Shuffle(shares)
+    for i = 1, math.min(#shares, RELAY_SHARES) do
+        local o, who = shares[i].o, shares[i].who
+        Paced(function()
+            local copper = o.pot and o.pot[who]
+            if not copper or o.state ~= "o" or GK.Store().orders[o.key] ~= o
+                or (heard["t:" .. o.key .. ":" .. who] or 0) >= since then
+                return nil
+            end
+            return Msg("P", PROTO, o.by, o.id, who, copper)
+        end)
+    end
     -- others' rows on the board: this week's scorers first, then the best of all time - what a page shows
     local week, rows = GK.WeekId(), {}
     for who, r in pairs(s.board) do
@@ -962,7 +1069,8 @@ local function OnAsk()
 end
 
 local HANDLERS = { B = OnBoard, Q = OnAsk, K = OnKill, D = OnDeath, C = OnOrder, F = OnFulfil,
-    S = OnSighting, T = OnPot, Y = OnSharePaid, O = OnRelayedOrder, R = OnRelayedBoard }
+    S = OnSighting, T = OnPot, Y = OnSharePaid, O = OnRelayedOrder, P = OnRelayedPot, R = OnRelayedBoard,
+    U = OnForget }
 
 local function OnMessage(_, text, dist, sender)
     if dist ~= "GUILD" or type(text) ~= "string" or #text > 600 or not GK.char then return end

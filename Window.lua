@@ -21,14 +21,15 @@ local TEXT_FONT = "Fonts\\FRIZQT__.TTF"
 -- The skin's colours and drawing (Core.lua): the same tables every skinned window holds, so a switch of
 -- skin redraws all of them.
 local INK, FADED, BLOOD = GK.INK, GK.FADED, GK.BLOOD
--- A grudge's score (FillRow): you leading in a dark olive, they in blood, a tie in ink, a 0 and the dash
--- faded into the page. As hex for the |c codes inside one string.
+-- A grudge's score (FillRow): you leading in a dark olive, they in blood, a tie in ink, the other number
+-- and the dash in the page's faded ink. As hex for the |c codes inside one string, made at each fill: a
+-- skin switch changes the colours in place. A paler brown, "9a8462", left "1 - 0" "nesten usynlig" (the
+-- owner, 2026-11-07).
 local LEAD_YOU = { 0.31, 0.37, 0.07 }
 local function Hex(c)
     local function B(v) return math.floor(v * 255 + 0.5) end
     return ("%02x%02x%02x"):format(B(c[1]), B(c[2]), B(c[3]))
 end
-local SCORE_YOU, SCORE_THEM, SCORE_INK, SCORE_DIM = Hex(LEAD_YOU), Hex(BLOOD), Hex(INK), "9a8462"
 local Ink, Paint, Wash = GK.Ink, GK.Paint, GK.Wash
 
 -- The window, in UI units. A page is the list or the card; open, two pages side by side, folded one.
@@ -44,6 +45,10 @@ local FOLDED = { W = 2 * FX + PAGE_W, H = OPEN.H, x = FX, y = FY, x2 = FX }     
 -- each read as a column of text. Nine fit between the headings and the foot, where Letters and Settings are.
 local ROW_H, ROWS = 38, 9
 local FACE = 30                                      -- a row's portrait; 26 blended into the page
+-- Where a row's name starts: after its face, and on the leaderboard after its rank as well. Every page
+-- kept the rank's room until 2026-11-07, which pushed their rows far to the right ("radene er skjøvet
+-- veldig til høyre", the owner); the name's heading, at 48, now stands over the name.
+local NAME_X, NAME_X_RANKED = 44, 74
 local LIST_TOP = 96                                  -- the first row, down from the page's top
 -- the right-hand column stops short of the row's end: folded, room for the » that says a click turns
 -- the page (they ran into each other in the preview)
@@ -135,7 +140,10 @@ local function OrderItems()
         if o.state == "o" then
             it.bounty = pot
             it.right = pot > 0 and GK.Coins(pot) or "honour"
-            local bits = { o.auto and ("by %s's death"):format(GK.Show(o.by)) or ("by " .. GK.Show(o.by)) }
+            -- your own order by you, as its card says: "by Critical Mango" over a card's "Posted by You"
+            local byMe = o.by == me
+            local bits = { o.auto and (byMe and "by your death" or ("by %s's death"):format(GK.Show(o.by)))
+                or ("by " .. (byMe and "you" or GK.Show(o.by))) }
             if backers > 0 then bits[#bits + 1] = Plural(backers, "backer") end
             -- where a guildie saw them last: what a hunter needs, and every guildie is one
             if o.seen then
@@ -145,7 +153,8 @@ local function OrderItems()
             it.sub = table.concat(bits, " - ")
         else
             it.faded, it.right, it.rightColour = true, STATE_WORD[o.state] or "", BLOOD
-            it.sub = (o.doneBy and ("by " .. GK.Show(o.doneBy) .. " - ") or "") .. GK.Ago(o.paidAt or o.doneAt)
+            it.sub = (o.doneBy and ("by " .. (o.doneBy == me and "you" or GK.Show(o.doneBy)) .. " - ") or "")
+                .. GK.Ago(o.paidAt or o.doneAt)
         end
         items[#items + 1] = it
     end
@@ -180,6 +189,14 @@ local function OrderItems()
             it.right = ""
             items[#items + 1] = it
         end
+    end
+    -- The watched guild: an enemy guild the guild knows, anyone of theirs near warns you (Notes.lua). An
+    -- officer puts it on watch from the right-click menu on one of its players, which gives its name as
+    -- the game spells it; one at a time.
+    local guilds = GK.WatchedGuildItems and GK.WatchedGuildItems() or {}
+    if #guilds > 0 then
+        items[#items + 1] = { header = true, name = "Watched guild" }
+        for _, it in ipairs(guilds) do items[#items + 1] = it end
     end
     return items, "No kill orders. Post one with Post a kill order, at the top of this page - or right-click "
         .. "an enemy player and pick it there."
@@ -298,32 +315,47 @@ local function GrudgeItems()
     return items, "No kills or deaths yet. Only the open world counts: dungeons and battlegrounds hide who is who."
 end
 
+-- What the news says, by kind: who, then whom. "AU" is a C whose poster's death posted it.
+local SAID = { K = "%s killed %s", D = "%s fell to %s", F = "%s fulfilled the order on %s",
+    C = "%s put a price on %s", AU = "%s death put a price on %s", T = "%s added to the pot on %s" }
+
+--- A name by its first word: the character's own name, without the surname.
+local function FirstName(key)
+    local s = GK.Show(key)
+    return s:match("^%S+") or s
+end
+
 local function NewsItems()
     local items = {}
     for i, e in ipairs(GK.Store().feed) do
         -- your own news says You: your full name and surname first left "Critical Mango killed Seedkek..."
         -- no room for whom (the owner, 2026-11-06)
         local mine = e.who ~= nil and LIB.IsMyStoredName(e.who)
-        local who, target = mine and "You" or GK.Show(e.who), GK.Show(e.n)
-        local line, right
-        if e.kind == "K" then
-            line = ("%s killed %s"):format(who, target)
+        local kind = (e.kind == "C" and e.au) and "AU" or e.kind
+        local said = SAID[kind]
+        local line, short, right
+        if said then
+            local function Who(n)
+                if kind == "AU" then return mine and "Your" or (n .. "'s") end
+                return mine and "You" or n
+            end
+            -- the short form, for a line too long for its row (FillRow): first names only
+            line = said:format(Who(GK.Show(e.who)), GK.Show(e.n))
+            short = said:format(Who(FirstName(e.who)), FirstName(e.n))
+        end
+        if kind == "K" then
             right = (e.p or 0) > 0 and ("+%d"):format(e.p) or nil
-        elseif e.kind == "D" then
-            line = ("%s fell to %s"):format(who, target)
-        elseif e.kind == "F" then
-            line = ("%s fulfilled the order on %s"):format(who, target)
+        elseif kind == "F" then
             right = (e.p or 0) > 0 and GK.MoneyText(e.p) or nil
-        elseif e.kind == "C" and e.au then
-            line, right = ("%s death put a price on %s"):format(mine and "Your" or (who .. "'s"), target), "honour"
-        elseif e.kind == "C" then
-            line = ("%s put a price on %s"):format(who, target)
+        elseif kind == "AU" then
+            right = "honour"
+        elseif kind == "C" then
             right = (e.p or 0) > 0 and GK.MoneyText(e.p) or "honour"
-        elseif e.kind == "T" then
-            line, right = ("%s added to the pot on %s"):format(who, target), GK.MoneyText(e.p or 0)
+        elseif kind == "T" then
+            right = GK.MoneyText(e.p or 0)
         end
         if line then
-            items[#items + 1] = { key = "n:" .. i, name = line, face = { key = e.n, c = e.c }, right = right,
+            items[#items + 1] = { key = "n:" .. i, name = line, short = short, face = { key = e.n, c = e.c }, right = right,
                 sub = table.concat({ e.z or "", GK.Ago(e.t) }, e.z and " - " or ""), select = PosterSpec(e.n, e),
                 ts = e.t, own = e.who and LIB.IsMyStoredName(e.who) or nil }
         end
@@ -366,7 +398,7 @@ GK.LedgerPages = {
               Plural(GK.char.points, "point"), rank, of)
       end },
     { name = "Leaderboard", items = BoardItems,
-      headings = { { "#", 12 }, { "Name", 48 }, { "K", COL1, "CENTER" }, { "D", COL2, "CENTER" },
+      headings = { { "#", 12 }, { "Name", NAME_X_RANKED + 4 }, { "K", COL1, "CENTER" }, { "D", COL2, "CENTER" },
           { "Points", COL_RIGHT, "RIGHT" } },
       links = function()
           return { { text = "This week", on = weekly, click = function() weekly = true end },
@@ -484,8 +516,23 @@ local function DetailCard(spec)
         -- the order's own section first, and the kicker says it is over ("ORDER FULFILLED") - unless a
         -- newer order on them is open, which keeps its own WANTED and its own section
         local open = d.title == "WANTED"
-        table.insert(d.rich.sections, open and 2 or 1,
+        -- with a newer order open, this one after that one's order and pot, before the History
+        local at = 1
+        if open then
+            at = #d.rich.sections + 1
+            for i, sec in ipairs(d.rich.sections) do
+                if sec.head == "History" then
+                    at = i
+                    break
+                end
+            end
+        end
+        table.insert(d.rich.sections, at,
             { head = open and "An earlier order" or "The order", kind = "facts", rows = rows })
+        -- who put what in it, and who has paid: only when it is the order the card is about, so the
+        -- newer order's pot and the History keep their room
+        local pot = not open and GK.PotRows(o)
+        if pot then table.insert(d.rich.sections, at + 1, { head = "The pot", kind = "facts", rows = pot }) end
         if not open then d.rich.kicker = "Order " .. word:lower() end
     end
     return d
@@ -545,12 +592,12 @@ local function BuildRow(parent, i)
     Ink(row.rank, FADED, TITLE_FONT, 13)
     row.rank:SetPoint("CENTER", row.seal, "CENTER", 0, 0)
     row.face = MakePortrait(row, FACE)
-    row.face.tex:SetPoint("CENTER", row, "LEFT", 55, 0)
+    row.face.tex:SetPoint("CENTER", row, "LEFT", NAME_X - 19, 0)        -- FillRow moves it for a rank
     row.name = row:CreateFontString(nil, "ARTWORK")
     -- the name in the game's plain type: Morpheus' small capitals at this size were "litt vanskelig å
     -- lese" in a list (the owner, 2026-11-06); the titles over the lists and on the card keep it
     Ink(row.name, INK, TEXT_FONT, 13)
-    row.name:SetPoint("TOPLEFT", 74, -4)
+    row.name:SetPoint("TOPLEFT", NAME_X, -4)
     row.name:SetJustifyH("LEFT")
     row.name:SetWordWrap(false)
     -- what they are, in small type after the name ("35 Orc Rogue"), when it fits beside it
@@ -560,7 +607,7 @@ local function BuildRow(parent, i)
     row.desc:SetWordWrap(false)
     row.sub = row:CreateFontString(nil, "ARTWORK")
     Ink(row.sub, FADED, TEXT_FONT, 11)
-    row.sub:SetPoint("TOPLEFT", 74, -22)
+    row.sub:SetPoint("TOPLEFT", NAME_X, -22)
     row.sub:SetJustifyH("LEFT")
     row.sub:SetWordWrap(false)
     local function Col(x, justify)
@@ -576,8 +623,9 @@ local function BuildRow(parent, i)
     -- A grudge's score, read like a match's: "0 - 1", the leader's number in colour, and under it who
     -- leads. Two bare columns of 0 and 1 under YOU and THEY were "litt dårlig vist" (the owner,
     -- 2026-11-07), and their heading row stood over the page's own big headings.
+    -- In the game's plain type: Morpheus' thin strokes left the faded number and the dash all but gone.
     row.score = row:CreateFontString(nil, "ARTWORK")
-    Ink(row.score, INK, TITLE_FONT, 17)
+    Ink(row.score, INK, TEXT_FONT, 15)
     row.score:SetPoint("CENTER", row, "LEFT", SCORE_X, 5)
     row.lead = row:CreateFontString(nil, "ARTWORK")
     Ink(row.lead, FADED, TEXT_FONT, 10)
@@ -608,11 +656,22 @@ local function BuildRow(parent, i)
             GameTooltip:SetOwner(self, "ANCHOR_TOP")
             GameTooltip:AddLine(it.clickTip or "Click to sort", 1, 1, 1)
             GameTooltip:Show()
+            self.tipped = true
+        elseif it and not it.header and self.cut then
+            -- a line the row had to shorten or cut, whole (FillRow)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine(it.name or "", 1, 1, 1, true)
+            if it.sub and it.sub ~= "" then GameTooltip:AddLine(it.sub, 0.8, 0.8, 0.8, true) end
+            GameTooltip:Show()
+            self.tipped = true
         end
     end)
     row:SetScript("OnLeave", function(self)
         if self.fill then self.fill() end
-        if self.item and self.item.click then GameTooltip:Hide() end
+        if self.tipped then
+            self.tipped = false
+            GameTooltip:Hide()
+        end
     end)
     return row
 end
@@ -642,6 +701,7 @@ local function FillRow(row, it, chosen)
         row.c1:SetText("") row.c2:SetText("") row.wide:SetText("") row.right:SetText("")
         row.score:SetText("") row.lead:SetText("")
         row.order:SetText(it.order or "")
+        row.cut = false
         return
     end
     row.rule:Hide()
@@ -650,9 +710,10 @@ local function FillRow(row, it, chosen)
     local sc = it.score
     if sc then
         local you, they = sc[1], sc[2]
-        local mine = you > they and SCORE_YOU or (you > 0 and you == they and SCORE_INK or SCORE_DIM)
-        local theirs = they > you and SCORE_THEM or (they > 0 and you == they and SCORE_INK or SCORE_DIM)
-        row.score:SetText(("|cff%s%d|r |cff%s-|r |cff%s%d|r"):format(mine, you, SCORE_DIM, theirs, they))
+        local tie, dim = Hex(INK), Hex(FADED)
+        local mine = you > they and Hex(LEAD_YOU) or (you > 0 and you == they and tie or dim)
+        local theirs = they > you and Hex(BLOOD) or (they > 0 and you == they and tie or dim)
+        row.score:SetText(("|cff%s%d|r |cff%s-|r |cff%s%d|r"):format(mine, you, dim, theirs, they))
         if you > they then
             row.lead:SetText("you lead")
             row.lead:SetTextColor(LEAD_YOU[1], LEAD_YOU[2], LEAD_YOU[3])
@@ -667,31 +728,46 @@ local function FillRow(row, it, chosen)
         row.score:SetText("")
         row.lead:SetText("")
     end
-    row.name:SetPoint("TOPLEFT", 74, -4)
-    Ink(row.name, it.mine and BLOOD or (it.faded and FADED or INK), TEXT_FONT, 13)
-    row.name:SetText(it.name or "")
-    Ink(row.sub, FADED, TEXT_FONT, 11)
-    row.sub:SetText(it.sub or "")
+    local x0 = it.rank and NAME_X_RANKED or NAME_X
+    row.face.tex:ClearAllPoints()
+    row.face.tex:SetPoint("CENTER", row, "LEFT", x0 - 19, 0)
+    row.name:SetPoint("TOPLEFT", x0, -4)
+    row.sub:SetPoint("TOPLEFT", x0, -22)
     local rc = it.rightColour or (it.faded and FADED or INK)
     row.right:SetTextColor(rc[1], rc[2], rc[3])
     row.right:SetText(it.right or "")
     -- The name runs to whichever column is there. Before a right-hand number it stops at that number's
     -- own width, not a fixed 70 kept for "12g 34s": a "+2" in the news cut "Seedkek One" to "Seedke..."
-    -- with half the row empty (2026-11-05), and a long sum ran past the fixed stop into the name.
-    local stop = (it.score and SCORE_X - 40) or (it.c1 and COL1 - 20) or (it.wide and COL_WIDE - 8)
+    -- with half the row empty (2026-11-05), and a long sum ran past the fixed stop into the name. Before
+    -- a score, short of its "they lead", the widest thing under it.
+    local stop = (it.score and SCORE_X - 32) or (it.c1 and COL1 - 20) or (it.wide and COL_WIDE - 8)
         or (it.right and COL_RIGHT - 4 - row.right:GetStringWidth() - 12) or (PAGE_W - 24)
-    row.name:SetWidth(stop - 74)
-    row.sub:SetWidth(stop - 74)
+    local room = stop - x0
+    -- A line too long for its room steps down a size, then says its short form (first names only, where
+    -- the item has one), and only then is cut - whole in the row's tooltip. "Hellig Bro added to the pot
+    -- on Ikka Levici" lost its last name in the news (the owner, 2026-11-07).
+    local colour = it.mine and BLOOD or (it.faded and FADED or INK)
+    Ink(row.name, colour, TEXT_FONT, 13)
+    row.name:SetText(it.name or "")
+    if TextWidth(row.name) > room then
+        Ink(row.name, colour, TEXT_FONT, 12)
+        if TextWidth(row.name) > room and it.short then row.name:SetText(it.short) end
+    end
+    Ink(row.sub, FADED, TEXT_FONT, 11)
+    row.sub:SetText(it.sub or "")
+    row.cut = row.name:GetText() ~= (it.name or "") or TextWidth(row.name) > room or TextWidth(row.sub) > room
+    row.name:SetWidth(room)
+    row.sub:SetWidth(room)
     -- the description after the name's own width, only when all of it fits before the stop: a cut
     -- "35 Orc Ro..." says less than none, and the name keeps its room
     local nameW = math.ceil(TextWidth(row.name))
     row.desc:SetText(it.desc or "")
     local descW = math.ceil(TextWidth(row.desc))
-    local fits = it.desc ~= nil and nameW + 6 + descW <= stop - 74
+    local fits = it.desc ~= nil and nameW + 6 + descW <= room
     row.desc:SetShown(fits)
     if fits then
         row.desc:ClearAllPoints()
-        row.desc:SetPoint("BOTTOMLEFT", row, "TOPLEFT", 74 + nameW + 6, -18)
+        row.desc:SetPoint("BOTTOMLEFT", row, "TOPLEFT", x0 + nameW + 6, -18)
     end
     row.seal:SetShown(it.seal == true)
     if it.seal then row.seal:SetTexture(MEDIA .. "rank_" .. it.rank) end
@@ -898,7 +974,8 @@ local function BuildList(page)
     page.letters = Foot(function() GK.OpenLetters() end, function()
         local n = GK.Unread()
         return n > 0 and ("Letters - %d unread"):format(n) or "Letters"
-    end, "Your kills and deaths, and the guild's kill orders - read again.")
+    end, "New kill orders, your new titles and what you are owed. A letter goes once it is read and closed - "
+        .. "the ledger keeps what it said.")
     page.letters:SetPoint("BOTTOMLEFT", 8, 10)
     page.letters:Set("Letters")
     page.settings = Foot(function() if GK.OpenOptions() then win:Hide() end end,
@@ -1066,6 +1143,8 @@ local function FillRich(page, d, L)
                 end
                 local t = Text(page, INK, 12, room, 1)
                 t:SetText(e.text)
+                -- a line a size smaller before it is cut, as a row's name (FillRow)
+                if TextWidth(t) > room then Ink(t, INK, TEXT_FONT, 11) end
                 t:SetPoint("TOPLEFT", page, "TOPLEFT", pad + 30, -(y + 2))
                 local s = Text(page, FADED, 10, room, 1)
                 s:SetText(e.under or "")
@@ -1125,7 +1204,7 @@ local function BuildDetail(page, L)
         turned = false
         Refresh()
     end)
-    page.face = MakePortrait(page, L.face, 2)
+    page.face = MakePortrait(page, L.face)
     page.face.tex:SetPoint("CENTER", page, "TOPLEFT", L.faceX, -L.faceY)
     page.big = page:CreateFontString(nil, "ARTWORK")
     Ink(page.big, BLOOD, TITLE_FONT, L.bigSize)
@@ -1716,6 +1795,8 @@ Refresh = function()
     end
     local unread = GK.Unread()
     list.letters:Set(unread > 0 and ("Letters \194\183 %d new"):format(unread) or "Letters")      -- "Letters · 2 new"
+    -- with no letter waiting it has nothing to open: a read letter is gone once closed (Letters.lua)
+    list.letters:SetEnabled(#GK.char.letters > 0)
     -- the detail: the right-hand page, or the page turned
     local showDetail = not folded or turned
     list:SetShown(not folded or not turned)
@@ -1731,6 +1812,16 @@ function GK.OpenWindow(page)
     win:Show()
     win:Raise()
     Refresh()
+end
+
+--- The kill orders page, on this order (by its key) when it has a row there; else the page as it was.
+function GK.OpenOrder(orderKey)
+    GK.OpenWindow(1)                                 -- first: choosing the tab starts the page afresh
+    if type(orderKey) == "string" and GK.Store().orders[orderKey] then
+        selected[1] = "o:" .. orderKey
+        turned = turned or Folded()                  -- folded: the page turned to it
+        Refresh()
+    end
 end
 
 function GK.ToggleWindow()

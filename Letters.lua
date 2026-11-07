@@ -5,7 +5,7 @@
 --     order     KILL ORDER       a guildie put a price on someone       red seal
 --     complete  ORDER COMPLETE   an order was fulfilled                 red seal, FULFILLED stamp
 --   the NOTE, a small landscape letter with a portrait, written by "the Grudgekeeper":
---     kill      Blood drawn      you killed someone: points, your rank   red seal
+--     kill      A new title      a kill earned you one: where you stand  red seal
 --     slain     Slain            someone killed you                     black seal, blood
 --     paid      Bounty paid      the poster paid you                    red seal
 --     expired   Order expired    your order ran out                     black seal
@@ -15,7 +15,6 @@ local ADDON, GK = ...
 local LIB = LibStub("LibForever-1.0")
 
 local MAX_LETTERS = 30
-local KEEP_READ = 3 * GK.DAY
 local MEDIA = "Interface\\AddOns\\Grudgekeeper\\Media\\"
 local TITLE_FONT = "Fonts\\MORPHEUS.ttf"
 local TEXT_FONT = "Fonts\\FRIZQT__.TTF"
@@ -76,10 +75,16 @@ end
 -- ---------------------------------------------------------------------------
 -- The pile
 -- ---------------------------------------------------------------------------
+-- A letter is news, and once read it goes: when the letters close, every letter read goes with them. They
+-- were kept three days and piled up - "10 of 10" - each saying what the ledger says anyway: "letters
+-- burde kanskje ikke bare bli liggende?" (the owner, 2026-11-07). While the letters are open, the ones
+-- read stay, so the arrows can go back. Later keeps the letter it is on (it is unread again).
+local reading = false            -- the letters are open: what was read stays until they close
+
 local function Prune()
-    local list, now = GK.char.letters, time()
+    local list = GK.char.letters
     for i = #list, 1, -1 do
-        if list[i].read and now - (list[i].t or 0) > KEEP_READ then table.remove(list, i) end
+        if list[i].read and not reading then table.remove(list, i) end
     end
     while #list > MAX_LETTERS do table.remove(list, 1) end
 end
@@ -175,29 +180,23 @@ function GK.ExpiredLetter(o)
     Add("expired", { n = o.n, c = o.c, r = o.r, l = o.l, guid = o.guid, reward = o.reward, o = o.key })
 end
 
---- A kill of ours. An unread kill letter is added to rather than stacked: the newest kill leads, the
---- ones before it become "and 2 more since you last looked". extra = { revenge (how often they had
---- killed you), avenged (the guildie's key), streak, title (a new one) }. Silent: you were there.
-function GK.KillLetter(v, points, con, today, zone, extra)
-    extra = extra or {}
+--- A kill of ours that earned a new title: the one kind of kill with a letter (Kills.lua). An unread one
+--- is written over by the next rather than stacked, so two titles before you look are one letter, the
+--- newest. Silent: you were there.
+function GK.KillLetter(v, zone, title)
     local rank, of = GK.MyRank()
-    local weekRank = GK.MyRank(true)
     local list = GK.char.letters
     local last = list[#list]
     local L
     if last and last.kind == "kill" and not last.read then
         L = last
-        L.more = (L.more or 0) + 1
-        L.morePoints = (L.morePoints or 0) + (L.p or 0)
         L.t = time()
         Hold(L)                                     -- the minute starts again from this kill
     else
         L = Add("kill", {}, true, true)
     end
-    L.n, L.c, L.r, L.l, L.p, L.con, L.today, L.z = v.key, v.c, v.r, v.l, points, con, today, zone
-    L.rank, L.of, L.weekRank, L.total = rank, of, weekRank, GK.char.points
-    L.revenge, L.avenged, L.streak = extra.revenge, extra.avenged, extra.streak
-    L.title = extra.title or L.title                -- a new title stays news until the letter is read
+    L.n, L.c, L.r, L.l, L.z = v.key, v.c, v.r, v.l, zone
+    L.rank, L.of, L.total, L.title = rank, of, GK.char.points, title
     GK.NoticeUpdate(false)
     GK.Changed()
 end
@@ -222,9 +221,8 @@ function GK.SampleLetters()
     end
     Add("order", S({ by = "Edvard", reward = 2000, note = "Camps the flight master in Tarren Mill.", times = 24 }))
     Add("complete", S({ by = me, reward = 2000, doneBy = "Vebjørn", z = "Hillsbrad Foothills" }))
-    Add("kill", S({ n = "Gærd Balle", c = "HUNTER", r = horde and "Night Elf" or "Troll", l = 27, p = 2, con = "yellow",
-        z = "Hillsbrad Foothills",
-        rank = 4, of = 12, total = 31 }))
+    Add("kill", S({ n = "Gærd Balle", c = "HUNTER", r = horde and "Night Elf" or "Troll", l = 27,
+        z = "Hillsbrad Foothills", title = "Bloodhound", rank = 4, of = 12, total = 31 }))
     Add("slain", S({ times = 24, z = "Hillsbrad Foothills", spell = "Ambush" }))
     print(GK.TAG .. ": four sample letters are in your pile - click the scroll to read them.")
 end
@@ -276,7 +274,8 @@ local function ScrollContent(L)
     local info = GK.Describe(L.l, L.c, L.r)
     local body, buttons = {}, {}
     local o = Order(L)
-    local function Hitlist() GK.OpenWindow(1) end
+    -- The way to the ledger and the way out are the bar under the scroll (BuildScroll), for every scroll;
+    -- the buttons here are only what this one asks of you.
     if L.kind == "order" then
         -- An order that posted itself carries the Grudgekeeper's reason, not the poster's words.
         if L.note then body[#body + 1] = L.auto and L.note or ('"' .. L.note .. '"') end
@@ -317,9 +316,6 @@ local function ScrollContent(L)
         if o and o.state == "o" and o.by ~= me then
             buttons[#buttons + 1] = { "Add to the pot", function() GK.OpenPost({ key = o.n, guid = o.guid, c = o.c,
                 r = o.r, l = o.l }) end }
-            buttons[#buttons + 1] = { "Hitlist", Hitlist }
-        else
-            buttons[#buttons + 1] = { "Hitlist", Hitlist }
         end
         -- short: the foot shares its line with the seal on a 300-wide sheet
         local foot = L.auto and ("Posted by %s's death"):format(show(L.by)) or ("Posted by " .. show(L.by))
@@ -353,7 +349,6 @@ local function ScrollContent(L)
             end
         end
     end
-    buttons[#buttons + 1] = { "Hitlist", Hitlist }
     -- the order's seal, broken: it has been opened and carried out
     return "ORDER COMPLETE", show(L.n) .. " is dead", info, body, "Posted by " .. show(L.by), "seal_broken",
         "stamp_fulfilled", buttons
@@ -367,39 +362,22 @@ local function NoteContent(L)
     local function PostOn() GK.OpenPost({ key = L.n, guid = L.guid, c = L.c, r = L.r, l = L.l }) end
     local closing = CLOSING[L.kind]
     if L.kind == "kill" then
-        p[#p + 1] = ("You killed %s%s."):format(Who(L), L.z and (" in " .. L.z) or "")
-        if (L.p or 0) > 0 then
-            p[#p + 1] = ("Worth %d point%s."):format(L.p, L.p == 1 and "" or "s")
-        elseif (L.today or 0) >= GK.REPEATS then
-            p[#p + 1] = "You've had them twice today already - nothing more for them until tomorrow."
-            closing = nil
-        elseif L.con == "grey" then
-            p[#p + 1] = "They were grey to you. No honour in that, and no points."
-            closing = nil
-        end
-        -- what made this kill more than a kill
-        if L.revenge then
-            p[#p + 1] = ("Revenge: they had killed you %s."):format(L.revenge == 1 and "once" or (L.revenge .. " times"))
-        end
-        if L.avenged then p[#p + 1] = ("You avenged %s."):format(show(L.avenged)) end
-        if (L.streak or 0) >= 3 then p[#p + 1] = ("%d kills in a row without dying."):format(L.streak) end
-        if (L.more or 0) > 0 then
-            p[#p + 1] = ("And %d more since you last looked, for %d more point%s."):format(L.more,
-                L.morePoints or 0, (L.morePoints or 0) == 1 and "" or "s")
-        end
-        if (L.of or 0) > 1 then
-            p[#p + 1] = ("That puts you at %d points - #%d of %d in the guild%s."):format(L.total or 0, L.rank, L.of,
-                (L.weekRank and L.weekRank ~= L.rank) and (", #%d this week"):format(L.weekRank) or "")
-        else
-            p[#p + 1] = ("That puts you at %d points."):format(L.total or 0)
-        end
+        -- A kill gets a letter only for a new title (Kills.lua), and it says three things: the title, the kill
+        -- that got it, where you stand. Seven lines - the kill, its points, a streak, "and 1 more", the total
+        -- and the title - ran into the seal ("kanskje ikke så mye text?", the owner, 2026-11-07). A letter
+        -- from before then, with no title, says the kill and where you stand.
+        local where = L.z and (" in " .. L.z) or ""
+        local stand = (L.of or 0) > 1 and ("%d points - #%d of %d in the guild."):format(L.total or 0, L.rank, L.of)
+            or ("%d points."):format(L.total or 0)
         if L.title then
-            p[#p + 1] = ("You are now %s %s."):format(L.title:match("^[AEIOU]") and "an" or "a", L.title)
-            closing = nil
+            p[1] = ("You are now %s %s."):format(L.title:match("^[AEIOU]") and "an" or "a", L.title)
+            p[2] = ("%s%s was the kill that did it."):format(show(L.n), where)
+        else
+            p[1] = ("You killed %s%s."):format(show(L.n), where)
         end
+        p[#p + 1] = stand
         action = { "Leaderboard", function() GK.OpenWindow(2) end }
-        local title = (L.p or 0) > 0 and "Blood drawn" or "A kill, for nothing"
-        return title, p, closing, "seal_red", false, action
+        return L.title and "A new title" or "Blood drawn", p, closing, "seal_red", false, action
     elseif L.kind == "slain" then
         p[#p + 1] = ("%s killed you%s%s."):format(Who(L, true), L.spell and (" with " .. L.spell) or "",
             L.z and (" in " .. L.z) or "")
@@ -447,8 +425,8 @@ function GK.LetterContent(L)
     local title, paragraphs, closing, seal, blood, action = NoteContent(L)
     local lines = {}
     for i, text in ipairs(paragraphs) do lines[i] = text end
-    -- The closing line only on a short letter: a long one (a kill with revenge, a streak and a new title)
-    -- would push it into the seal and the signature.
+    -- The closing line only on a short letter: a long one (a death that posted a kill order) would push it
+    -- into the seal and the signature.
     if closing and #paragraphs <= 4 then
         lines[#lines + 1] = ""
         lines[#lines + 1] = closing[(L.id or 1) % #closing + 1]
@@ -462,6 +440,18 @@ end
 -- ---------------------------------------------------------------------------
 local scroll, note  -- the two views, made on first use
 local index         -- which letter in the pile is showing
+
+--- The letters closed - by X, Later, Escape or the scroll rolling up: the read ones go. A moment later,
+--- as going from a scroll to a note hides one view before it shows the other.
+local function Closed()
+    C_Timer.After(0, function()
+        if (note and note:IsShown()) or (scroll and scroll:IsShown()) then return end
+        reading, index = false, nil
+        Prune()
+        GK.NoticeUpdate(false)
+        GK.Changed()
+    end)
+end
 
 local function Ink(fs, colour, font, size)
     fs:SetFont(font, size, "")
@@ -510,9 +500,11 @@ end
 -- ---------------------------------------------------------------------------
 -- The scroll
 -- ---------------------------------------------------------------------------
+local BAR_H = 30                 -- the bar of buttons under the scroll's bottom roll
+
 local function BuildScroll()
     local f = CreateFrame("Frame", "GrudgekeeperLetter", UIParent)
-    f:SetSize(W + 16, BODY_H + ROLL_H)
+    f:SetSize(W + 16, BODY_H + ROLL_H + BAR_H)          -- the bar too, so it is kept on the screen
     f:SetClampedToScreen(true)
     f:SetPoint("CENTER", 0, 60)
     f:EnableMouse(true)
@@ -579,13 +571,20 @@ local function BuildScroll()
     local bottom = GK.MakeRoll(rolls, ROLL_H, true)
     bottom:SetWidth(W + 16)
     bottom:SetPoint("TOP", sheet, "BOTTOM", 0, ROLL_H / 2)
-    -- "1 of 3" and its arrows sit ON the bottom roll, and travel with it. They used to sit on the sheet,
-    -- 8 above its edge - where the roll covers the sheet's last 16, one level higher: hidden behind it
-    -- (seen in the preview of 2026-11-04, art/out/grudgekeeper_preview_2_letters.png).
-    Pager(f, bottom, 0, 10)
-    -- Every close path calls our own Hide, so it works in combat too.
-    local close = GK.MakeCloseButton(rolls, 20, function() GK.CloseLetters() end, 14)
-    close:SetPoint("CENTER", top, "RIGHT", -18, 0)
+    -- The bar under the bottom roll, travelling down with it: to the order in the ledger, or away. The iron
+    -- X on the top roll's end was hard to hit, and "1 of 3" with its arrows turned one order into a pile:
+    -- "X oppe i høyre funker ikke så bra ... en page kun for en order. åpner du kill order så lukkes det
+    -- lille vinduet" (the owner, 2026-11-07). The next letter waits for the next click on the notice.
+    -- Close rolls the scroll up, as Escape does; both are our own Hide, so they work in combat too.
+    f.open = CreateFrame("Button", nil, rolls, "UIPanelButtonTemplate")
+    f.open:SetSize(150, 22)
+    f.open:SetPoint("TOPRIGHT", bottom, "BOTTOM", -3, -4)
+    f.open:SetText("Open kill orders")
+    f.close = CreateFrame("Button", nil, rolls, "UIPanelButtonTemplate")
+    f.close:SetSize(110, 22)
+    f.close:SetPoint("TOPLEFT", bottom, "BOTTOM", 3, -4)
+    f.close:SetText("Close")
+    f.close:SetScript("OnClick", function() GK.CloseLetters() end)
 
     -- The stamp comes down hard: big and faint to its size, then the sheet jolts.
     local slam = f.stamp:CreateAnimationGroup()
@@ -616,6 +615,7 @@ local function BuildScroll()
     if LIB.RegisterWindow then LIB.RegisterWindow(f, GK.db, "letter") end
     -- RegisterWindow owns OnShow/OnHide; ours only ever hooks.
     f:HookScript("OnHide", function(self) self:SetScript("OnUpdate", nil) end)
+    f:HookScript("OnHide", Closed)
     scroll = f
 end
 
@@ -652,7 +652,12 @@ local function FillScroll(L)
     f.stampName = stamp
     if stamp then f.stamp:SetTexture(MEDIA .. stamp) end
     for i, b in ipairs(f.buttons) do SetButton(b, buttons[i], L, FillScroll) end
-    UpdatePager(f)
+    -- the ledger's kill orders, on this order, and the scroll gone at once: two windows on one order is one
+    -- too many
+    f.open:SetScript("OnClick", function()
+        f:Hide()
+        GK.OpenOrder(L.o)
+    end)
 end
 
 -- ---------------------------------------------------------------------------
@@ -730,137 +735,17 @@ function GK.SetPortrait(tex, info)
     return "seal"
 end
 
--- ---------------------------------------------------------------------------
--- Faces met this session
--- ---------------------------------------------------------------------------
--- The game draws a player's face only from a unit (SetPortraitTexture, SetUnit), and nothing reads a
--- drawn face back - nor the barber's choices of anyone but yourself (BarberShopDocumentation: no unit
--- anywhere). So no face outlives a reload. But one it drew stays on its texture after they have gone
--- (the owner's test, 2026-11-07, VERIFY.md), so until then a card can show the real face of someone you
--- met instead of their race's. One texture per player, taken when you target or mouse over them
--- (Sightings.lua), and LENT to the portrait showing them: a face is in one place at a time, and the
--- portrait it leaves shows their race again.
-local MAX_FACES = 40
-local RETAKE = 60       -- seconds: a face is taken again at most this often, so a barber's work shows up
-local faces, faceCount, shelf = {}, 0, nil
-
--- Where a face waits while no portrait shows it: shown, as the face in the test was, but off the screen
--- and see-through. Whether the game draws a face into a hidden texture at all, nobody checked.
-local function Shelf()
-    if not shelf then
-        shelf = CreateFrame("Frame", nil, UIParent)
-        shelf:SetSize(8, 8)
-        shelf:SetPoint("TOPRIGHT", UIParent, "TOPLEFT", -200, 0)
-        shelf:SetAlpha(0)
-    end
-    return shelf
-end
-
-local function Shelve(h)
-    h:SetParent(Shelf())
-    h:ClearAllPoints()
-    h:SetPoint("CENTER")
-    h:SetSize(64, 64)
-end
-
-local function NewFace()
-    local h = CreateFrame("Frame", nil, Shelf())
-    h.tex = h:CreateTexture(nil, "ARTWORK")
-    h.tex:SetAllPoints()
-    local mask = h:CreateMaskTexture()
-    mask:SetTexture(PORTRAIT_MASK, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-    mask:SetAllPoints(h.tex)
-    h.tex:AddMaskTexture(mask)
-    Shelve(h)
-    return h
-end
-
-function GK.FaceCount() return faceCount end
-
---- Do we hold a face for this player?
-function GK.HasFace(key)
-    local f = type(key) == "string" and faces[key]
-    return f and f.ok or false
-end
-
---- Take the face of `unit` for the player `key` - one we have a record of (Sightings.lua decides who).
---- At most every RETAKE seconds per player, unless force (the game said their portrait changed).
-function GK.TakeFace(unit, key, force)
-    if not (SetPortraitTexture and type(unit) == "string" and type(key) == "string") then return false end
-    local now = GetTime()
-    local f = faces[key]
-    if f and not force and now - (f.at or 0) < RETAKE then return f.ok end
-    if not f then
-        if faceCount >= MAX_FACES then
-            -- the face taken longest ago gives up its texture; one on show keeps it
-            local oldKey, oldAt
-            for k, v in pairs(faces) do
-                if not v.host and (not oldAt or (v.at or 0) < oldAt) then oldKey, oldAt = k, v.at or 0 end
-            end
-            if not oldKey then return false end
-            f = faces[oldKey]
-            faces[oldKey] = nil
-            f.ok = false
-        else
-            f = { holder = NewFace() }
-            faceCount = faceCount + 1
-        end
-        faces[key] = f
-    end
-    f.at = now
-    if pcall(SetPortraitTexture, f.holder.tex, unit) then
-        f.holder.tex:SetTexCoord(0, 1, 0, 1)
-        f.ok = true
-    end
-    return f.ok
-end
-
---- Lend the face of `key` to a portrait, if we met them this session. host = { parent (the frame it
---- shows in), over (the texture it covers), top (the frame that stays above it: ring and badge), prio,
---- Lost (called when the face moves on) }. A face on screen stays where it is unless a portrait of
---- higher prio asks: the ledger's page keeps the face its rows would take back at every refresh, and of
---- three rows about one player the first keeps it. True when it shows.
-function GK.LendFace(key, host)
-    local f = type(key) == "string" and faces[key]
-    if not (f and f.ok) then return false end
-    local old = f.host
-    if old and old ~= host then
-        if (old.prio or 0) >= (host.prio or 0) and old.parent:IsVisible() then return false end
-        old.lent = nil
-        f.host = nil
-        if old.Lost then old:Lost() end
-    end
-    local h = f.holder
-    h:SetParent(host.parent)
-    h:ClearAllPoints()
-    h:SetAllPoints(host.over)
-    local level = host.parent:GetFrameLevel()
-    h:SetFrameLevel(level + 1)
-    if host.top then host.top:SetFrameLevel(level + 2) end
-    h:Show()
-    f.host, host.lent = host, f
-    return true
-end
-
---- Give back the face a portrait was lent: it shows someone else now, or nobody.
-function GK.ReturnFace(host)
-    local f = host.lent
-    if not f then return end
-    host.lent = nil
-    if f.host == host then
-        f.host = nil
-        Shelve(f.holder)
-    end
-end
+-- A player's own face is not shown at all, only their race's (race and sex) with their class on its
+-- shoulder. The game draws a real face only from a unit and nothing reads it back, so a real one lasted
+-- only while the session did and only for those you had targeted: the same player's picture switched
+-- between the two ("dropp personal ikon ... så flipper ikke bildet hele tida", the owner, 2026-11-07).
 
 --- A round portrait in the bronze ring, for the ledger's rows and the sheets' heads alike. p:Set(face)
 --- dresses it (GK.SetPortrait), with a class crest on its shoulder beside a race's face. With
---- face.key, whatever we know of that player fills in: the face we met this session (GK.LendFace),
---- else race and sex from a look (GK.FaceOf). prio: see GK.LendFace (rows 1, a page 2).
-function GK.MakePortrait(parent, size, prio)
-    local p = { parent = parent, prio = prio or 1 }
+--- face.key and no race and sex of its own, what we kept of that player fills them in (GK.FaceOf).
+function GK.MakePortrait(parent, size)
+    local p = { parent = parent }
     p.tex = parent:CreateTexture(nil, "ARTWORK")
-    p.over = p.tex
     -- The ring's hole is 0.80 of it across and its band runs out to the edge (portrait_ring, measured
     -- 2026-11-06). At 0.82 the face's masked circle - the game's mask has a soft edge - came out smaller
     -- than the hole, and the page showed between face and ring ("glippe mellom ikonet og ramma", the
@@ -870,10 +755,7 @@ function GK.MakePortrait(parent, size, prio)
     mask:SetTexture(PORTRAIT_MASK, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
     mask:SetAllPoints(p.tex)
     p.tex:AddMaskTexture(mask)
-    -- Ring and badge on a frame of their own, which stays above a face lent to us (GK.LendFace).
-    p.top = CreateFrame("Frame", nil, parent)
-    p.top:SetAllPoints(p.tex)
-    p.ring = p.top:CreateTexture(nil, "OVERLAY")
+    p.ring = parent:CreateTexture(nil, "OVERLAY")
     p.ring:SetTexture(MEDIA .. "portrait_ring")
     -- the bronze dulled a little: polished, it was "litt shiny" beside the page (the owner, 2026-11-06)
     p.ring:SetDesaturation(0.35)
@@ -882,38 +764,26 @@ function GK.MakePortrait(parent, size, prio)
     p.ring:SetPoint("CENTER", p.tex, "CENTER")
     -- No dark rim behind the ring: one was tried for contrast and read as a brown halo ("ser litt rart
     -- ut", 2026-11-05).
-    p.badge = p.top:CreateTexture(nil, "OVERLAY", nil, 2)
+    p.badge = parent:CreateTexture(nil, "OVERLAY", nil, 2)
     p.badge:SetSize(size * 0.42, size * 0.42)
     p.badge:SetPoint("CENTER", p.tex, "BOTTOMRIGHT", -size * 0.11, size * 0.11)   -- where it sat at 0.82
-    -- The class crest on the shoulder: beside a face (theirs, or their race's), never beside the crest
-    -- itself.
-    local function Badge(self)
-        local coords = (self.lent or self.kind == "race") and self.coords
+    function p:Set(face)
+        face = face or {}
+        local key = face.faceKey or face.key
+        if key and not (face.rf and face.sx) and GK.FaceOf then face = GK.FaceOf(key, face.c) end
+        self.kind = GK.SetPortrait(self.tex, face)
+        self.tex:Show()
+        -- the class crest on the shoulder of a race's face, never beside the crest itself
+        local coords = self.kind == "race" and face.c and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[face.c]
         self.badge:SetShown(coords and true or false)
         if coords then
             self.badge:SetTexture(CLASS_ICONS)
             self.badge:SetTexCoord(unpack(coords))
         end
     end
-    function p:Set(face)
-        face = face or {}
-        local key = face.faceKey or face.key
-        if key and not (face.rf and face.sx) and GK.FaceOf then face = GK.FaceOf(key, face.c) end
-        self.kind = GK.SetPortrait(self.tex, face)
-        self.coords = face.c and CLASS_ICON_TCOORDS and CLASS_ICON_TCOORDS[face.c] or nil
-        if not (key and GK.LendFace(key, self)) then GK.ReturnFace(self) end
-        self.tex:SetShown(not self.lent)
-        Badge(self)
-    end
-    -- the face we were lent went to a portrait that needs it more: their race again
-    function p:Lost()
-        self.tex:Show()
-        Badge(self)
-    end
     function p:SetShown(on)
-        if not on then GK.ReturnFace(self) end
         self.tex:SetShown(on)
-        self.top:SetShown(on)
+        self.ring:SetShown(on)
         if not on then self.badge:Hide() end
     end
     return p
@@ -1004,7 +874,7 @@ end
 --- caption in blood (a kill order), else faded ink.
 function GK.SheetHead(f, w)
     local width = w - 94 - 34                     -- from the face to the cross
-    local h = { face = GK.MakePortrait(f, 56, 2) }
+    local h = { face = GK.MakePortrait(f, 56) }
     h.face.tex:SetPoint("CENTER", f, "TOPLEFT", 56, -54)
     h.caption = f:CreateFontString(nil, "ARTWORK")
     SheetInk(h.caption, FADED, TEXT_FONT, 10)
@@ -1220,7 +1090,7 @@ end
 --- ink and type, and level, race and class under it. head:Set(t), t = { key, c, r, rf, sx, l }.
 function GK.FrameHead(f, w)
     local width = w - 82 - 24
-    local h = { face = GK.MakePortrait(f, 48, 2) }
+    local h = { face = GK.MakePortrait(f, 48) }
     h.face.tex:SetPoint("CENTER", f, "TOPLEFT", 50, -60)
     h.name = f:CreateFontString(nil, "ARTWORK")
     GK.Ink(h.name, GK.INK, GK.TITLE_FONT, 19)              -- in the skin's colours, as the frame is skinned
@@ -1345,13 +1215,10 @@ function GK.MakeNoteFrame(name)
     portraitMask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
     portraitMask:SetAllPoints(portrait)
     portrait:AddMaskTexture(portraitMask)
-    -- The badge on a frame of its own, which stays above a face lent to the card (GK.LendFace).
-    local top = CreateFrame("Frame", nil, f)
-    top:SetAllPoints(disc)
-    f.badge = top:CreateTexture(nil, "ARTWORK", nil, 3)
+    f.badge = f:CreateTexture(nil, "ARTWORK", nil, 3)
     f.badge:SetSize(32, 32)
     f.badge:SetPoint("CENTER", disc, "BOTTOMRIGHT", -12, 12)
-    local badgeRing = top:CreateTexture(nil, "ARTWORK", nil, 2)
+    local badgeRing = f:CreateTexture(nil, "ARTWORK", nil, 2)
     badgeRing:SetSize(36, 36)
     badgeRing:SetPoint("CENTER", f.badge, "CENTER")
     badgeRing:SetColorTexture(0.12, 0.06, 0.03, 0.95)
@@ -1361,9 +1228,6 @@ function GK.MakeNoteFrame(name)
     badgeRing:AddMaskTexture(ringMask)
     f.badgeRing = badgeRing
     f.disc, f.portrait = disc, portrait
-    -- For a card about a player we met this session: their face over the portrait, the card's own
-    -- Lost putting back what it would show without it.
-    f.faceHost = { parent = f, over = portrait, top = top, prio = 3 }
     f:Hide()
     return f
 end
@@ -1397,7 +1261,12 @@ local function BuildNote()
     later:SetSize(90, 22)
     later:SetPoint("LEFT", f.action, "RIGHT", 6, 0)
     later:SetText("Later")
-    later:SetScript("OnClick", function() GK.CloseLetters() end)
+    -- Later keeps this letter for later: unread again, so it stays when the read ones go (Closed)
+    later:SetScript("OnClick", function()
+        local L = index and GK.char.letters[index]
+        if L then L.read = false end
+        GK.CloseLetters()
+    end)
     Pager(f, f, 180, 54)
     -- A close button: "Later" alone read as the only way out (the owner, 2026-11-05). The game's own X:
     -- our iron cross sat on top of the frame's iron corner and didn't go with it (2026-11-06).
@@ -1417,6 +1286,7 @@ local function BuildNote()
 
     f:Hide()
     if LIB.RegisterWindow then LIB.RegisterWindow(f, GK.db, "note") end
+    f:HookScript("OnHide", Closed)
     note = f
 end
 
@@ -1451,6 +1321,7 @@ function GK.ShowLetter(i)
     index = math.max(1, math.min(i or #list, #list))
     local L = list[index]
     L.read = true
+    reading = true
     holding[L] = nil                                -- read before its minute was up: nothing left to land
     GK.Sound("IG_ABILITY_PAGE_TURN")
     if NOTE[L.kind] then
@@ -1480,7 +1351,8 @@ end
 function GK.OpenLetters()
     local list = GK.char.letters
     if #list == 0 then
-        print(GK.TAG .. ": no letters. Kill orders from your guild, and your own kills and deaths, arrive here.")
+        print(GK.TAG .. ": no letters. Kill orders from your guild, your new titles and a death that posted a "
+            .. "kill order arrive here.")
         return
     end
     local _, first = GK.Unread()

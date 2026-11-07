@@ -18,7 +18,7 @@ local TAG = GK.TAG
 -- Account settings; the settings page (Options.lua) says what each one does.
 local defaults = {
     letters = true,          -- kill orders your guildies post arrive as letters
-    myLetters = true,        -- a letter for your own kills and deaths
+    myLetters = true,        -- a letter for a kill that earns a title, and a death that posts an order
     alertNear = true,        -- warn when the target of any open kill order is near, or a guildie sees them
     plateMarks = true,       -- a skull over anyone with an open order on them
     shotFulfil = true,       -- a screenshot when you fulfil an order (the user asked for this one)
@@ -197,7 +197,12 @@ end
 -- ---------------------------------------------------------------------------
 --- For display: no realm of ours, and the surname only when the player shows surnames.
 function GK.Show(key)
-    return key and LIB.ShortName(key) or "?"
+    if not key then return "?" end
+    -- First name and surname, never a realm: on Forever a realm is one of a server's internal ones
+    -- ("CAMWOWEU5Realm2PvP"), which means nothing to anyone reading it ("nemesis viser spiller med
+    -- realmnavn bak. det trengs ikke. bare fornavn etternavn", the owner, 2026-11-07). LIB.ShortName drops
+    -- only our own realm; a guildie on another wrote the name with theirs. No name has a "-" in it.
+    return LIB.ShortName(key:match("^(.-)%-[^%-]*$") or key)
 end
 
 --- "Name-Realm" from a name and a realm the client gave us (GetPlayerInfoByGUID).
@@ -513,10 +518,15 @@ end
 --- The guild's leaderboard with you in it, best first: { { who, p, k, d, l, c, total, me } }.
 --- weekly: this week's score; a guildie whose last word was from another week has none this week,
 --- and one with nothing this week isn't listed. total is all-time points either way (for the title).
+-- Guildies under this level are left off the board: alts parked in a starting zone filled it with rows of
+-- nothing ("leaderboard kan kanskje filtrere ut folk under lvl 10 elns?", the owner, 2026-11-07). Their
+-- score is kept, and they are back on it at 10. A row that never said its level stays; you always do.
+local BOARD_MIN_LEVEL = 10
+
 function GK.Board(weekly)
     local list, me, week = {}, LIB.Me(), GK.WeekId()
     for who, r in pairs(GK.Store().board) do
-        if who ~= me then
+        if who ~= me and (r.l or BOARD_MIN_LEVEL) >= BOARD_MIN_LEVEL then
             local p, k, d = r.p or 0, r.k or 0, r.d or 0
             if weekly then
                 if r.wid == week then p, k, d = r.wp or 0, r.wk or 0, r.wd or 0 else p, k, d = 0, 0, 0 end
