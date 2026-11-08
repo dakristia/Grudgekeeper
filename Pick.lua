@@ -132,7 +132,7 @@ local function Suggestions(kind)
     end
     local foes = {}
     for key, f in pairs(GK.char.foes) do
-        if (f.k or 0) + (f.d or 0) > 0 then foes[#foes + 1] = { key = key, f = f } end
+        if (f.k or 0) + (f.d or 0) + (f.a or 0) > 0 then foes[#foes + 1] = { key = key, f = f } end
     end
     table.sort(foes, function(a, b)
         if (a.f.last or 0) ~= (b.f.last or 0) then return (a.f.last or 0) > (b.f.last or 0) end
@@ -140,7 +140,8 @@ local function Suggestions(kind)
     end)
     for i = 1, math.min(#foes, 30) do
         local key, f = foes[i].key, foes[i].f
-        local why = (f.d or 0) > 0 and ("killed you " .. Times(f.d)) or ("you killed them " .. Times(f.k))
+        local why = (f.d or 0) > 0 and ("killed you " .. Times(f.d))
+            or ((f.k or 0) > 0 and ("you killed them " .. Times(f.k))) or ("you helped kill them " .. Times(f.a))
         Add({ key = key, c = f.c, r = f.r, l = f.l }, why .. " - " .. GK.Ago(f.last), "Your grudges")
     end
     return out

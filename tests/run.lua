@@ -1938,6 +1938,156 @@ test("the settings: defaults for every new setting, and a section for them", fun
     eq(#GK.OptionSections, 1)
 end)
 
+-- ---------------------------------------------------------------------------
+-- Assists (Kills.lua): a groupmate's blow on an enemy you were fighting
+-- ---------------------------------------------------------------------------
+local FOE_GUID, KARI_GUID = "Player-1-0000FOE", "Player-1-000KARI"
+
+--- Kills.lua over a fake group: Kari in party1, an Orc rogue to fight. W.fight.target is your target's
+--- guid, W.fight.combat whether you are in combat.
+local function bootKills()
+    local GK, LIB = boot({ me = ME })
+    W.fight = { combat = true }
+    _G.UnitGUID = function(unit)
+        if unit == "player" then return "Player-1-0000ME" end
+        if unit == "party1" then return KARI_GUID end
+        if unit == "target" then return W.fight.target end
+        return nil
+    end
+    _G.UnitExists = function(unit) return _G.UnitGUID(unit) ~= nil end
+    _G.UnitAffectingCombat = function() return W.fight.combat end
+    _G.UnitCanAttack = function(_, unit) return _G.UnitGUID(unit) == FOE_GUID end
+    _G.UnitName = function(unit) return unit == "party1" and "Kari" or nil end
+    _G.UnitLevel = function() return 60 end
+    _G.IsInRaid = function() return false end
+    _G.GetNumSubgroupMembers = function() return 1 end
+    _G.GetNumGroupMembers = function() return 2 end
+    _G.GetPlayerInfoByGUID = function(guid)
+        if guid == FOE_GUID then return "Rogue", "ROGUE", "Orc", "Orc", 2, "Gank Master", "Realm" end
+    end
+    _G.IsInInstance = function() return false end
+    _G.GetRealZoneText = function() return "Hillsbrad" end
+    GK.sentKills, GK.sentAssists = {}, {}
+    function GK.Seen() return nil end
+    function GK.KeepLooks() end
+    function GK.OrdersOn() return {} end
+    function GK.Avenged() return nil end
+    function GK.SendKill(v, zone, points) table.insert(GK.sentKills, { v = v, p = points }) end
+    function GK.SendAssist(v, zone, points) table.insert(GK.sentAssists, { v = v, p = points }) end
+    function GK.SendBoard() end
+    function GK.KillLetter() end
+    assert(loadfile(W.dir .. "Kills.lua"))("Grudgekeeper", GK)
+    GK.StartKills()
+    return GK, LIB
+end
+
+test("assist points: a little less than the kill, never below 1, nothing for a kill worth nothing", function()
+    local GK = boot()
+    eq(GK.AssistPoints(60, 65), 3, "red: 4 for the kill")
+    eq(GK.AssistPoints(60, 60), 1, "yellow: 2 for the kill")
+    eq(GK.AssistPoints(60, 55), 1, "green: 1 for the kill, still 1")
+    eq(GK.AssistPoints(60, nil), 1, "a level we never saw")
+    eq(GK.AssistPoints(60, 20), 0, "grey")
+    eq(GK.AssistPoints(60, 65, 2), 0, "farmed today")
+    eq(GK.AssistPoints(60, 60, 0, true), 2, "revenge counts")
+end)
+
+test("assist: a groupmate's kill on the enemy you have targeted in combat is your assist", function()
+    local GK, LIB = bootKills()
+    W.fight.target = FOE_GUID
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    eq(GK.char.assists, 1)
+    eq(GK.char.kills, 0, "no kill")
+    local f = GK.char.foes[GANK]
+    assert(f, "a grudge with them")
+    eq(f.a, 1)
+    eq(f.k, 0)
+    eq(GK.char.log[1].k, "A")
+    eq(GK.char.log[1].w, "Kari")
+    eq(GK.Week().a, 1)
+    eq(#GK.sentAssists, 1)
+    eq(#GK.sentKills, 0)
+    eq(GK.char.points, GK.sentAssists[1].p)
+    assert(GK.char.points >= 1, "points for it")
+end)
+
+test("assist: none for a kill you weren't fighting in, or out of combat, or by a stranger", function()
+    local GK = bootKills()
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    eq(GK.char.assists, 0, "never targeted them")
+    W.fight.target, W.fight.combat = FOE_GUID, false
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    eq(GK.char.assists, 0, "out of combat")
+    W.fight.combat = true
+    GK.OnPartyKill("Player-1-STRANGER", FOE_GUID)
+    eq(GK.char.assists, 0, "not in your group")
+end)
+
+test("assist: the enemy you switched away from counts for a while, then not", function()
+    local GK, LIB = bootKills()
+    W.fight.target = FOE_GUID
+    LIB.fire("PLAYER_TARGET_CHANGED")
+    W.advance(20)
+    W.fight.target = nil
+    LIB.fire("PLAYER_TARGET_CHANGED")       -- fought until now
+    W.advance(25)
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    eq(GK.char.assists, 1, "25 s after you switched")
+    W.fight.target = FOE_GUID
+    LIB.fire("PLAYER_TARGET_CHANGED")
+    W.fight.target = nil
+    LIB.fire("PLAYER_TARGET_CHANGED")
+    W.advance(31)
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    eq(GK.char.assists, 1, "too long ago")
+end)
+
+--- Guild.lua over the plain client: a guildie's message goes through its reader (GK.ReceiveForTest).
+local function bootGuild()
+    local GK = boot({ me = ME })
+    assert(loadfile(W.dir .. "Guild.lua"))("Grudgekeeper", GK)
+    return GK
+end
+
+test("assists on the wire: B carries them at 20-21, R after heard, H is news, and older clients' rows have none", function()
+    local GK = bootGuild()
+    local week = GK.WeekId()
+    GK.ReceiveForTest("Grudgekeeper", msg("B", 1, 10, 2, 1, 60, "ROGUE", 5, 1, 0, week, 1, 2, 0, 0, "", "", "Orc", 2, 4, 3),
+        "GUILD", KARI)
+    local r = GK.Store().board[KARI]
+    eq(r.a, 4)
+    eq(r.wa, 3)
+    eq(r.sx, 2, "the fields before are where they were")
+    -- an older client's B: no assists
+    GK.ReceiveForTest("Grudgekeeper", msg("B", 1, 10, 2, 1, 60, "ROGUE", 5, 1, 0, week, 1, 2, 0, 0, "", "", "Orc", 2),
+        "GUILD", KARI)
+    eq(GK.Store().board[KARI].a, nil)
+    -- R: B's fields to sex, heard, then the assists - so an older client still finds heard at 21
+    local heard = time() - 100
+    GK.ReceiveForTest("Grudgekeeper", msg("R", 1, EDVARD, 10, 2, 1, 60, "ROGUE", 5, 1, 0, week, 1, 2, 0, 0, "", "",
+        "Orc", 2, heard, 6, 1), "GUILD", KARI)
+    local e = GK.Store().board[EDVARD]
+    eq(e.t, heard)
+    eq(e.a, 6)
+    eq(e.wa, 1)
+    -- H: the news, and nothing in the guild's tally of kills
+    GK.ReceiveForTest("Grudgekeeper", msg("H", 1, GANK, "ROGUE", "Orc", 60, "Hillsbrad", 2), "GUILD", KARI)
+    local n = GK.Store().feed[1]
+    eq(n.kind, "H")
+    eq(n.who, KARI)
+    eq(n.p, 2)
+    eq(GK.Store().slain[GANK], nil)
+end)
+
+test("assist: your own blow is still a kill, not an assist", function()
+    local GK = bootKills()
+    W.fight.target = FOE_GUID
+    GK.OnPartyKill("Player-1-0000ME", FOE_GUID)
+    eq(GK.char.kills, 1)
+    eq(GK.char.assists, 0)
+    eq(#GK.sentKills, 1)
+end)
+
 test("a race known by name only draws the male face, and that guess is never kept", function()
     local GK = bootSheets({ me = ME })
     assert(loadfile(W.dir .. "Sightings.lua"))("Grudgekeeper", GK)

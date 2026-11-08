@@ -2,6 +2,9 @@
 -- A kill: PARTY_KILL names the killer and the victim by GUID, for you and anyone in your group. We
 -- count the ones landed by you or your pet, on a player of the other faction, in the open world. The
 -- level comes from having seen them (Sightings.lua): the kill itself carries none.
+-- An assist: the same event, the blow landed by someone in your group (or their pet) on an enemy you
+-- were fighting. The game keeps the combat log and the damage numbers from us, so "fighting" means you
+-- had them as your target or focus while in combat, within the last ASSIST_FOR seconds.
 -- A death: the game's death recap names whoever landed the blow (the "You died" chat line carries its
 -- id), and the damage meter is asked when the recap is empty. It counts as a PvP death only when that
 -- name belongs to an enemy player we saw - a name alone can't tell a rogue from a murloc.
@@ -12,8 +15,13 @@ local Secret = GK.Secret
 local recapId          -- the death recap the last "You died" line pointed at
 local deathPending
 local lastDeath = "none this session"
+local lastAssist = "none this session"
+local fought = {}       -- [guid] = GetTime(): enemy players you had as target or focus in combat
+local held = {}         -- [unit] = the guid of the enemy fought there now ("target", "focus")
+local ASSIST_FOR = 30
 
 function GK.LastDeathDebug() return lastDeath end
+function GK.LastAssistDebug() return lastAssist end
 
 --- A screenshot, a moment later. Only ever from a kill you made (an event), never on a timer of its own.
 function GK.Shot(delay)
@@ -26,6 +34,62 @@ local function Mine(guid)
     return UnitExists("pet") and guid == UnitGUID("pet") or false
 end
 
+--- Someone else in your group, or their pet: their name to show, or nil.
+local function Groupmate(guid)
+    if type(guid) ~= "string" or Mine(guid) then return nil end
+    local raid = IsInRaid()
+    local n = raid and GetNumGroupMembers() or GetNumSubgroupMembers()
+    for i = 1, n do
+        local unit = (raid and "raid" or "party") .. i
+        if UnitGUID(unit) == guid or UnitGUID(unit .. "pet") == guid then
+            local name = UnitName(unit)
+            return (not Secret(name) and type(name) == "string") and name or "a groupmate"
+        end
+    end
+    return nil
+end
+
+--- An enemy player you have as target or focus, while you're in combat, counts as fought. The one
+--- you switch away from was fought until now.
+local function Engage(unit)
+    local now = GetTime()
+    local old = held[unit]
+    if old and fought[old] then fought[old] = now end
+    held[unit] = nil
+    if not UnitExists(unit) or not UnitAffectingCombat("player") then return end
+    local guid = UnitGUID(unit)
+    if Secret(guid) or type(guid) ~= "string" or not guid:find("^Player%-") then return end
+    local hostile = UnitCanAttack("player", unit)
+    if Secret(hostile) or not hostile then return end
+    fought[guid] = now
+    held[unit] = guid
+end
+
+--- Did you fight them lately? Your target or focus right now counts, as the stamp may be old.
+local function Fought(guid)
+    Engage("target")
+    Engage("focus")
+    local now = GetTime()
+    for g, t in pairs(fought) do
+        if now - t > ASSIST_FOR then fought[g] = nil end
+    end
+    return fought[guid] ~= nil
+end
+
+--- Today's hits on this enemy, kills and assists alike, with older ones dropped.
+local function HitsToday(f, now)
+    local today = 0
+    for i = #f.hits, 1, -1 do
+        if now - f.hits[i] > GK.DAY then table.remove(f.hits, i) else today = today + 1 end
+    end
+    return today
+end
+
+--- They killed you since you last got them, by kill or assist.
+local function Revenge(f)
+    return (f.lastDeath or 0) > math.max(f.lastKill or 0, f.lastAssist or 0)
+end
+
 -- ---------------------------------------------------------------------------
 -- Kills
 -- ---------------------------------------------------------------------------
@@ -35,13 +99,10 @@ function GK.RecordKill(v)
     local now = time()
     local f = GK.Foe(v.key, { n = GK.Show(v.key), c = v.c, r = v.r, l = v.l })
     GK.KeepLooks(v.key, GK.Seen(v.key, v.guid) or v)     -- a grudge now: their race's face is kept
-    local today = 0
-    for i = #f.hits, 1, -1 do
-        if now - f.hits[i] > GK.DAY then table.remove(f.hits, i) else today = today + 1 end
-    end
+    local today = HitsToday(f, now)
     local orders = GK.OrdersOn(v.key, v.guid)
-    -- Revenge: they killed you since you last killed them. Avenged: they killed a guildie a moment ago.
-    local revenge = (f.lastDeath or 0) > (f.lastKill or 0)
+    -- Revenge: they killed you since you last got them. Avenged: they killed a guildie a moment ago.
+    local revenge = Revenge(f)
     local avenged = GK.Avenged(v.key, now)
     local c = GK.char
     local titleBefore = GK.Title(c.points)
@@ -73,26 +134,80 @@ function GK.RecordKill(v)
     GK.Changed()
 end
 
---- PARTY_KILL (attacker GUID, victim GUID). A function of its own so the smoke test can call it.
-function GK.OnPartyKill(attacker, target)
-    if Secret(attacker) or Secret(target) or type(target) ~= "string" then return end
-    if not target:find("^Player%-") or not Mine(attacker) or not GK.InWorld() then return end
+--- One assist of ours: a groupmate landed the blow on an enemy we were fighting. Points a little
+--- below the kill's, no order fulfilled (the killer does that), no letter: a line in chat.
+--- v = { key, guid, c, r, l, with }
+function GK.RecordAssist(v)
+    local now = time()
+    local f = GK.Foe(v.key, { n = GK.Show(v.key), c = v.c, r = v.r, l = v.l })
+    GK.KeepLooks(v.key, GK.Seen(v.key, v.guid) or v)
+    local today = HitsToday(f, now)
+    local revenge = Revenge(f)
+    local avenged = GK.Avenged(v.key, now)
+    local points = GK.AssistPoints(UnitLevel("player"), v.l, today, revenge, avenged)
+    local c = GK.char
+    f.hits[#f.hits + 1] = now
+    f.a = (f.a or 0) + 1
+    f.lastAssist = now
+    c.assists = (c.assists or 0) + 1
+    c.points = c.points + points
+    local week = GK.Week()
+    week.p, week.a = week.p + points, (week.a or 0) + 1
+    local zone = GK.Zone()
+    GK.AddLog({ k = "A", t = now, n = v.key, c = v.c, r = v.r, l = v.l, z = zone, p = points, w = v.with,
+        rv = revenge or nil, av = avenged })
+    GK.SendAssist(v, zone, points)
+    GK.SendBoard()
+    print(("%s: assist on %s, with %s (%s)."):format(GK.TAG, GK.Show(v.key), v.with or "your group",
+        points > 0 and ("+%d"):format(points) or "no points"))
+    GK.Changed()
+end
+
+--- The enemy player a PARTY_KILL names, as we record them; nil when they aren't one we count.
+local function Victim(target)
     local ok, _, classFile, race, raceFile, _, name, realm = pcall(GetPlayerInfoByGUID, target)
-    if not ok or Secret(name) or type(name) ~= "string" then return end
+    if not ok or Secret(name) or type(name) ~= "string" then return nil end
     local s = GK.Seen(nil, target)
     local key = (s and s.key) or GK.PlayerKey(GK.KeyOf(name, realm))
-    if not key then return end
+    if not key then return nil end
     -- The other side only: we keep sightings of enemies alone, so having seen them settles it;
     -- otherwise their race decides, and a race that could be either side is not counted.
-    if not s and GK.EnemyRace(not Secret(raceFile) and raceFile or nil) ~= true then return end
+    if not s and GK.EnemyRace(not Secret(raceFile) and raceFile or nil) ~= true then return nil end
     local level = s and s.l
     if not level and UnitExists("target") and UnitGUID("target") == target then
         local l = UnitLevel("target")
         level = not Secret(l) and GK.ValidLevel(l) or nil
     end
-    GK.RecordKill({ key = key, guid = target,
+    return { key = key, guid = target,
         c = (s and s.c) or (not Secret(classFile) and GK.ValidClass(classFile)) or nil,
-        r = (s and s.r) or GK.Clean(race, 20), l = level })
+        r = (s and s.r) or GK.Clean(race, 20), l = level }
+end
+
+--- PARTY_KILL (attacker GUID, victim GUID). A function of its own so the smoke test can call it.
+--- Your blow is a kill; a groupmate's, on someone you were fighting, is your assist.
+function GK.OnPartyKill(attacker, target)
+    if Secret(attacker) or Secret(target) or type(target) ~= "string" then return end
+    if not target:find("^Player%-") or not GK.InWorld() then return end
+    if Mine(attacker) then
+        local v = Victim(target)
+        if v then GK.RecordKill(v) end
+        return
+    end
+    local with = Groupmate(attacker)
+    if not with then return end
+    if not Fought(target) then
+        lastAssist = ("%s got a kill you weren't fighting in: no assist"):format(with)
+        return
+    end
+    local v = Victim(target)
+    if not v then
+        lastAssist = ("%s got a kill, but not of an enemy player we count"):format(with)
+        return
+    end
+    v.with = with
+    lastAssist = ("%s, with %s"):format(v.key, with)
+    fought[target] = nil
+    GK.RecordAssist(v)
 end
 
 -- ---------------------------------------------------------------------------
@@ -262,6 +377,12 @@ end
 
 function GK.StartKills()
     LIB.On("PARTY_KILL", function(attacker, target) GK.OnPartyKill(attacker, target) end)
+    LIB.On("PLAYER_TARGET_CHANGED", function() Engage("target") end)
+    LIB.On("PLAYER_FOCUS_CHANGED", function() Engage("focus") end)
+    LIB.On("PLAYER_REGEN_DISABLED", function()
+        Engage("target")
+        Engage("focus")
+    end)
     LIB.On("CHAT_MSG_SYSTEM", function(text)
         if type(text) ~= "string" or Secret(text) then return end
         local id = text:match("|Hdeath:(%d+)|h")

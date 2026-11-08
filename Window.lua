@@ -369,14 +369,15 @@ local function GrudgeItems()
     end
     local foes = {}
     for k, v in pairs(c.foes) do
-        if (v.k or 0) + (v.d or 0) > 0 then foes[#foes + 1] = { key = k, f = v, name = GK.Show(k) } end
+        if (v.k or 0) + (v.d or 0) + (v.a or 0) > 0 then foes[#foes + 1] = { key = k, f = v, name = GK.Show(k) } end
     end
     local how = GRUDGE_ORDERS[grudgeOrder][1]
     local function Before(a, b, by)
         if by == "recent" then
             if (a.f.last or 0) ~= (b.f.last or 0) then return (a.f.last or 0) > (b.f.last or 0) end
         elseif by == "fought" then
-            local x, y = (a.f.k or 0) + (a.f.d or 0), (b.f.k or 0) + (b.f.d or 0)
+            local x = (a.f.k or 0) + (a.f.d or 0) + (a.f.a or 0)
+            local y = (b.f.k or 0) + (b.f.d or 0) + (b.f.a or 0)
             if x ~= y then return x > y end
         end
         if a.name:lower() ~= b.name:lower() then return a.name:lower() < b.name:lower() end
@@ -400,11 +401,13 @@ local function GrudgeItems()
         local last = lastOf[e.key]
         local sub
         if last then
-            sub = (last.k == "K" and "you killed them " or "killed you ") .. GK.Ago(last.t)
-                .. (last.z and (" \194\183 " .. last.z) or "")
+            local what = { K = "you killed them ", A = "you helped kill them " }
+            sub = (what[last.k] or "killed you ") .. GK.Ago(last.t) .. (last.z and (" \194\183 " .. last.z) or "")
         else
             sub = "last met " .. GK.Ago(e.f.last)
         end
+        -- the score is kills against deaths; assists go first under the name, where they aren't cut
+        if (e.f.a or 0) > 0 then sub = Plural(e.f.a, "assist") .. " \194\183 " .. sub end
         items[#items + 1] = { key = "f:" .. e.key, name = e.name, face = { key = e.key, c = e.f.c, r = e.f.r },
             desc = Short(e.f.l, e.f.c, e.f.r, GK.SexOf(e.key, e.f.sx)), sub = sub, score = { you, they },
             select = PosterSpec(e.key, e.f), you = you, they = they, ts = e.f.last, own = true }
@@ -416,6 +419,10 @@ local function GrudgeItems()
             sub = table.concat({ e.z or "", GK.Ago(e.t) }, e.z and " - " or "") }
         if e.k == "K" then
             it.name = "Killed " .. GK.Show(e.n)
+            it.right = (e.p or 0) > 0 and ("+%d"):format(e.p) or "no points"
+        elseif e.k == "A" then
+            it.name = "Helped kill " .. GK.Show(e.n)
+            if e.w then it.sub = it.sub .. " - with " .. e.w end
             it.right = (e.p or 0) > 0 and ("+%d"):format(e.p) or "no points"
         else
             -- the spell at the end of the line under the name, not in the right-hand column: there
@@ -430,7 +437,7 @@ local function GrudgeItems()
 end
 
 -- What the news says, by kind: who, then whom. "AU" is a C whose poster's death posted it.
-local SAID = { K = "%s killed %s", D = "%s fell to %s", F = "%s fulfilled the order on %s",
+local SAID = { K = "%s killed %s", H = "%s helped kill %s", D = "%s fell to %s", F = "%s fulfilled the order on %s",
     C = "%s put a price on %s", AU = "%s death put a price on %s", T = "%s added to the pot on %s" }
 
 --- A name by its first word: the character's own name, without the surname.
@@ -466,7 +473,7 @@ local function NewsItems()
             line = said:format(Who2(GK.Show), GK.Show(e.n))
             short = said:format(Who2(FirstName), FirstName(e.n))
         end
-        if kind == "K" then
+        if kind == "K" or kind == "H" then
             right = (e.p or 0) > 0 and ("+%d"):format(e.p) or nil
         elseif kind == "F" then
             right = (e.p or 0) > 0 and GK.MoneyText(e.p) or nil

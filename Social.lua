@@ -23,6 +23,7 @@ function GK.TooltipLine(key, guid)
     local f = GK.char.foes[key]
     if f and (f.d or 0) > 0 then parts[#parts + 1] = ("killed you %d"):format(f.d) end
     if f and (f.k or 0) > 0 then parts[#parts + 1] = ("you got them %d"):format(f.k) end
+    if f and (f.a or 0) > 0 then parts[#parts + 1] = ("you helped %d"):format(f.a) end
     local w = GK.Store().wanted[key]
     if w then
         local total, others = 0, 0

@@ -5,7 +5,8 @@
 -- Messages, fields separated by ';' (every text field goes through GK.Clean on the way in). A field
 -- added later goes on the END, so an older client reads what it knows and ignores the rest:
 --   B;1;points;kills;deaths;level;class;weekPoints;weekKills;weekDeaths;weekId;streak;bestStreak;
---       ordersDone;bountyWon;nemesis;nemesisTimes;race;sex     my score, my profile's numbers, and
+--       ordersDone;bountyWon;nemesis;nemesisTimes;race;sex;assists;weekAssists
+--                                                              my score, my profile's numbers, and
 --                                                              my race (file token) and sex (2 or 3),
 --                                                              for my portrait in the ledger
 --   Q;1                                                        tell me everything (at login)
@@ -15,6 +16,8 @@
 --                                                              and sex: the target's, for their race's face)
 --   D;1;name;class;race;level;zone;times;raceFile;sex          someone killed me (times in all; raceFile
 --                                                              and sex: the killer's, for their race's face)
+--   H;1;name;class;race;level;zone;points                      I helped a groupmate kill someone
+--                                                              (the news only: the kill is theirs)
 --   C;1;id;name;class;race;level;guid;reward;created;expires;state;doneBy;note;auto;raceFile;sex
 --                                                              an order of mine, as it stands (auto:
 --                                                              r or c when my death posted it, below;
@@ -28,8 +31,10 @@
 --                                                              they are away (answering a Q)
 --   P;1;poster;id;backer;copper                                a guildie's share of an open order's
 --                                                              pot, passed on likewise
---   R;1;guildie;<B's fields from points on>;heard              a guildie's board row, passed on
+--   R;1;guildie;<B's fields from points on to sex>;heard;assists;weekAssists
+--                                                              a guildie's board row, passed on
 --                                                              likewise, and when I last heard them
+--                                                              (B's later fields go after heard)
 --   S;1;poster;id;zone;level;map;x;y                           I saw an order's target, standing here
 --                                                              (x and y in thousandths of the map)
 --   T;1;poster;id;copper                                       my share of an order's pot is this
@@ -670,7 +675,7 @@ function GK.SendBoard()
         local _, raceFile = UnitRace("player")
         Send(Msg("B", PROTO, c.points, c.kills, c.deaths, UnitLevel("player"), class,
             w.p, w.k, w.d, w.id, c.streak or 0, c.bestStreak or 0, c.done or 0, c.won or 0,
-            nemesis, f and f.d or nil, raceFile, UnitSex("player")))
+            nemesis, f and f.d or nil, raceFile, UnitSex("player"), c.assists or 0, w.a or 0))
     end)
 end
 
@@ -703,6 +708,13 @@ function GK.SendKill(v, zone, points, avenged, times)
     if not GK.db.share then return end
     local rf, sx = LookOf(v.key, v.rf, v.sx)
     Send(Msg("K", PROTO, v.key, v.c, v.r, v.l, zone, points, avenged, times, rf, sx))
+end
+
+--- Our assist: the news only. The guild's tally of who killed whom stays with the killer's K.
+function GK.SendAssist(v, zone, points)
+    AddFeed({ t = time(), who = LIB.Me(), kind = "H", n = v.key, c = v.c, l = v.l, p = points, z = zone })
+    if not GK.db.share then return end
+    Send(Msg("H", PROTO, v.key, v.c, v.r, v.l, zone, points))
 end
 
 --- A guildie this player killed within the last few minutes (by the guild's feed): we'd be avenging
@@ -762,7 +774,7 @@ local function ForgetIn(who, key)
     local feed = s.feed
     for i = #feed, 1, -1 do
         local n = feed[i]
-        if n.who == who and n.n == key and (n.kind == "K" or n.kind == "D") then table.remove(feed, i) end
+        if n.who == who and n.n == key and (n.kind == "K" or n.kind == "D" or n.kind == "H") then table.remove(feed, i) end
     end
 end
 
@@ -969,9 +981,16 @@ local function ApplyBoard(who, f, base)
     return r
 end
 
+--- Assists came after B's last field and R's heard: in B at 20-21, in R at 22-23. An older client
+--- sends none.
+local function ApplyAssists(r, a, wa)
+    if not r then return end
+    r.a, r.wa = Int(a, 0, 1e6), Int(wa, 0, 1e6)
+end
+
 local function OnBoard(sender, f)
     heard["b:" .. sender] = GetTime()
-    ApplyBoard(sender, f, 0)
+    ApplyAssists(ApplyBoard(sender, f, 0), f[20], f[21])
 end
 
 --- A guildie's row, passed on by another while they are away (R). Only a row we have none of: never over
@@ -984,6 +1003,7 @@ local function OnRelayedBoard(sender, f)
     if GK.Store().board[who] then return end
     local r = ApplyBoard(who, f, 1)
     if r then r.t = math.min(time(), Int(f[21], 0, 2 ^ 31) or time()) end
+    ApplyAssists(r, f[22], f[23])
 end
 
 local function OnKill(sender, f)
@@ -994,6 +1014,13 @@ local function OnKill(sender, f)
         z = GK.Clean(f[7], 40), p = Int(f[8], 0, 100), av = GK.LocalKey(GK.Clean(f[9], 64)) })
     GK.NoteSlain(sender, name, c, r, l, Int(f[10], 1, 1e6))
     KeepLook(name, f[11], f[12])
+end
+
+local function OnAssist(sender, f)
+    local name = GK.PlayerKey(GK.Clean(f[3], 64))
+    if not name then return end
+    AddFeed({ t = time(), who = sender, kind = "H", n = name, c = GK.ValidClass(f[4]), l = GK.ValidLevel(f[6]),
+        z = GK.Clean(f[7], 40), p = Int(f[8], 0, 100) })
 end
 
 local function OnDeath(sender, f)
@@ -1342,7 +1369,7 @@ local function Answer()
         Paced(function()
             if (heard["b:" .. who] or 0) >= since or GK.Store().board[who] ~= r then return nil end
             return Msg("R", PROTO, who, r.p, r.k, r.d, r.l, r.c, r.wp, r.wk, r.wd, r.wid, r.st, r.bs, r.od, r.ow,
-                r.nm, r.nt, r.rf, r.sx, r.t)
+                r.nm, r.nt, r.rf, r.sx, r.t, r.a, r.wa)
         end)
     end
 end
@@ -1361,7 +1388,7 @@ local function OnAsk()
     end)
 end
 
-local HANDLERS = { B = OnBoard, Q = OnAsk, K = OnKill, D = OnDeath, C = OnOrder, F = OnFulfil,
+local HANDLERS = { B = OnBoard, Q = OnAsk, K = OnKill, H = OnAssist, D = OnDeath, C = OnOrder, F = OnFulfil,
     S = OnSighting, T = OnPot, Y = OnSharePaid, O = OnRelayedOrder, P = OnRelayedPot, R = OnRelayedBoard,
     U = OnForget }
 

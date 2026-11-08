@@ -52,12 +52,12 @@ local defaults = {
 }
 -- This character's own record.
 local charDefaults = {
-    points = 0, kills = 0, deaths = 0,
+    points = 0, kills = 0, deaths = 0, assists = 0,
     streak = 0, bestStreak = 0,  -- kills since you last died to an enemy player, and the most ever
     done = 0, won = 0,           -- kill orders you fulfilled, and the bounties on them (copper)
-    -- week = { id, p, k, d }: this week's score, made by GK.Week and started over at the weekly reset
-    log = {},                -- newest first: { k = "K" or "D", t, n, c, r, l, z, p, o }
-    foes = {},               -- [key] = { n, c, r, l, k, d, last, lastKill, lastDeath, hits = { time, ... } }
+    -- week = { id, p, k, d, a }: this week's score, made by GK.Week and started over at the weekly reset
+    log = {},                -- newest first: { k = "K", "A" or "D", t, n, c, r, l, z, p, o, w (an assist's killer) }
+    foes = {},               -- [key] = { n, c, r, l, k, d, a, last, lastKill, lastAssist, lastDeath, hits = { time, ... } }
     letters = {},            -- oldest first (Letters.lua)
     letterId = 0,
 }
@@ -184,6 +184,7 @@ GK.REVENGE_BONUS = 1     -- they killed you since you last killed them
 GK.AVENGE_BONUS = 1      -- they killed a guildie in the last AVENGE_FOR seconds
 GK.AVENGE_FOR = 15 * 60
 GK.REPEATS = 2           -- the same player is worth points this many times a day, then nothing
+GK.ASSIST_LESS = 1       -- an assist is worth this much less than the kill, and still at least 1
 GK.DAY = 24 * 3600
 
 --- Points for one kill: by their level beside yours, plus revenge and avenging a guildie - nothing at
@@ -200,6 +201,14 @@ function GK.Points(mine, theirs, killedToday, order, revenge, avenged)
     end
     if order then p = p + GK.ORDER_BONUS end
     return p, con
+end
+
+--- Points for one assist: the kill's, with no order bonus (the killer fulfils it), a little less. A
+--- kill worth nothing (grey, or farmed) is an assist worth nothing.
+function GK.AssistPoints(mine, theirs, killedToday, revenge, avenged)
+    local p = GK.Points(mine, theirs, killedToday, false, revenge, avenged)
+    if p > 0 then p = math.max(p - GK.ASSIST_LESS, 1) end
+    return p
 end
 
 -- Titles by all-time points: our own words, so nobody takes them for the game's honour ranks.
@@ -234,7 +243,7 @@ function GK.Week()
     local id = GK.WeekId()
     local w = GK.char.week
     if type(w) ~= "table" or w.id ~= id then
-        w = { id = id, p = 0, k = 0, d = 0 }
+        w = { id = id, p = 0, k = 0, d = 0, a = 0 }
         GK.char.week = w
     end
     return w
@@ -772,7 +781,8 @@ end
 local function TooltipLines(add)
     add(TAG)
     local rank, of = GK.MyRank()
-    add(("%d points - %d kills, %d deaths"):format(GK.char.points, GK.char.kills, GK.char.deaths), 1, 1, 1)
+    add(("%d points - %d kills, %d assists, %d deaths"):format(GK.char.points, GK.char.kills, GK.char.assists or 0,
+        GK.char.deaths), 1, 1, 1)
     if of > 1 then add(("#%d of %d in the guild"):format(rank, of), 1, 0.82, 0) end
     local open = GK.OpenOrders and #GK.OpenOrders() or 0
     if open > 0 then add(("%d open kill order%s"):format(open, open == 1 and "" or "s"), 1, 0.5, 0.4) end
@@ -867,6 +877,7 @@ function GK.Debug()
     end
     if GK.SeenCount then print(("  enemy players seen this session: %d"):format(GK.SeenCount())) end
     if GK.LastDeathDebug then print("  last death: " .. GK.LastDeathDebug()) end
+    if GK.LastAssistDebug then print("  last assist: " .. GK.LastAssistDebug()) end
     local s = GK.Store()
     local n = 0
     for _ in pairs(s.board) do n = n + 1 end
