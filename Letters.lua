@@ -250,13 +250,13 @@ local function Order(L)
     return L.o and GK.Store().orders[L.o] or nil
 end
 
---- "Pølse Hans, a level 35 Orc Rogue" - as much as we know. mid: the name is the subject of a
+--- "Pølse Hans, a level 35 female Orc Rogue" - as much as we know. mid: the name is the subject of a
 --- sentence that carries on, so the description is closed with a comma too.
 local function Who(L, mid)
     local name = GK.Show(L.n)
-    local d = GK.Describe(L.l, L.c, L.r)
+    local d = GK.Describe(L.l, L.c, L.r, GK.SexOf(L.n, L.sx))
     if d == "" then return name end
-    d = d:gsub("^Level", "level")
+    d = d:gsub("^Level", "level"):gsub("%f[%a]Female%f[%A]", "female"):gsub("%f[%a]Male%f[%A]", "male")
     return name .. ", " .. (d:match("^[AEIOU]") and "an " or "a ") .. d .. (mid and "," or "")
 end
 
@@ -271,7 +271,7 @@ local CLOSING = {
 --- The scroll: title, name, info, body (lines), foot, seal, stamp, buttons { { text, fn } }
 local function ScrollContent(L)
     local me, show = LIB.Me(), GK.Show
-    local info = GK.Describe(L.l, L.c, L.r)
+    local info = GK.Describe(L.l, L.c, L.r, GK.SexOf(L.n, L.sx))
     local body, buttons = {}, {}
     local o = Order(L)
     -- The way to the ledger and the way out are the bar under the scroll (BuildScroll), for every scroll;
@@ -900,7 +900,7 @@ function GK.SheetHead(f, w)
             self.name:SetText(GK.Show(t.key))
             if (self.name:GetStringWidth() or 0) <= width then break end
         end
-        self.info:SetText(GK.Describe(t.l, t.c, t.r))
+        self.info:SetText(GK.Describe(t.l, t.c, t.r, GK.SexOf(t.key, t.sx)))
         self.face:Set(t)
     end
     return h
@@ -1106,7 +1106,7 @@ function GK.FrameHead(f, w)
     h.info:SetWordWrap(false)
     function h:Set(t)
         self.name:SetText(GK.Show(t.key))
-        self.info:SetText(GK.Describe(t.l, t.c, t.r))
+        self.info:SetText(GK.Describe(t.l, t.c, t.r, GK.SexOf(t.key, t.sx)))
         self.face:Set(t)
     end
     return h

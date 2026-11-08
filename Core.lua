@@ -369,14 +369,22 @@ function GK.UnitKey(unit)
     return key and GK.PlayerKey(key) or nil
 end
 
---- "Level 35 Orc Rogue", from whatever we know.
-function GK.Describe(l, c, r)
+--- "Level 35 Female Orc Rogue", from whatever we know. The sex (2 male, 3 female) shows only with a race,
+--- so a line without a race never reads "Level 35 Female Rogue".
+function GK.Describe(l, c, r, sx)
     local parts = {}
     if l then parts[#parts + 1] = l == -1 and "Level ??" or ("Level " .. l) end
+    if r and (sx == 2 or sx == 3) then parts[#parts + 1] = sx == 3 and "Female" or "Male" end
     if r then parts[#parts + 1] = r end
     local cn = c and LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[c]
     if cn then parts[#parts + 1] = cn end
     return table.concat(parts, " ")
+end
+
+--- The sex given, else the one we saw or kept of that player (GK.FaceOf), else nil.
+function GK.SexOf(key, sx)
+    if sx then return sx end
+    return key and GK.FaceOf and GK.FaceOf(key).sx or nil
 end
 
 -- Where we are is asked for at every nameplate that comes up, and only changes when we change area:

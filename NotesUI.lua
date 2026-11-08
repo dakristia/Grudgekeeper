@@ -145,7 +145,7 @@ function GK.NoteCard(key, page)
     local shown = s and ((mark and OnList(s, mark) and mark) or (page and OnList(s, page) and page) or s.primary)
     local t = { key = key, c = p.c, r = p.r, rf = p.rf, sx = p.sx, l = p.l }
     local d = { key = key, c = p.c, rf = p.rf, sx = p.sx, title = shown and CARD_TITLE[shown] or "NOTES",
-        name = GK.Show(key), info = GK.Describe(p.l, p.c, p.r), lines = {}, buttons = {} }
+        name = GK.Show(key), info = GK.Describe(p.l, p.c, p.r, GK.SexOf(key, p.sx)), lines = {}, buttons = {} }
     local lines = d.lines
     if s then
         for _, list in ipairs(s.on) do

@@ -213,7 +213,7 @@ function GK.PosterCard(t, inLedger)
     local function Known(k) return k and GK.FaceOf(k).rf and k or nil end
     local faceKey = Known(key) or Known(fkey) or Known(o and o.n) or key
     local look = GK.FaceOf(faceKey, c)
-    local d = { key = key, unit = t.unit, c = c, name = GK.Show(key), info = GK.Describe(l, c, r), lines = {},
+    local d = { key = key, unit = t.unit, c = c, name = GK.Show(key), info = GK.Describe(l, c, r, look.sx), lines = {},
         buttons = {}, rf = look.rf, sx = look.sx, faceKey = faceKey }
     local rich = { head = d.name, info = d.info, tiles = {}, sections = {} }
     d.rich = rich
@@ -443,7 +443,7 @@ function GK.RecordCard(key, unit)
     -- this week" read as four on a list that showed one (the owner, 2026-11-06).
     local rank, of = Place(false)
     local weekRank, weekOf = Place(true)
-    local where = GK.Describe(r.l, r.c)
+    local where = GK.Describe(r.l, r.c, nil, r.sx)
     if rank and of > 1 then
         where = ("#%d of %d all time%s"):format(rank, of,
             weekRank and (", #%d of %d this week"):format(weekRank, weekOf) or "")
@@ -463,7 +463,7 @@ function GK.RecordCard(key, unit)
     -- The kicker is this week's place, the list the leaderboard opens on.
     local function Week(n) return thisWeek and (n or 0) > 0 and ("%d this week"):format(n) or "none this week" end
     local wp = thisWeek and (r.wp or 0) or 0
-    local info = GK.Describe(r.l, r.c)
+    local info = GK.Describe(r.l, r.c, nil, r.sx)
     if not me and r.t and time() - r.t > QUIET_FOR then info = info .. " \194\183 last heard " .. GK.Ago(r.t) end
     local streak, best = r.st or 0, math.max(r.bs or 0, r.st or 0)
     local rich = { head = d.title, sub = d.name, info = info,
