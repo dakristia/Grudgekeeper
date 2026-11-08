@@ -214,7 +214,7 @@ function GK.PosterCard(t, inLedger)
     local faceKey = Known(key) or Known(fkey) or Known(o and o.n) or key
     local look = GK.FaceOf(faceKey, c)
     local d = { key = key, unit = t.unit, c = c, name = GK.Show(key), info = GK.Describe(l, c, r, look.sx), lines = {},
-        buttons = {}, rf = look.rf, sx = look.sx, faceKey = faceKey }
+        buttons = {}, rf = look.rf, sx = look.sx, r = r, faceKey = faceKey }
     local rich = { head = d.name, info = d.info, tiles = {}, sections = {} }
     d.rich = rich
     local lines = d.lines

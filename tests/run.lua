@@ -1930,5 +1930,32 @@ test("the settings: defaults for every new setting, and a section for them", fun
     eq(#GK.OptionSections, 1)
 end)
 
+test("a race known by name only draws the male face, and that guess is never kept", function()
+    local GK = bootSheets({ me = ME })
+    assert(loadfile(W.dir .. "Sightings.lua"))("Grudgekeeper", GK)
+    eq(GK.RaceFileOf("Night Elf"), "NightElf")
+    eq(GK.RaceFileOf("Undead"), "Scourge")
+    eq(GK.RaceFileOf("Orc"), "Orc")
+    eq(GK.RaceFileOf("Nonsense"), nil)
+    local tex = { atlas = nil }
+    function tex:SetAtlas(atlas) self.atlas = atlas end
+    function tex:SetTexture() self.atlas = nil end
+    function tex:SetTexCoord() end
+    local info = { r = "Orc", c = "MAGE" }
+    eq(GK.SetPortrait(tex, info), "race")
+    eq(tex.atlas, "raceicon128-orc-male")
+    eq(info.rf, nil, "the guess is only for drawing")
+    eq(info.sx, nil, "the guess is only for drawing")
+    eq(GK.SetPortrait(tex, { r = "Orc", sx = 3 }), "race")
+    eq(tex.atlas, "raceicon128-orc-female", "a known sex is kept")
+    local old = CLASS_ICON_TCOORDS
+    CLASS_ICON_TCOORDS = { MAGE = { 0, 1, 0, 1 } }
+    eq(GK.SetPortrait(tex, { c = "MAGE" }), "class")
+    CLASS_ICON_TCOORDS = old
+    local face = GK.FaceOf("Nobody-One-Realm", "MAGE")
+    eq(face.sx, nil, "the guess did not leak into what we send")
+    eq(face.rf, nil)
+end)
+
 say(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

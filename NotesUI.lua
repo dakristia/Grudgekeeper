@@ -261,7 +261,8 @@ function GK.NotesItems(list)
         local newest = s and s.notes[1]
         if newest then bits[#bits + 1] = newest.text and ('"' .. newest.text .. '"') or nil end
         local key = e.key
-        items[#items + 1] = { key = "p:" .. key, name = GK.Show(key), face = { key = key, c = p.c, rf = p.rf, sx = p.sx },
+        items[#items + 1] = { key = "p:" .. key, name = GK.Show(key),
+            face = { key = key, c = p.c, rf = p.rf, sx = p.sx, r = p.r },
             sub = table.concat(bits, " - "), right = e.score ~= 0 and ScoreText(e.score) or "", ts = e.ts,
             votes = e.score, own = (e.mine or VotedOn(p)) or nil,
             select = { kind = "card", make = function() return GK.NoteCard(key, list) end } }

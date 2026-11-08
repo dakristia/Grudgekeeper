@@ -134,7 +134,8 @@ local function OrderItems()
     local items, me = {}, LIB.Me()
     for _, o in ipairs(GK.AllOrders()) do
         local pot, backers = GK.Pot(o)
-        local it = { key = "o:" .. o.key, name = GK.Show(o.n), face = { key = o.n, c = o.c }, select = PosterSpec(o.n, o, o),
+        local it = { key = "o:" .. o.key, name = GK.Show(o.n), face = { key = o.n, c = o.c, r = o.r },
+            select = PosterSpec(o.n, o, o),
             desc = Short(o.l, o.c, o.r, GK.SexOf(o.n, o.sx)), ts = o.t,
             own = me and (o.by == me or o.doneBy == me or (o.pot and o.pot[me])) or nil }
         if o.state == "o" then
@@ -169,7 +170,8 @@ local function OrderItems()
                 local e = wanted[i]
                 top[#top + 1] = { key = "w:" .. e.key, name = GK.Show(e.key),
                     desc = Short(e.w.l, e.w.c, e.w.r, GK.SexOf(e.key, e.w.sx)),
-                    face = { key = e.key, c = e.w.c }, wide = "killed us " .. e.total, select = PosterSpec(e.key, e.w),
+                    face = { key = e.key, c = e.w.c, r = e.w.r }, wide = "killed us " .. e.total,
+                    select = PosterSpec(e.key, e.w),
                     ts = e.w.last }
             end
             if #items > 0 then top[#top + 1] = { header = true, name = "Closed orders" } end
@@ -237,7 +239,8 @@ local function WantedItems()
         local pot = o and (GK.Pot(o)) or 0
         items[#items + 1] = { key = "w:" .. e.key, name = GK.Show(e.key),
             desc = Short(e.w.l, e.w.c, e.w.r, GK.SexOf(e.key, e.w.sx)),
-            face = { key = e.key, c = e.w.c }, sub = e.w.last and ("last kill " .. GK.Ago(e.w.last)) or nil,
+            face = { key = e.key, c = e.w.c, r = e.w.r },
+            sub = e.w.last and ("last kill " .. GK.Ago(e.w.last)) or nil,
             c1 = tostring(e.total), killed = e.total, bounty = pot,
             right = o and (pot > 0 and GK.MoneyText(pot) or "order") or "",
             rightColour = BLOOD, select = PosterSpec(e.key, e.w), ts = e.w.last,
@@ -294,13 +297,14 @@ local function GrudgeItems()
         else
             sub = "last met " .. GK.Ago(e.f.last)
         end
-        items[#items + 1] = { key = "f:" .. e.key, name = e.name, face = { key = e.key, c = e.f.c },
+        items[#items + 1] = { key = "f:" .. e.key, name = e.name, face = { key = e.key, c = e.f.c, r = e.f.r },
             desc = Short(e.f.l, e.f.c, e.f.r, GK.SexOf(e.key, e.f.sx)), sub = sub, score = { you, they },
             select = PosterSpec(e.key, e.f), you = you, they = they, ts = e.f.last, own = true }
     end
     if #c.log > 0 then items[#items + 1] = { header = true, name = "Lately" } end
     for i, e in ipairs(c.log) do
-        local it = { key = "l:" .. i, face = { key = e.n, c = e.c }, select = PosterSpec(e.n, e), ts = e.t, own = true,
+        local it = { key = "l:" .. i, face = { key = e.n, c = e.c, r = e.r },
+            select = PosterSpec(e.n, e), ts = e.t, own = true,
             sub = table.concat({ e.z or "", GK.Ago(e.t) }, e.z and " - " or "") }
         if e.k == "K" then
             it.name = "Killed " .. GK.Show(e.n)

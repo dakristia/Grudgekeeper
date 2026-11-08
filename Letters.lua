@@ -413,9 +413,9 @@ end
 
 --- What a letter says, apart from how it is drawn (FillScroll and FillNote draw from it):
 --- { note (a small letter, else the scroll), title, name, info, lines, foot, seal, stamp, blood, buttons =
---- { { text, fn } }, c, rf, sx, key, sample }. name, info, foot and stamp are the scroll's only.
+--- { { text, fn } }, c, r, rf, sx, key, sample }. name, info, foot and stamp are the scroll's only.
 function GK.LetterContent(L)
-    local d = { c = L.c, rf = L.rf, sx = L.sx, key = L.n, sample = L.sample }
+    local d = { c = L.c, r = L.r, rf = L.rf, sx = L.sx, key = L.n, sample = L.sample }
     if not NOTE[L.kind] then
         local title, name, info, body, foot, seal, stamp, buttons = ScrollContent(L)
         d.title, d.name, d.info, d.lines, d.foot, d.seal, d.stamp, d.buttons = title, name, info, body, foot, seal,
@@ -654,7 +654,7 @@ local function FillScroll(L)
     f.seal:SetTexture(MEDIA .. seal)
     if d.key or d.c then
         f.face:SetShown(true)
-        f.face:Set({ key = d.key, c = d.c })
+        f.face:Set({ key = d.key, c = d.c, r = d.r })
     else
         f.face:SetShown(false)
     end
@@ -739,12 +739,16 @@ end
 
 --- Dress a portrait texture for a player: their race's face when we know race and sex, else their
 --- class crest, else the Grudgekeeper's red seal. info = { rf (race file token), sx (2 male, 3
---- female), c (class) }. Returns "race", "class" or "seal", so the caller knows whether the class
---- still needs showing (as a badge) beside a face. With the classicFaces setting, a race that is on
---- the old character-creation sheet gets its face from there, else from today's race icons.
+--- female), c (class), r (race name, read only when rf is missing) }. An unknown sex draws the male face
+--- until a sighting tells, and that guess is never written to info. Returns "race", "class" or "seal",
+--- so the caller knows whether the class still needs showing (as a badge) beside a face. With the
+--- classicFaces setting, a race that is on the old character-creation sheet gets its face from there,
+--- else from today's race icons.
 function GK.SetPortrait(tex, info)
     info = info or {}
     local rf, sx = info.rf, info.sx
+    if not rf and type(info.r) == "string" then rf = GK.RaceFileOf(info.r) end
+    if rf and sx ~= 2 and sx ~= 3 then sx = 2 end
     if GK.db and GK.db.classicFaces and type(rf) == "string" and (sx == 2 or sx == 3) and RACE_TILES[rf] then
         tex:SetTexture(RACE_SHEET)
         tex:SetTexCoord(ClassicRaceCoords(rf, sx))
@@ -804,7 +808,11 @@ function GK.MakePortrait(parent, size)
     function p:Set(face)
         face = face or {}
         local key = face.faceKey or face.key
-        if key and not (face.rf and face.sx) and GK.FaceOf then face = GK.FaceOf(key, face.c) end
+        if key and not (face.rf and face.sx) and GK.FaceOf then
+            -- the race name goes on so that a record from before we saw faces still draws its race
+            local kept = GK.FaceOf(key, face.c)
+            face = kept.rf and kept or { key = key, rf = kept.rf, sx = kept.sx, c = kept.c, r = face.r }
+        end
         self.kind = GK.SetPortrait(self.tex, face)
         self.tex:Show()
         -- the class crest on the shoulder of a race's face, never beside the crest itself

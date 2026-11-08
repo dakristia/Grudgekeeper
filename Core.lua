@@ -107,6 +107,46 @@ function GK.EnemyRace(raceFile)
     return nil
 end
 
+-- The English names of the races, for a race the game does not report under that name.
+local RACE_NAMES = {
+    Human = "Human", Dwarf = "Dwarf", Gnome = "Gnome", ["Night Elf"] = "NightElf", Draenei = "Draenei",
+    Worgen = "Worgen", Pandaren = "Pandaren", Orc = "Orc", Undead = "Scourge", Tauren = "Tauren", Troll = "Troll",
+    ["Blood Elf"] = "BloodElf", Goblin = "Goblin", ["Void Elf"] = "VoidElf",
+    ["Lightforged Draenei"] = "LightforgedDraenei", ["Dark Iron Dwarf"] = "DarkIronDwarf",
+    ["Kul Tiran"] = "KulTiran", Mechagnome = "Mechagnome", Nightborne = "Nightborne",
+    ["Highmountain Tauren"] = "HighmountainTauren", ["Mag'har Orc"] = "MagharOrc",
+    ["Zandalari Troll"] = "ZandalariTroll", Vulpera = "Vulpera", Dracthyr = "Dracthyr", Earthen = "EarthenDwarf",
+}
+local raceFiles           -- race name -> race file token, built on first use
+
+--- The client's race file token ("NightElf") for a race's display name ("Night Elf"), or nil. A name
+--- that is a token already gives itself. The game's own names come first, so a client in another
+--- language is read too.
+function GK.RaceFileOf(name)
+    if type(name) ~= "string" then return nil end
+    if not raceFiles then
+        raceFiles = {}
+        if C_CreatureInfo and C_CreatureInfo.GetRaceInfo then
+            for id = 1, 100 do
+                local ok, info = pcall(C_CreatureInfo.GetRaceInfo, id)
+                if ok and info and info.raceName and info.clientFileString then
+                    raceFiles[info.raceName] = info.clientFileString
+                end
+            end
+        end
+        for english, file in pairs(RACE_NAMES) do
+            if not raceFiles[english] then raceFiles[english] = file end
+        end
+    end
+    if raceFiles[name] then return raceFiles[name] end
+    if name:find("^%a+$") then
+        for _, file in pairs(raceFiles) do
+            if file == name then return name end
+        end
+    end
+    return nil
+end
+
 -- ---------------------------------------------------------------------------
 -- Points
 -- ---------------------------------------------------------------------------
