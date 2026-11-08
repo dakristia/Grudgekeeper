@@ -26,6 +26,7 @@ local defaults = {
     share = true,            -- tell the guild your kills, deaths and score, and where targets are seen
     autoOrders = true,       -- your death to someone on a rampage or camping you posts a kill order (Guild.lua)
     sound = true,
+    classicFaces = false,    -- race faces from the old character-creation screen, not today's race icons (GK.SetPortrait)
     tooltip = true,          -- one line on an enemy player's tooltip: your history with them
     guildButton = true,      -- a small Grudgekeeper badge beside the guild window
     minimap = {},            -- LibDBIcon's own record: where the button sits, whether it is hidden

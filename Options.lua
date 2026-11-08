@@ -173,8 +173,11 @@ local function Build(panel)
     end
     local parchment = SkinChoice(hSkin, "parchment", "Parchment", "The Grudgekeeper's own ledger, on parchment.")
     local classic = SkinChoice(parchment, "classic", "Classic", "The game's own dark panels, in gold and white.")
+    local faces = Check(classic, "Old race portraits", "classicFaces",
+        "The faces from the old character-creation screen, as Guild Grudge drew them. Races added later keep "
+        .. "today's icon.")
 
-    local bottom = classic
+    local bottom = faces
     local helpers = { Section = Section, Check = Check, Box = Box, Note = Note, Info = Info }
     for _, fn in ipairs(GK.OptionSections) do bottom = fn(f, bottom, helpers) or bottom end
 
