@@ -250,13 +250,13 @@ local function Order(L)
     return L.o and GK.Store().orders[L.o] or nil
 end
 
---- "Pølse Hans, a level 35 Orc Rogue" - as much as we know. mid: the name is the subject of a
+--- "Pølse Hans, a level 35 female Orc Rogue" - as much as we know. mid: the name is the subject of a
 --- sentence that carries on, so the description is closed with a comma too.
 local function Who(L, mid)
     local name = GK.Show(L.n)
-    local d = GK.Describe(L.l, L.c, L.r)
+    local d = GK.Describe(L.l, L.c, L.r, GK.SexOf(L.n, L.sx))
     if d == "" then return name end
-    d = d:gsub("^Level", "level")
+    d = d:gsub("^Level", "level"):gsub("%f[%a]Female%f[%A]", "female"):gsub("%f[%a]Male%f[%A]", "male")
     return name .. ", " .. (d:match("^[AEIOU]") and "an " or "a ") .. d .. (mid and "," or "")
 end
 
@@ -271,7 +271,7 @@ local CLOSING = {
 --- The scroll: title, name, info, body (lines), foot, seal, stamp, buttons { { text, fn } }
 local function ScrollContent(L)
     local me, show = LIB.Me(), GK.Show
-    local info = GK.Describe(L.l, L.c, L.r)
+    local info = GK.Describe(L.l, L.c, L.r, GK.SexOf(L.n, L.sx))
     local body, buttons = {}, {}
     local o = Order(L)
     -- The way to the ledger and the way out are the bar under the scroll (BuildScroll), for every scroll;
@@ -541,6 +541,10 @@ local function BuildScroll()
     Ink(f.foot, INK, TEXT_FONT, 11)
     f.foot:SetPoint("BOTTOMLEFT", 32, 92)
 
+    -- The target's face, top left like a wanted poster and clear of the centred title.
+    f.face = GK.MakePortrait(c, 56)
+    f.face.tex:SetPoint("CENTER", c, "TOPLEFT", 46, -52)
+
     f.seal = c:CreateTexture(nil, "OVERLAY")
     f.seal:SetSize(66, 66)
     f.seal:SetPoint("BOTTOMRIGHT", -24, 22)
@@ -648,6 +652,12 @@ local function FillScroll(L)
     f.body:SetText(table.concat(body, "\n"))
     f.foot:SetText(foot or "")
     f.seal:SetTexture(MEDIA .. seal)
+    if d.key or d.c then
+        f.face:SetShown(true)
+        f.face:Set({ key = d.key, c = d.c })
+    else
+        f.face:SetShown(false)
+    end
     f.stamp:Hide()
     f.stampName = stamp
     if stamp then f.stamp:SetTexture(MEDIA .. stamp) end
@@ -709,13 +719,37 @@ end
 -- token; Undead is "Scourge" to the client and "undead" to the atlas.
 local RACE_ATLAS = { Scourge = "undead" }
 
+-- The old character-creation sheet is 8 columns by 4 rows. The male faces are in rows 0 and 1 and the
+-- female faces two rows lower. A race added after the sheet was made is not on it, so it keeps today's icon.
+local RACE_SHEET = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Races"
+local RACE_TILES = {
+    Human = { 0, 0 }, Dwarf = { 1, 0 }, Gnome = { 2, 0 }, NightElf = { 3, 0 },
+    Draenei = { 4, 0 }, Worgen = { 5, 0 }, Pandaren = { 6, 0 },
+    Tauren = { 0, 1 }, Scourge = { 1, 1 }, Troll = { 2, 1 }, Orc = { 3, 1 },
+    BloodElf = { 4, 1 }, Goblin = { 5, 1 },
+}
+
+--- The tile of a race and sex on the sheet, inset by 8% of a tile on each side so that the tile's own
+--- frame stays outside the round mask. Returns the left, right, top and bottom texture coordinates.
+local function ClassicRaceCoords(rf, sx)
+    local col, row = RACE_TILES[rf][1], RACE_TILES[rf][2] + (sx == 3 and 2 or 0)
+    local w, h = 1 / 8, 1 / 4
+    return col * w + w * 0.08, (col + 1) * w - w * 0.08, row * h + h * 0.08, (row + 1) * h - h * 0.08
+end
+
 --- Dress a portrait texture for a player: their race's face when we know race and sex, else their
 --- class crest, else the Grudgekeeper's red seal. info = { rf (race file token), sx (2 male, 3
 --- female), c (class) }. Returns "race", "class" or "seal", so the caller knows whether the class
---- still needs showing (as a badge) beside a face.
+--- still needs showing (as a badge) beside a face. With the classicFaces setting, a race that is on
+--- the old character-creation sheet gets its face from there, else from today's race icons.
 function GK.SetPortrait(tex, info)
     info = info or {}
     local rf, sx = info.rf, info.sx
+    if GK.db and GK.db.classicFaces and type(rf) == "string" and (sx == 2 or sx == 3) and RACE_TILES[rf] then
+        tex:SetTexture(RACE_SHEET)
+        tex:SetTexCoord(ClassicRaceCoords(rf, sx))
+        return "race"
+    end
     if type(rf) == "string" and (sx == 2 or sx == 3) and tex.SetAtlas then
         local atlas = ("raceicon128-%s-%s"):format(RACE_ATLAS[rf] or rf:lower(), sx == 3 and "female" or "male")
         local known = not (C_Texture and C_Texture.GetAtlasInfo) or C_Texture.GetAtlasInfo(atlas)
@@ -900,7 +934,7 @@ function GK.SheetHead(f, w)
             self.name:SetText(GK.Show(t.key))
             if (self.name:GetStringWidth() or 0) <= width then break end
         end
-        self.info:SetText(GK.Describe(t.l, t.c, t.r))
+        self.info:SetText(GK.Describe(t.l, t.c, t.r, GK.SexOf(t.key, t.sx)))
         self.face:Set(t)
     end
     return h
@@ -1106,7 +1140,7 @@ function GK.FrameHead(f, w)
     h.info:SetWordWrap(false)
     function h:Set(t)
         self.name:SetText(GK.Show(t.key))
-        self.info:SetText(GK.Describe(t.l, t.c, t.r))
+        self.info:SetText(GK.Describe(t.l, t.c, t.r, GK.SexOf(t.key, t.sx)))
         self.face:Set(t)
     end
     return h

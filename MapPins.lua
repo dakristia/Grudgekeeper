@@ -71,7 +71,7 @@ function GrudgekeeperMapPinMixin:OnMouseEnter()
     self:SetSize(SIZE_HOVER, SIZE_HOVER)
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     GameTooltip:AddLine(GK.Show(o.n), 1, 0.3, 0.22)
-    local d = GK.Describe(o.l, o.c, o.r)
+    local d = GK.Describe(o.l, o.c, o.r, GK.SexOf(o.n, o.sx))
     if d ~= "" then GameTooltip:AddLine(d, 1, 1, 1) end
     local s = o.seen
     if s then

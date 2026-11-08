@@ -102,7 +102,9 @@ local function Suggestions(kind)
     end
     -- your target: an enemy for a kill order, any player for the lists
     local target = (kind == "order") and GK.ReadUnit("target") or (GK.ReadPlayer and GK.ReadPlayer("target"))
-    if target then Add(target, GK.Describe(target.l, target.c, target.r), "Your target") end
+    if target then
+        Add(target, GK.Describe(target.l, target.c, target.r, GK.SexOf(target.key, target.sx)), "Your target")
+    end
     if not k.enemy then
         local now, left = {}, {}
         local cut = time() - LEFT_FOR
@@ -112,7 +114,7 @@ local function Suggestions(kind)
         end
         table.sort(now, function(a, b) return a.key < b.key end)
         table.sort(left, function(a, b) return a.left > b.left end)
-        for _, e in ipairs(now) do Add(e, GK.Describe(e.l, e.c, e.r), "In your group") end
+        for _, e in ipairs(now) do Add(e, GK.Describe(e.l, e.c, e.r, GK.SexOf(e.key, e.sx)), "In your group") end
         for _, e in ipairs(left) do Add(e, "left the group " .. GK.Ago(e.left), "Left your group lately") end
         return out
     end

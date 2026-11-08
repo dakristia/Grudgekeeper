@@ -61,8 +61,11 @@ function GK.InspectCard(unit)
     elseif Guildie(unit) then
         local _, class = UnitClass(unit)
         class = Plain(class)
+        local race = Plain((UnitRace(unit)))
+        local sex = Plain(UnitSex(unit))
+        if sex ~= 2 and sex ~= 3 then sex = nil end
         d = { key = key, unit = unit, c = class, title = GK.Show(key), name = "No score yet",
-            info = GK.Describe(Plain(UnitLevel(unit)), class), buttons = {},
+            info = GK.Describe(Plain(UnitLevel(unit)), class, race and GK.Clean(race, 20), sex), buttons = {},
             lines = { "The Grudgekeeper has heard nothing from them. A guildie's score reaches you from their "
                 .. "own Grudgekeeper - if they have one." } }
     end
