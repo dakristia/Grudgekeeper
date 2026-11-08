@@ -9,12 +9,17 @@
 --                                                              my race (file token) and sex (2 or 3),
 --                                                              for my portrait in the ledger
 --   Q;1                                                        tell me everything (at login)
---   K;1;name;class;race;level;zone;points;avenged;times        I killed someone (avenging a guildie;
---                                                              times: how often I have, in all)
---   D;1;name;class;race;level;zone;times                       someone killed me (times in all)
---   C;1;id;name;class;race;level;guid;reward;created;expires;state;doneBy;note;auto
+--   K;1;name;class;race;level;zone;points;avenged;times;raceFile;sex
+--                                                              I killed someone (avenging a guildie;
+--                                                              times: how often I have, in all; raceFile
+--                                                              and sex: the target's, for their race's face)
+--   D;1;name;class;race;level;zone;times;raceFile;sex          someone killed me (times in all; raceFile
+--                                                              and sex: the killer's, for their race's face)
+--   C;1;id;name;class;race;level;guid;reward;created;expires;state;doneBy;note;auto;raceFile;sex
 --                                                              an order of mine, as it stands (auto:
---                                                              r or c when my death posted it, below)
+--                                                              r or c when my death posted it, below;
+--                                                              raceFile and sex: the target's, for their
+--                                                              race's face)
 --   (A;1;poster;id;on, I took or dropped an order: retired 2026-11-07. Nobody takes an order any more -
 --   "hey, we put out an order, kill this one" is the whole of it, the owner. What older clients send is
 --   ignored.)
@@ -102,6 +107,14 @@ local function Msg(...)
         parts[i] = v == nil and "" or tostring(v)
     end
     return table.concat(parts, ";")
+end
+
+-- The race file token and sex to send for a player, so a client that never saw them can still draw
+-- their face. LookOf takes the ones the caller already has when both are set, because they are fresher.
+local function LookOf(key, rf, sx)
+    if rf and sx then return rf, sx end
+    local face = GK.FaceOf(key)
+    return face.rf, face.sx
 end
 
 local function Send(text)
@@ -340,7 +353,9 @@ function GK.Contribute(o, copper)
 end
 
 local function OrderText(o)
-    return Msg("C", PROTO, o.id, o.n, o.c, o.r, o.l, o.guid, o.reward, o.t, o.exp, o.state, o.doneBy, o.note, o.auto)
+    local rf, sx = LookOf(o.n)
+    return Msg("C", PROTO, o.id, o.n, o.c, o.r, o.l, o.guid, o.reward, o.t, o.exp, o.state, o.doneBy, o.note, o.auto,
+        rf, sx)
 end
 
 local function SendOrder(o) Send(OrderText(o)) end
@@ -508,7 +523,8 @@ function GK.SendKill(v, zone, points, avenged, times)
     AddFeed({ t = time(), who = me, kind = "K", n = v.key, c = v.c, l = v.l, p = points, z = zone, av = avenged })
     GK.NoteSlain(me, v.key, v.c, v.r, v.l, times)
     if not GK.db.share then return end
-    Send(Msg("K", PROTO, v.key, v.c, v.r, v.l, zone, points, avenged, times))
+    local rf, sx = LookOf(v.key, v.rf, v.sx)
+    Send(Msg("K", PROTO, v.key, v.c, v.r, v.l, zone, points, avenged, times, rf, sx))
 end
 
 --- A guildie this player killed within the last few minutes (by the guild's feed): we'd be avenging
@@ -527,7 +543,8 @@ function GK.SendDeath(v, zone, times)
     -- Our own deaths count in the guild's wanted list too.
     GK.NoteWanted(LIB.Me(), v.key, v.c, v.r, v.l, times)
     if not GK.db.share then return end
-    Send(Msg("D", PROTO, v.key, v.c, v.r, v.l, zone, times))
+    local rf, sx = LookOf(v.key, v.rf, v.sx)
+    Send(Msg("D", PROTO, v.key, v.c, v.r, v.l, zone, times, rf, sx))
 end
 
 -- ---------------------------------------------------------------------------
@@ -699,6 +716,19 @@ local function GuildieKey(full)
     return name .. "-" .. LIB.Realm()
 end
 
+--- A race's file token (letters only, as the client's are) and a sex the game knows (2 male, 3 female),
+--- each nil when it is anything else.
+local function ReadLook(rf, sx)
+    return (type(rf) == "string" and #rf <= 20 and rf:match("^%a+$")) and rf or nil, Int(sx, 2, 3)
+end
+
+--- Keeps what a message says a player looks like, so their face shows even if we never saw them. Only
+--- when it names both, because a half is no face.
+local function KeepLook(name, rf, sx)
+    rf, sx = ReadLook(rf, sx)
+    if rf and sx then GK.KeepLooks(name, { rf = rf, sx = sx }) end
+end
+
 --- A guildie's row on the board from a B (their own word, base 0) or an R (another guildie's copy of it,
 --- base 1: the guildie's name comes first). Returns the row, or nil for a message that isn't one.
 local function ApplyBoard(who, f, base)
@@ -725,11 +755,8 @@ local function ApplyBoard(who, f, base)
     r.od, r.ow = Int(Field(14), 0, 1e6), Int(Field(15), 0, 1e12)
     r.nm = GK.Clean(Field(16), 64)
     r.nt = r.nm and Int(Field(17), 1, 1e6) or nil
-    -- For their portrait: a race's file token (letters only, as the client's are) and a sex the game
-    -- knows (2 male, 3 female). Anything else is dropped, and the ledger shows their class instead.
-    local rf = Field(18)
-    r.rf = (type(rf) == "string" and #rf <= 20 and rf:match("^%a+$")) and rf or nil
-    r.sx = Int(Field(19), 2, 3)
+    -- For their portrait. Anything ReadLook drops leaves the ledger showing their class instead.
+    r.rf, r.sx = ReadLook(Field(18), Field(19))
     return r
 end
 
@@ -757,6 +784,7 @@ local function OnKill(sender, f)
     AddFeed({ t = time(), who = sender, kind = "K", n = name, c = c, l = l,
         z = GK.Clean(f[7], 40), p = Int(f[8], 0, 100), av = GK.LocalKey(GK.Clean(f[9], 64)) })
     GK.NoteSlain(sender, name, c, r, l, Int(f[10], 1, 1e6))
+    KeepLook(name, f[11], f[12])
 end
 
 local function OnDeath(sender, f)
@@ -766,6 +794,7 @@ local function OnDeath(sender, f)
     local c, l = GK.ValidClass(f[4]), GK.ValidLevel(f[6])
     GK.NoteWanted(sender, name, c, GK.Clean(f[5], 20), l, times)
     AddFeed({ t = time(), who = sender, kind = "D", n = name, c = c, l = l, z = GK.Clean(f[7], 40) })
+    KeepLook(name, f[9], f[10])
 end
 
 --- An order as its poster sends it (C, base 0), or as another guildie passes it on while the poster is
@@ -778,6 +807,7 @@ local function ApplyOrder(by, f, base, relayed)
     local name = GK.PlayerKey(GK.Clean(Field(4), 64))
     local state = STATES[Field(12)] and Field(12) or nil
     if not (id and name and state) then return end
+    KeepLook(name, Field(16), Field(17))
     local s, now = GK.Store(), time()
     local key = by .. "#" .. id
     heard[key] = GetTime()
@@ -1006,8 +1036,9 @@ local function Answer()
         local o = orders[i]
         Paced(function()
             if (heard[o.key] or 0) >= since or GK.Store().orders[o.key] ~= o then return nil end
+            local rf, sx = LookOf(o.n)
             return Msg("O", PROTO, o.by, o.id, o.n, o.c, o.r, o.l, o.guid, o.reward, o.t, o.exp, o.state,
-                o.doneBy, o.note, o.auto)
+                o.doneBy, o.note, o.auto, rf, sx)
         end)
     end
     -- what others put in the open orders' pots, ours too: after the orders, so whoever asked has the order
