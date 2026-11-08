@@ -261,7 +261,7 @@ function GK.PosterCard(t, inLedger)
     end
     if f and (f.k or 0) + (f.d or 0) + (f.a or 0) > 0 then
         lines[#lines + 1] = ("You: %s, %s%s%s"):format(Plural(f.k or 0, "kill"),
-            (f.a or 0) > 0 and (Plural(f.a, "assist") .. ", ") or "", Plural(f.d or 0, "death"),
+            Plural(f.a or 0, "assist") .. ", ", Plural(f.d or 0, "death"),
             nemesis and " - your nemesis." or ".")
     end
     -- The rich card's numbers are THEIR score against the guild, read as a scoreboard: "7 KILLS on
@@ -441,7 +441,7 @@ function GK.RecordCard(key, unit)
         r = { p = c.points, k = c.kills, d = c.deaths, wp = w.p, wk = w.k, wd = w.d, wid = w.id,
             st = c.streak, bs = c.bestStreak, od = c.done, ow = c.won, nm = nemesis, nt = nf and nf.d,
             c = class, l = UnitLevel("player"), t = time(), rf = raceFile, sx = UnitSex("player"),
-            a = c.assists, wa = w.a }
+            a = c.assists or 0, wa = w.a or 0 }
         key = LIB.Me() or key
     else
         r, key = Find(GK.Store().board, key)
@@ -471,8 +471,8 @@ function GK.RecordCard(key, unit)
     end
     d.info = where
     local lines = d.lines
-    -- assists only when there are some: an older client sends none, and "0 assists" would say it did
-    local function Assists(n) return (n or 0) > 0 and (Plural(n, "assist") .. ", ") or "" end
+    -- assists from a client that sends them, 0 included; the released one sends none, and then nothing is said
+    local function Assists(n) return n and (Plural(n, "assist") .. ", ") or "" end
     lines[#lines + 1] = ("All time: %s, %s%s."):format(Plural(r.k or 0, "kill"), Assists(r.a), Plural(r.d or 0, "death"))
     local thisWeek = r.wid == GK.WeekId()
     if thisWeek and ((r.wk or 0) + (r.wd or 0) + (r.wp or 0) + (r.wa or 0)) > 0 then
@@ -503,7 +503,7 @@ function GK.RecordCard(key, unit)
     -- new player, and made the rest hard to find (the owner, 2026-11-06). The bounties go with the orders
     -- they were won on.
     local highlights = {}
-    if (r.a or 0) > 0 then highlights[#highlights + 1] = { "Assists", tostring(r.a), Week(r.wa) } end
+    if r.a then highlights[#highlights + 1] = { "Assists", tostring(r.a), Week(r.wa) } end
     if best > 0 then
         highlights[#highlights + 1] = { "Kill streak", tostring(streak),
             best > streak and ("best ever %d"):format(best) or (me and "your best yet" or "their best yet") }

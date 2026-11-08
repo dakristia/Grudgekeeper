@@ -2079,6 +2079,30 @@ test("assists on the wire: B carries them at 20-21, R after heard, H is news, an
     eq(GK.Store().slain[GANK], nil)
 end)
 
+test("assists on the board: yours from 0, a guildie's as sent, none for a client that sends none", function()
+    local GK = bootGuild()
+    _G.UnitClass = _G.UnitClass or function() return "Rogue", "ROGUE" end
+    _G.UnitRace = _G.UnitRace or function() return "Human", "Human" end
+    _G.UnitLevel = _G.UnitLevel or function() return 60 end
+    _G.UnitSex = _G.UnitSex or function() return 2 end
+    local week = GK.WeekId()
+    GK.ReceiveForTest("Grudgekeeper", msg("B", 1, 10, 2, 1, 60, "ROGUE", 5, 1, 0, week, 1, 2, 0, 0, "", "", "Orc", 2, 4, 3),
+        "GUILD", KARI)
+    GK.ReceiveForTest("Grudgekeeper", msg("B", 1, 8, 2, 1, 60, "ROGUE", 5, 1, 0, week, 1, 2, 0, 0, "", "", "Orc", 2),
+        "GUILD", EDVARD)
+    local function A(weekly)
+        local out = {}
+        for _, e in ipairs(GK.Board(weekly)) do out[e.me and "me" or e.who] = e.a == nil and "none" or e.a end
+        return out
+    end
+    local all, now = A(false), A(true)
+    eq(all.me, 0)
+    eq(all[KARI], 4)
+    eq(all[EDVARD], "none")
+    eq(now[KARI], 3)
+    eq(now[EDVARD], "none")
+end)
+
 test("assist: your own blow is still a kill, not an assist", function()
     local GK = bootKills()
     W.fight.target = FOE_GUID

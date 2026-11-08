@@ -726,7 +726,8 @@ function GK.Nemesis()
     return bestKey, best
 end
 
---- The guild's leaderboard with you in it, best first: { { who, p, k, d, l, c, total, me } }.
+--- The guild's leaderboard with you in it, best first: { { who, p, k, d, a, l, c, total, me } }. a is
+--- nil for a guildie whose client sends no assists (the released one).
 --- weekly: this week's score; a guildie whose last word was from another week has none this week,
 --- and one with nothing this week isn't listed. total is all-time points either way (for the title).
 -- Guildies under this level are left off the board: alts parked in a starting zone filled it with rows of
@@ -738,12 +739,13 @@ function GK.Board(weekly)
     local list, me, week = {}, LIB.Me(), GK.WeekId()
     for who, r in pairs(GK.Store().board) do
         if who ~= me and (r.l or BOARD_MIN_LEVEL) >= BOARD_MIN_LEVEL then
-            local p, k, d = r.p or 0, r.k or 0, r.d or 0
+            local p, k, d, a = r.p or 0, r.k or 0, r.d or 0, r.a
             if weekly then
-                if r.wid == week then p, k, d = r.wp or 0, r.wk or 0, r.wd or 0 else p, k, d = 0, 0, 0 end
+                if r.wid == week then p, k, d, a = r.wp or 0, r.wk or 0, r.wd or 0, r.wa
+                else p, k, d, a = 0, 0, 0, r.a and 0 end
             end
-            if not weekly or p > 0 or k > 0 or d > 0 then
-                list[#list + 1] = { who = who, p = p, k = k, d = d, l = r.l, c = r.c, total = r.p or 0,
+            if not weekly or p > 0 or k > 0 or d > 0 or (a or 0) > 0 then
+                list[#list + 1] = { who = who, p = p, k = k, d = d, a = a, l = r.l, c = r.c, total = r.p or 0,
                     rf = r.rf, sx = r.sx }
             end
         end
@@ -752,7 +754,7 @@ function GK.Board(weekly)
     local _, raceFile = UnitRace("player")
     local c, w = GK.char, GK.Week()
     list[#list + 1] = { who = me or "?", p = weekly and w.p or c.points, k = weekly and w.k or c.kills,
-        d = weekly and w.d or c.deaths, l = UnitLevel("player"), c = class, total = c.points, me = true,
+        d = weekly and w.d or c.deaths, a = weekly and (w.a or 0) or (c.assists or 0), l = UnitLevel("player"), c = class, total = c.points, me = true,
         rf = raceFile, sx = UnitSex("player") }
     table.sort(list, function(a, b)
         if a.p ~= b.p then return a.p > b.p end

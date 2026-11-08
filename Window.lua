@@ -54,6 +54,9 @@ local LIST_TOP = 96                                  -- the first row, down from
 -- the page (they ran into each other in the preview)
 local COL1, COL2, COL_WIDE, COL_RIGHT = 232, 266, 196, PAGE_W - 36
 local SCORE_X = COL_RIGHT - 34                       -- the middle of a grudge's score ("0 - 1")
+-- The leaderboard's three counts, K, D and A, a little closer than COL1 and COL2: at 34 apart the third
+-- left a four-figure score no room. The name keeps 116, and a longer one steps down a size first.
+local BOARD_K, BOARD_D, BOARD_A = 210, 240, 270
 local SUGGEST = 5            -- with no open order, who killed us most: this many, on the orders page
 -- How far a list runs: its first LIST_MAX rows, about three pages, and under the open kill orders the
 -- CLOSED_MAX closed last. A list ran to every row the store holds - 200 on Most wanted, 500 on the
@@ -305,17 +308,18 @@ end
 
 local function BoardItems()
     local items, listed = {}, {}
-    local function Add(r, p, k, d, rank)
+    local function Add(r, p, k, d, a, rank)
         rank = rank or #items + 1
         listed[r.who] = true
         items[#items + 1] = { key = "b:" .. r.who, rank = rank, seal = rank <= 3 and p > 0,
             name = GK.Show(r.who), sub = GK.Title(r.total), face = { key = r.who, rf = r.rf, sx = r.sx, c = r.c },
-            c1 = tostring(k), c2 = tostring(d), right = tostring(p), mine = r.me,
+            -- a dash for a guildie whose client sends no assists: a 0 would say they had none
+            c1 = tostring(k), c2 = tostring(d), c3 = a and tostring(a) or "-", right = tostring(p), mine = r.me,
             select = { kind = "record", key = r.who } }
     end
     -- the top LIST_MAX, and you under them at your own place if you are further down
     for i, r in ipairs(GK.Board(weekly)) do
-        if i <= LIST_MAX or r.me then Add(r, r.p, r.k, r.d, i) end
+        if i <= LIST_MAX or r.me then Add(r, r.p, r.k, r.d, r.a, i) end
     end
     -- This week a short board fills its first page with the rest of the guild, at nothing yet: three rows
     -- and six empty ones under them looked like a list that hadn't loaded ("vis this week leaderboard folk
@@ -324,7 +328,7 @@ local function BoardItems()
     if weekly and #items < ROWS then
         for _, r in ipairs(GK.Board(false)) do
             if #items >= ROWS then break end
-            if not listed[r.who] then Add(r, 0, 0, 0) end
+            if not listed[r.who] then Add(r, 0, 0, 0, r.a and 0) end
         end
     end
     return items, ""
@@ -534,8 +538,8 @@ GK.LedgerPages = {
               Plural(GK.char.points, "point"), rank, of)
       end },
     { name = "Leaderboard", items = BoardItems, icon = MEDIA .. "rank_1",
-      headings = { { "#", 12 }, { "Name", NAME_X_RANKED + 4 }, { "K", COL1, "CENTER" }, { "D", COL2, "CENTER" },
-          { "Points", COL_RIGHT, "RIGHT" } },
+      headings = { { "#", 12 }, { "Name", NAME_X_RANKED + 4 }, { "K", BOARD_K, "CENTER" }, { "D", BOARD_D, "CENTER" },
+          { "A", BOARD_A, "CENTER" }, { "Points", COL_RIGHT, "RIGHT" } },
       links = function()
           return { { text = "This week", on = weekly, click = function() weekly = true end },
                    { text = "All time", on = not weekly, click = function() weekly = false end } }
@@ -778,7 +782,7 @@ local function BuildRow(parent, i)
         else fs:SetPoint("LEFT", row, "LEFT", x - 4, 0) end
         return fs
     end
-    row.c1, row.c2 = Col(COL1, "CENTER"), Col(COL2, "CENTER")
+    row.c1, row.c2, row.c3 = Col(COL1, "CENTER"), Col(COL2, "CENTER"), Col(BOARD_A, "CENTER")
     row.wide, row.right = Col(COL_WIDE), Col(COL_RIGHT, "RIGHT")
     -- A grudge's score, read like a match's: "0 - 1", the leader's number in colour, and under it who
     -- leads. Two bare columns of 0 and 1 under YOU and THEY were "litt dårlig vist" (the owner,
@@ -858,7 +862,7 @@ local function FillRow(row, it, chosen)
         row.mark:Hide()
         row.open:Hide()
         row.rule:Show()
-        row.c1:SetText("") row.c2:SetText("") row.wide:SetText("") row.right:SetText("")
+        row.c1:SetText("") row.c2:SetText("") row.c3:SetText("") row.wide:SetText("") row.right:SetText("")
         row.score:SetText("") row.lead:SetText("")
         row.order:SetText(it.order or "")
         row.cut = false
@@ -900,7 +904,7 @@ local function FillRow(row, it, chosen)
     -- own width, not a fixed 70 kept for "12g 34s": a "+2" in the news cut "Seedkek One" to "Seedke..."
     -- with half the row empty (2026-11-05), and a long sum ran past the fixed stop into the name. Before
     -- a score, short of its "they lead", the widest thing under it.
-    local stop = (it.score and SCORE_X - 32) or (it.c1 and COL1 - 20) or (it.wide and COL_WIDE - 8)
+    local stop = (it.score and SCORE_X - 32) or (it.c3 and BOARD_K - 20) or (it.c1 and COL1 - 20) or (it.wide and COL_WIDE - 8)
         or (it.right and COL_RIGHT - 4 - row.right:GetStringWidth() - 12) or (PAGE_W - 24)
     local room = stop - x0
     -- A line too long for its room steps down a size, then says its short form (first names only, where
@@ -935,8 +939,14 @@ local function FillRow(row, it, chosen)
     row.rank:SetText(it.rank and tostring(it.rank) or "")
     row.face:SetShown(true)
     row.face:Set(it.face or {})
+    -- with a third count (the leaderboard) the first two move closer, to make it room
+    row.c1:ClearAllPoints()
+    row.c1:SetPoint("CENTER", row, "LEFT", (it.c3 and BOARD_K or COL1) - 4, 0)
+    row.c2:ClearAllPoints()
+    row.c2:SetPoint("CENTER", row, "LEFT", (it.c3 and BOARD_D or COL2) - 4, 0)
     row.c1:SetText(it.c1 or "")
     row.c2:SetText(it.c2 or "")
+    row.c3:SetText(it.c3 or "")
     row.wide:SetText(it.wide or "")
     row.mark:SetShown(chosen and not Folded())
     row.open:SetShown(Folded())
