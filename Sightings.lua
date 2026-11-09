@@ -286,7 +286,7 @@ end
 function GK.GuildSeen(guild, most)
     local out, now = {}, GetTime()
     for _, s in pairs(seen) do
-        if s.g == guild and now - s.t <= SEEN_FOR then out[#out + 1] = s end
+        if GK.SameGuild(s.g, guild) and now - s.t <= SEEN_FOR then out[#out + 1] = s end
     end
     table.sort(out, function(a, b)
         if a.t ~= b.t then return a.t > b.t end
@@ -376,7 +376,10 @@ function GK.See(unit)
         local ok, guild = pcall(GetGuildInfo, unit)
         if ok and not Secret(guild) and type(guild) == "string" and guild ~= "" then
             s.g = guild
-            if GK.IsGuildWatched(guild) then GuildNear(guild, key) end
+            if GK.IsGuildWatched(guild) then
+                GuildNear(guild, key)
+                GK.SpellWatchedGuild(guild)          -- a name typed in, spelled as the game does
+            end
         end
     end
     if s.guid then byGuid[s.guid] = s end

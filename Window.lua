@@ -56,6 +56,34 @@ local COL1, COL2, COL_WIDE, COL_RIGHT = 232, 266, 196, PAGE_W - 36
 local SCORE_X = COL_RIGHT - 34                       -- the middle of a grudge's score ("0 - 1")
 local SUGGEST = 5            -- with no open order, who killed us most: this many, on the orders page
 local TAB_GAP, GROUP_GAP = 3, 16                     -- between two tabs; and before the friendly pages, or Friends
+-- How far up the tabs go, behind the frame's bottom edge. The game's own windows put them 2 up and over
+-- the edge, which here read as buttons set under the book: "føler ikke tabsene henger helt ordentlig på?"
+-- (the owner, 2026-11-08). The edge is 11 deep (rows 30-40 of the owner's screenshot). 10 up hid their tops
+-- behind it and they hung from the book, but short: "de er litt lave, trenger ikke være så langt inn under"
+-- (the owner, the same day). 6 up, half way.
+local TAB_TUCK = 6
+-- They are drawn in Forever's heavy tab art, not the game's bottom tabs: those (uiframe-tab-*-c60) have one
+-- thin line where the frame's edge has a double one about 6 deep - "de ikke er like tykke i border som selve
+-- ramma" (the owner, 2026-11-08). ui-frame-metal-Tabs-c60 is 60 x 60 (and a 2x copy): the same double
+-- line, about 6 deep, square on its left side, its right corners cut off (looked at in the art, 2026-11-08).
+-- Turned a quarter clockwise it is a bottom tab - the square side meets the frame, the cut corners hang
+-- below. HEAVY_CUT leaves off the band along its square side, as the frame's edge is where a tab starts;
+-- HEAVY_CORNER keeps the cut corners whole at any width. Its dark ground (-BG-) comes with it, and its
+-- yellow glow (-Glow-), full on the chosen tab and fainter on hover (HeavyTab). The glow fades in from the
+-- square side as far as 17 (GLOW_CUT): cut at 8 like the line, the rest drew a yellow bar under the edge.
+local HEAVY = { ground = "ui-frame-metal-Tabs-BG-c60", edge = "ui-frame-metal-Tabs-c60", glow = "ui-frame-metal-Tabs-Glow-c60" }
+local HEAVY_SIZE, HEAVY_CUT, GLOW_CUT, HEAVY_CORNER, HOVER_ALPHA = 60, 8, 17, 16, 0.45
+local GLOW_FADE = 6          -- how far down the glow comes in from nothing, below the frame's edge (HeavyTab)
+local TAB_H, TAB_H_ON = 36, 42      -- the tab's art, and the chosen tab's, longer: the game's own two heights
+-- The text in the middle of what shows between the frame's edge and the art's bottom line, and clear of
+-- its side lines and glow: "text er litt overlap med gløden og kantene på knappene" (the owner,
+-- 2026-11-08). Measured on that screenshot: the inside runs from 4 to 27 down a tab (to 33 down the
+-- chosen one, 6 longer), and the words' capitals stood at 14 to 21 (17 to 24 chosen), their tails to 24
+-- (27): 3 up puts as much room over the capitals as under the tails. The game's
+-- own tab puts its words 10 from each side (TAB_SIDES_PADDING 20 for both, SharedUIPanelTemplates.lua),
+-- which in this art is on its 2-to-8 line and in the 8-to-17 glow: TAB_PAD more gives 16 a side.
+local TAB_TEXT_Y, TAB_TEXT_Y_ON = 1, -2
+local TAB_PAD = 12
 
 --- Where each page of a list starts (0-based offsets into it): ROWS rows a page, but a heading is never
 --- the last row of a page - it goes over to the next one with its rows. Turning a page goes from one
@@ -191,15 +219,26 @@ local function OrderItems()
         end
     end
     -- The watched guild: an enemy guild the guild knows, anyone of theirs near warns you (Notes.lua). An
-    -- officer puts it on watch from the right-click menu on one of its players, which gives its name as
-    -- the game spells it; one at a time.
+    -- officer puts it on watch from the right-click menu on one of its players, or types its name in from
+    -- the word at this heading's right, with none of theirs in sight ("la GM skrive inn et guildnavn", the
+    -- owner, 2026-11-08); one at a time. The heading stays for an officer while none is watched, but not
+    -- on a page with nothing else: there it would hide what the page says about posting, which says this
+    -- too.
     local guilds = GK.WatchedGuildItems and GK.WatchedGuildItems() or {}
-    if #guilds > 0 then
-        items[#items + 1] = { header = true, name = "Watched guild" }
+    local officer = GK.CanWatchGuild and GK.CanWatchGuild()
+    if #guilds > 0 or (officer and #items > 0) then
+        local head = { header = true, name = "Watched guild" }
+        if officer then
+            head.order = #guilds > 0 and "watch another" or "watch a guild"
+            head.clickTip = "Type the name of an enemy guild: anyone of theirs near warns everyone"
+            head.click = function() GK.OpenPicker("guild") end
+        end
+        items[#items + 1] = head
         for _, it in ipairs(guilds) do items[#items + 1] = it end
     end
     return items, "No kill orders. Post one with Post a kill order, at the top of this page - or right-click "
-        .. "an enemy player and pick it there."
+        .. "an enemy player and pick it there." .. (officer and " Put an enemy guild on watch with /grudge guild."
+        or "")
 end
 
 local function BoardItems()
@@ -322,7 +361,7 @@ local SAID = { K = "%s killed %s", D = "%s fell to %s", F = "%s fulfilled the or
 --- A name by its first word: the character's own name, without the surname.
 local function FirstName(key)
     local s = GK.Show(key)
-    return s:match("^%S+") or s
+    return s:match("^[^ ]+") or s                   -- not %S: see GK.SameName
 end
 
 local function NewsItems()
@@ -1422,7 +1461,7 @@ local function PlaceTabs(folded)
     end
     local width, chosen = 0, nil
     for i, t in ipairs(row) do
-        PanelTemplates_TabResize(t, 0)
+        PanelTemplates_TabResize(t, TAB_PAD)
         t.gap = (i > 1 and (t == win.swap or t.side ~= row[i - 1].side)) and GROUP_GAP or TAB_GAP
         width = width + t:GetWidth() + (i > 1 and t.gap or 0)
         if t.selected then chosen = t end
@@ -1433,7 +1472,7 @@ local function PlaceTabs(folded)
         for i, t in ipairs(row) do if i > 1 then gaps = gaps + t.gap end end
         local share = math.floor((room - gaps - (chosen and chosen:GetWidth() or 0)) / (#row - (chosen and 1 or 0)))
         for _, t in ipairs(row) do
-            if t ~= chosen then PanelTemplates_TabResize(t, 0, share) end
+            if t ~= chosen then PanelTemplates_TabResize(t, TAB_PAD, share) end
         end
     end
     -- Open, the friendly pages sit at the frame's right edge, apart from the enemy's ("skyv shame og kudos
@@ -1446,13 +1485,13 @@ local function PlaceTabs(folded)
     end
     for i, t in ipairs(row) do
         t:ClearAllPoints()
-        if i == 1 then t:SetPoint("TOPLEFT", win, "BOTTOMLEFT", 12, 2)
+        if i == 1 then t:SetPoint("TOPLEFT", win, "BOTTOMLEFT", 12, TAB_TUCK)
         elseif not firstRight or i < firstRight then t:SetPoint("TOPLEFT", row[i - 1], "TOPRIGHT", t.gap, 0) end
     end
     if firstRight then
         for i = #row, firstRight, -1 do
             local t = row[i]
-            if i == #row then t:SetPoint("TOPRIGHT", win, "BOTTOMRIGHT", -12, 2)
+            if i == #row then t:SetPoint("TOPRIGHT", win, "BOTTOMRIGHT", -12, TAB_TUCK)
             else t:SetPoint("TOPRIGHT", row[i + 1], "TOPLEFT", -row[i + 1].gap, 0) end
         end
     end
@@ -1501,12 +1540,115 @@ local function Fold(on)
     Refresh()
 end
 
+--- One of the heavy art's atlases over a tab (HEAVY, at the top), cut in six: two rows - what stretches with
+--- the tab's height, then the cut corners - by three columns - a corner, what stretches with its width, a
+--- corner. Turned a quarter clockwise: the art's x runs down the tab, its y from the tab's right to its left.
+local function HeavyPieces(t, info, layer, sub, cut, fade)
+    local l, r, top, bottom = info.leftTexCoord, info.rightTexCoord, info.topTexCoord, info.bottomTexCoord
+    local function U(x) return l + (r - l) * x / HEAVY_SIZE end
+    local function V(y) return top + (bottom - top) * y / HEAVY_SIZE end
+    local S, C = HEAVY_SIZE, HEAVY_CORNER
+    local rows, cols = { { cut, S - C }, { S - C, S } }, { { S - C, S }, { C, S - C }, { 0, C } }
+    -- with a fade, a short row of its own on top, as long on screen as in the art (TabLook)
+    if fade then rows = { { cut, cut + fade }, { cut + fade, S - C }, { S - C, S } } end
+    local set = { fade = fade }
+    for i, x in ipairs(rows) do
+        set[i] = {}
+        for j, y in ipairs(cols) do
+            local p = t:CreateTexture(nil, layer, nil, sub)
+            p:SetTexture(info.file or info.filename)
+            -- top left, bottom left, top right, bottom right: the art's bottom left, bottom right, top left,
+            -- top right - the quarter turn
+            p:SetTexCoord(U(x[1]), V(y[2]), U(x[2]), V(y[2]), U(x[1]), V(y[1]), U(x[2]), V(y[1]))
+            set[i][j] = p
+        end
+    end
+    return set
+end
+
+--- Forever's heavy art in place of the tab's thin art: false, and the tab left as the game draws it, when
+--- the client has any of the three missing (the client's data has all three, build 70425).
+local function HeavyTab(t)
+    local info = {}
+    for key, atlas in pairs(HEAVY) do
+        info[key] = C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(atlas)
+        if not (info[key] and (info[key].file or info[key].filename)) then return false end
+    end
+    t.heavy = {
+        ground = HeavyPieces(t, info.ground, "BACKGROUND", 1, HEAVY_CUT),
+        glow = HeavyPieces(t, info.glow, "BORDER", 0, GLOW_CUT, GLOW_FADE),
+        edge = HeavyPieces(t, info.edge, "BORDER", 1, HEAVY_CUT),
+        hover = HeavyPieces(t, info.glow, "HIGHLIGHT", 0, GLOW_CUT, GLOW_FADE),
+    }
+    for i, row in ipairs(t.heavy.hover) do
+        for _, p in ipairs(row) do
+            p:SetBlendMode("ADD")
+            if i > 1 then p:SetAlpha(HOVER_ALPHA) end        -- the fade's row has it in its gradient, below
+        end
+    end
+    -- The glow begins where the frame's edge ends (TabLook) and fades in from nothing there, over its top
+    -- GLOW_FADE. Begun there at full it stopped hard against the edge: "hover gløden har litt hard kant
+    -- opp mot ramma ... ser cutoff" (the owner, 2026-11-08). Begun behind the edge instead it showed
+    -- through the edge's lower band, which is not solid ("nope", the owner's screenshot the same day: the
+    -- band yellow over the tab's sides only). Faded down the whole of the sides, they were brightest just
+    -- over the cut corners, which begin at full - "fortsatt en strek midt over gløden?" (the next
+    -- screenshot: 115 then 60 across that seam). A gradient's first colour is its bottom, as the game's
+    -- nameplates fade theirs (Blizzard_NamePlates.lua) - and as those screenshots showed, brighter down.
+    -- The hover's faintness goes into the gradient itself: with SetAlpha as well, the fade's row ended at
+    -- full, about twice the rest of the hover glow ("fortsatt glød cut midt på?", the owner, 2026-11-09:
+    -- 97 then 49 across that seam, as 1 to 0.45) - the gradient's colours carry an alpha, and it won.
+    for _, key in ipairs({ "glow", "hover" }) do
+        local full = key == "hover" and HOVER_ALPHA or 1
+        for _, p in ipairs(t.heavy[key][1]) do
+            p:SetGradient("VERTICAL", CreateColor(1, 1, 1, full), CreateColor(1, 1, 1, 0))
+        end
+    end
+    -- the game's thin art and its glow stay, unseen: the tab's least width is theirs (PanelTemplates_TabResize)
+    for _, k in ipairs({ "Left", "Middle", "Right", "LeftActive", "MiddleActive", "RightActive",
+        "LeftHighlight", "MiddleHighlight", "RightHighlight" }) do
+        if type(t[k]) == "table" then t[k]:SetAlpha(0) end
+    end
+    return true
+end
+
+--- The heavy art laid out for the tab's state: the chosen tab longer and lit, as the game's own chosen
+--- tab is longer. The glow, lit or hover, starts below the frame's edge (HeavyTab says why).
+local function TabLook(t)
+    if not t.heavy then return end
+    local on = t.selected and true or false
+    local h, C = on and TAB_H_ON or TAB_H, HEAVY_CORNER
+    for key, set in pairs(t.heavy) do
+        local from = (key == "glow" or key == "hover") and TAB_TUCK or 0
+        -- the rows' heights down the tab: the fade's own (the glow), what stretches, the cut corners
+        local tall = set.fade and { set.fade, h - C - from - set.fade, C } or { h - C - from, C }
+        local y = -from
+        for i, row in ipairs(set) do
+            for j, p in ipairs(row) do
+                p:ClearAllPoints()
+                p:SetHeight(tall[i])
+                if j == 2 then
+                    p:SetPoint("TOPLEFT", t, "TOPLEFT", C, y)
+                    p:SetPoint("TOPRIGHT", t, "TOPRIGHT", -C, y)
+                else
+                    p:SetWidth(C)
+                    p:SetPoint(j == 1 and "TOPLEFT" or "TOPRIGHT", t, j == 1 and "TOPLEFT" or "TOPRIGHT", 0, y)
+                end
+            end
+            y = y - tall[i]
+        end
+    end
+    for _, row in ipairs(t.heavy.glow) do
+        for _, p in ipairs(row) do p:SetShown(on) end
+    end
+end
+
 local function SelectTab(i)
     tab, offset, turned = i, 0, false
     -- the game's chosen look: the tab raised and joined to the frame, and not clickable again
     for j, t in ipairs(win.tabs) do
         t.selected = j == i
         if t.selected then PanelTemplates_SelectTab(t) else PanelTemplates_DeselectTab(t) end
+        TabLook(t)
     end
     PlaceTabs(Folded())                              -- folded, the row shows the group of the page
     Refresh()
@@ -1559,8 +1701,12 @@ end
 
 --- One of the game's tabs under the frame. Its size and place are PlaceTabs' alone: the template's own
 --- OnShow and OnEvent size it to its words again, which undid a row squeezed to fit the folded window.
+--- It sits at the frame's own level, under its edge (Build raises the edge), in Forever's heavy art
+--- (HeavyTab), its text in the middle of what shows; the game's select and deselect read the two offsets.
 local function Tab(text, onClick)
     local t = CreateFrame("Button", nil, win, "PanelTabButtonTemplate")
+    t:SetFrameLevel(win:GetFrameLevel())
+    t.deselectedTextY, t.selectedTextY = TAB_TEXT_Y, TAB_TEXT_Y_ON
     t:SetText(text)
     t:SetScript("OnShow", nil)
     t:SetScript("OnEvent", nil)
@@ -1568,6 +1714,7 @@ local function Tab(text, onClick)
         GK.Sound("IG_CHARACTER_INFO_TAB")
         onClick(self)
     end)
+    if HeavyTab(t) then TabLook(t) end
     return t
 end
 
@@ -1637,10 +1784,15 @@ local function Build()
     end)
     PanelTemplates_DeselectTab(win.swap)
     win.swap:Hide()
-    -- the template's X: its click is our own, as the template's HideUIPanel does nothing in combat
+    -- The frame's edge over the tabs' tops (they are at the frame's own level, Tab), and under the inner
+    -- frame and the pages as before. The template makes it at the frame's own level too.
+    if type(win.NineSlice) == "table" then win.NineSlice:SetFrameLevel(level + 1) end
+    -- the template's X: its click is our own, as the template's HideUIPanel does nothing in combat. Over
+    -- the edge, now the edge is raised: the X sits on its corner.
     local close = type(win.ClosePanelButton) == "table" and win.ClosePanelButton
         or CreateFrame("Button", nil, win, "UIPanelCloseButton")
     close:SetScript("OnClick", function() win:Hide() end)
+    close:SetFrameLevel(level + 4)
     win.close = close
     -- The fold: the spells panel's own button beside the X (the owner's screenshot, 2026-11-06), the
     -- game's red square with the arrow - out to open the window, in to fold it to one page. Its own
@@ -1826,6 +1978,40 @@ end
 
 function GK.ToggleWindow()
     if win and win:IsShown() then win:Hide() else GK.OpenWindow() end
+end
+
+--- The ledger open at a page found by its name, on the row with this key when the page has one; the book
+--- open or folded (folded, nil: as it is) and the leaderboard on this week or all time (weeklyBoard, nil:
+--- as it is). For the screenshot mode (Shots.lua), which names the page it wants a picture of. False when
+--- there is no such page.
+function GK.ShowLedgerPage(name, rowKey, folded, weeklyBoard)
+    if not win then Build() end
+    for i, def in ipairs(GK.LedgerPages) do
+        if def.name == name then
+            if folded ~= nil and folded ~= Folded() then Fold(folded) end
+            if weeklyBoard ~= nil then weekly = weeklyBoard end
+            SelectTab(i)
+            selected[i] = rowKey
+            win:Show()
+            win:Raise()
+            Refresh()
+            return true
+        end
+    end
+    return false
+end
+
+--- Fold the ledger to one page (on) or open it to two, kept as the choice, as its own button does.
+function GK.FoldLedger(on)
+    if win then Fold(on) else GK.db.ledgerFolded = on or nil end
+end
+
+--- The ledger's frame and its tabs, which hang below it: what a picture of the ledger has to take in.
+function GK.LedgerFrames()
+    if not win then return {} end
+    local list = { win, win.swap }                  -- the swap tab: folded, the last of the row
+    for _, t in ipairs(win.tabs) do list[#list + 1] = t end
+    return list
 end
 
 -- Once per burst of changes (GK.Changed gathers them); Refresh returns at once while the book is shut.

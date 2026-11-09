@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.0
+
+- **Names in Cyrillic show.** A character named in Russian letters showed up as nothing, or as empty boxes, in the ledger, on the cards and in the letters, because Grudgekeeper's two typefaces hold only the Latin alphabet. Its text now falls back to the game's own Cyrillic faces, as the game's windows do, and to its Korean and Chinese ones too.
+- **Typing such a name works.** In the box that asks who, a name typed in Cyrillic or with ø, æ or å gets its capital letter as the game writes it ("петя" becomes "Петя"), and searching finds a name whatever case you type it in. Before, the box turned a Cyrillic name down.
+- **The ledger's tabs hang from the book.** Their tops now sit behind the frame's bottom edge, and they have the same heavy double border as the frame, so they no longer look like a row of buttons set under the window.
+- **Officers can type in the guild to watch.** Before, a guild went on watch only from the right-click menu on one of its players, so a guild nobody had met lately could not be watched at all. Officers and the guild master can now type it in with `/grudge guild`, or with the "watch a guild" link on the Watched guild heading of the kill orders page once there is an order up: the guild's name, in any case. The first time an officer meets one of its players, the game's own spelling replaces what was typed.
+- **No screenshot unless you ask for one.** A new install no longer takes a screenshot when you fulfil a kill order. Tick "When I fulfil a kill order" under Screenshots in the settings to have one. If you already had it on, it stays on.
+- **Close instead of Later on the letters.** A letter about your new title, a death, a payment or an expired order had a Later button, which kept the letter unread, so the letter icon came straight back. It is a Close button now: the letter has been read, and it goes.
+- **A sound of your choice when someone on your Shame list joins your group.** The settings' Notes section has a Sound dropdown under that warning: the chime it has always made to begin with, the raid warning, the ready check and a few more of the game's own, or None. The guild YippYapp also has a Norwegian clip of its own, "Måkke ta med han", and starts with that. Any sound another addon has registered with LibSharedMedia is listed too. Picking one plays it, so you hear what you chose, and several joining at once make one sound.
+
 ## 1.0.0
 
 - **The first release.** Out of beta: the same addon as 0.1.0-beta4, whose notes are below.

@@ -21,7 +21,10 @@ local defaults = {
     myLetters = true,        -- a letter for a kill that earns a title, and a death that posts an order
     alertNear = true,        -- warn when the target of any open kill order is near, or a guildie sees them
     plateMarks = true,       -- a skull over anyone with an open order on them
-    shotFulfil = true,       -- a screenshot when you fulfil an order (the user asked for this one)
+    -- a screenshot when you fulfil an order: off to begin with, "ikke la screenshots være på ved default"
+    -- (the owner, 2026-11-08). Defaults are written into the saved table, so an account that had it on
+    -- keeps it on until the box is unticked.
+    shotFulfil = false,
     shotEveryKill = false,   -- a screenshot at every kill
     share = true,            -- tell the guild your kills, deaths and score, and where targets are seen
     autoOrders = true,       -- your death to someone on a rampage or camping you posts a kill order (Guild.lua)
@@ -37,6 +40,7 @@ local defaults = {
     noteAlerts = false,      -- warn when a player on your Marked list is near
     watchNearby = false,     -- one chat line when a player on your Shame list is near
     watchGroup = true,       -- warn when a Shame list player joins your group
+    shameSound = "auto",     -- and the sound it plays (GK.SoundChoices; "off" for none; "auto" until one is picked: GK.ShameSoundKey)
     kudosGroup = false,      -- one friendly chat line when a Kudos player joins your group (chat: off, the owner doesn't read it)
     plateNotes = true,       -- a small dim mark on the nameplate of a player you have notes on
     guilds = {},             -- [guild key] = { board, orders, wanted, slain, feed, nextId } (Guild.lua)
@@ -198,6 +202,9 @@ end
 --- For display: no realm of ours, and the surname only when the player shows surnames.
 function GK.Show(key)
     if not key then return "?" end
+    -- the screenshot mode (Shots.lua) puts a made-up name where yours would be
+    local stand = GK.shotNames and GK.shotNames[key]
+    if stand then return stand end
     -- First name and surname, never a realm: on Forever a realm is one of a server's internal ones
     -- ("CAMWOWEU5Realm2PvP"), which means nothing to anyone reading it ("nemesis viser spiller med
     -- realmnavn bak. det trengs ikke. bare fornavn etternavn", the owner, 2026-11-07). LIB.ShortName drops
@@ -222,7 +229,9 @@ function GK.SameName(a, b)
     a = a:gsub("%-[^%-]*$", "")
     b = b:gsub("%-[^%-]*$", "")
     if a == b then return true end
-    local fa, fb = a:match("^%S+"), b:match("^%S+")
+    -- the first word up to a plain space: %S follows the locale, and under Latin-1 it ends a Cyrillic
+    -- name at the 0xA0 inside "Р" (GK.Lower's note)
+    local fa, fb = a:match("^[^ ]+"), b:match("^[^ ]+")
     if fa ~= fb then return false end
     return a == fa or b == fb
 end
@@ -433,6 +442,104 @@ function GK.Sound(kit)
     if id then pcall(PlaySound, id, "Master") end
 end
 
+-- A sound you pick for a warning (a Shame player joining your group, 2026-11-08: "spille denne ... eller
+-- andre lyder man kan velge i settings"). Keys: "off", "file:<ours>" for a file in Media, "kit:<name>" for
+-- one of the game's own by its SOUNDKIT name (one this client lacks is left out), and "lsm:<name>" for a
+-- sound another addon registered with LibSharedMedia - we embed no library, so those are there only when
+-- something else has loaded it.
+-- A file can be for one guild only, and then it is neither listed nor played anywhere else: "Måkke ta med
+-- han" is a Norwegian clip, for the guild it was made for (the owner, 2026-11-09: "det burde nok ikke være
+-- standard lyden med mindre du er medlem i yippyapp.. siden det er norskt", then "kankje bare yippyapp ahr
+-- det som et valg i det hele tatt").
+local SOUND_FILES = {
+    { "makke", "Måkke ta med han", "Interface\\AddOns\\Grudgekeeper\\Media\\makke.mp3", guild = "YippYapp" },
+}
+local CHIME = "kit:UI_RAID_BOSS_WHISPER_WARNING"
+
+--- Whether one of our files is ours to offer: one for a guild only while we are in it (in any case), and
+--- not while the client can't say which guild that is.
+local function Offered(s)
+    if not s.guild then return true end
+    local mine = GetGuildInfo and GetGuildInfo("player")
+    return type(mine) == "string" and not Secret(mine) and GK.SameGuild(mine, s.guild)
+end
+local SOUND_KITS = {
+    { "UI_RAID_BOSS_WHISPER_WARNING", "The chime" },
+    { "RAID_WARNING", "Raid warning" },
+    { "READY_CHECK", "Ready check" },
+    { "ALARM_CLOCK_WARNING_3", "Alarm" },
+    { "IG_PLAYER_INVITE", "Group invite" },
+}
+
+local function SharedMedia()
+    if type(LibStub) ~= "table" then return nil end
+    local ok, lib = pcall(LibStub, "LibSharedMedia-3.0", true)
+    return ok and type(lib) == "table" and type(lib.HashTable) == "function" and lib or nil
+end
+
+local function SharedSounds()
+    local lsm = PlaySoundFile and SharedMedia()
+    if not lsm then return nil end
+    local ok, sounds = pcall(lsm.HashTable, lsm, "sound")
+    return ok and type(sounds) == "table" and sounds or nil
+end
+
+--- Every sound there is to pick, { { key, label } }: none, ours, the game's, then other addons' by name.
+function GK.SoundChoices()
+    local list = { { "off", "None" } }
+    for _, s in ipairs(SOUND_FILES) do
+        if Offered(s) then list[#list + 1] = { "file:" .. s[1], s[2] } end
+    end
+    for _, s in ipairs(SOUND_KITS) do
+        if SOUNDKIT and SOUNDKIT[s[1]] then list[#list + 1] = { "kit:" .. s[1], s[2] } end
+    end
+    local shared = SharedSounds()
+    if shared then
+        local names = {}
+        for name in pairs(shared) do
+            if type(name) == "string" and name ~= "None" then names[#names + 1] = name end
+        end
+        table.sort(names)
+        for _, name in ipairs(names) do list[#list + 1] = { "lsm:" .. name, name } end
+    end
+    return list
+end
+
+--- Play a picked sound, whatever the Sounds setting says (the caller asks it). Returns true when the game
+--- took it, false for none picked or one that can't be played - a file gone, a sound pack uninstalled.
+function GK.PlayChoice(key)
+    if type(key) ~= "string" then return false end
+    local kind, name = key:match("^(%a+):(.+)$")
+    local file
+    if kind == "kit" then
+        local id = SOUNDKIT and SOUNDKIT[name]
+        if not id then return false end
+        local ok, played = pcall(PlaySound, id, "Master")
+        return ok and played ~= false
+    elseif kind == "file" then
+        for _, s in ipairs(SOUND_FILES) do
+            if s[1] == name and Offered(s) then file = s[3] end
+        end
+    elseif kind == "lsm" then
+        local shared = SharedSounds()
+        file = shared and shared[name]
+    end
+    if not (file and PlaySoundFile) then return false end
+    local ok, played = pcall(PlaySoundFile, file, "Master")
+    return ok and played and true or false
+end
+
+--- The sound a Shame player joining plays: the one picked in the settings, and until one is ("auto") the
+--- clip of a guild we are in, or the chime.
+function GK.ShameSoundKey()
+    local key = GK.db and GK.db.shameSound
+    if type(key) == "string" and key ~= "auto" then return key end
+    for _, s in ipairs(SOUND_FILES) do
+        if s.guild and Offered(s) then return "file:" .. s[1] end
+    end
+    return CHIME
+end
+
 --- Something changed that a window may show. Every guild message calls this, and at login they come
 --- by the hundred, so the windows, the nameplate skulls and the mailbox button hear about it ONCE per
 --- burst, a moment later, rather than once per message (each of them used to start its own timer per
@@ -615,6 +722,7 @@ local function Help()
     print("  /grudge test  - four sample letters, to see what they look like")
     print("  /grudge notice  - show the letter icon to drag it where you want it (notice reset: back to start)")
     print("  /grudge options  - open the settings")
+    print("  /grudge guild  - officers: put an enemy guild on watch by its name")
 end
 
 SLASH_GRUDGEKEEPER1 = "/grudge"
@@ -637,8 +745,15 @@ SlashCmdList.GRUDGEKEEPER = function(msg)
         GK.PlaceNotice(cmd == "notice reset")
     elseif cmd == "options" or cmd == "settings" then
         GK.OpenOptions()
+    elseif cmd == "guild" then
+        -- the guild on watch, typed in (Pick.lua): for an officer or the guild master, as on the ledger.
+        -- Not "watch": that is the Shame list's word (NotesUI.lua)
+        if GK.CanWatchGuild() then GK.OpenPicker("guild")
+        else print(TAG .. ": only an officer or the guild master can put a guild on watch.") end
     elseif cmd == "debug" then
         if GK.OpenDebug then GK.OpenDebug() else GK.Debug() end
+    elseif cmd == "shots" and GK.OpenShots then
+        GK.OpenShots()                -- pictures for the store page, with a made-up guild (Shots.lua)
     else
         Help()
     end
@@ -698,6 +813,72 @@ end
 
 function GK.Classic() return GK.LOOK == GK.LOOKS.classic end
 
+-- ---------------------------------------------------------------------------
+-- Every alphabet a name is written in
+-- ---------------------------------------------------------------------------
+-- Friz Quadrata and Morpheus hold the Latin letters only, so a character named in Cyrillic was drawn as
+-- nothing in our windows ("vi må ha support for russiske bokstaver ... fordi noen characters har slike
+-- navn", the owner, 2026-11-07). The game's own fonts are families with one file per alphabet
+-- (Blizzard_Fonts_Shared/GameFonts.xml), and ours are too: CreateFontFamily (FontDocumentation.lua) makes
+-- one per face, size and flags, the first time it is asked for. Without it, the face alone.
+local OTHER_ALPHABETS = {
+    { "russian", { ["Fonts\\MORPHEUS.ttf"] = "Fonts\\MORPHEUS_CYR.ttf" }, "Fonts\\FRIZQT___CYR.TTF" },
+    { "korean", {}, "Fonts\\2002.TTF" },
+    { "simplifiedchinese", {}, "Fonts\\ARKai_T.ttf" },
+    { "traditionalchinese", {}, "Fonts\\blei00d.TTF" },
+}
+local families, familyCount = {}, 0
+
+local function Family(file, size, flags)
+    if not CreateFontFamily then return nil end
+    local id = file .. "|" .. size .. "|" .. flags
+    local family = families[id]
+    if family == nil then
+        local members = { { alphabet = "roman", file = file, height = size, flags = flags } }
+        for _, a in ipairs(OTHER_ALPHABETS) do
+            members[#members + 1] = { alphabet = a[1], file = a[2][file] or a[3], height = size, flags = flags }
+        end
+        familyCount = familyCount + 1
+        local ok, made = pcall(CreateFontFamily, "GrudgekeeperFont" .. familyCount, members)
+        family = ok and made or false
+        families[id] = family
+    end
+    return family or nil
+end
+
+--- A text's face and size, in a family that also writes Cyrillic, Korean and Chinese names; the face
+--- alone on a client without font families.
+function GK.SetFont(fs, file, size, flags)
+    flags = flags or ""
+    local family = Family(file, size, flags)
+    if family then fs:SetFontObject(family) else fs:SetFont(file, size, flags) end
+end
+
+--- Lower case for the letters names are written in: a to z, the Latin-1 letters (Ø to ø) and Cyrillic (Ж
+--- to ж). string.lower knows a to z only, so "ПЕТЯ" never found "Петя" - and under a Latin-1 locale it
+--- lowers the lead byte of a UTF-8 letter too (0xD0 to 0xF0: the smoke test's Lua did), breaking it. So A
+--- to Z by their bytes, never by the locale.
+function GK.Lower(s)
+    s = s:gsub("[A-Z]", function(c) return string.char(c:byte() + 32) end)
+    s = s:gsub("\195([\128-\158])", function(b) if b ~= "\151" then return "\195" .. string.char(b:byte() + 32) end end)
+    s = s:gsub("\208([\144-\159])", function(b) return "\208" .. string.char(b:byte() + 32) end)
+    s = s:gsub("\208([\160-\175])", function(b) return "\209" .. string.char(b:byte() - 32) end)
+    s = s:gsub("\208([\128-\143])", function(b) return "\209" .. string.char(b:byte() + 16) end)
+    return s
+end
+
+--- A word with its first letter a capital, as the game writes a name: a to z, Latin-1 and Cyrillic.
+function GK.UpperFirst(w)
+    local a, b = w:byte(1, 2)
+    if not a then return w end
+    if a < 128 then return (w:gsub("^%l", string.upper)) end
+    if a == 195 and b and b >= 160 and b <= 190 and b ~= 183 then return string.char(195, b - 32) .. w:sub(3) end
+    if a == 208 and b and b >= 176 and b <= 191 then return string.char(208, b - 32) .. w:sub(3) end
+    if a == 209 and b and b >= 128 and b <= 143 then return string.char(208, b + 32) .. w:sub(3) end
+    if a == 209 and b and b >= 144 and b <= 159 then return string.char(208, b - 16) .. w:sub(3) end
+    return w
+end
+
 -- What GK.Ink and GK.Paint drew, to draw again in the other skin (weak: a thing let go is forgotten).
 local inked = setmetatable({}, { __mode = "k" })
 local painted = setmetatable({}, { __mode = "k" })
@@ -711,7 +892,7 @@ function GK.Ink(fs, colour, font, size)
     if font == GK.TITLE_FONT then
         font, size = look.title, math.floor(size * look.titleScale + 0.5)
     end
-    fs:SetFont(font, size, "")
+    GK.SetFont(fs, font, size)
     fs:SetTextColor(colour[1], colour[2], colour[3])
     if look.shadow then
         fs:SetShadowColor(0, 0, 0, 1)

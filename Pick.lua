@@ -7,6 +7,9 @@
 -- 15 minutes and your grudges. Typing narrows them, and searches everyone we keep a record of; a name
 -- nobody has met is taken as typed. A pick opens the sheet the right-click menu opens: the kill order
 -- (GK.OpenPost) or the note (GK.OpenNoteSheet), filled in.
+-- And for an officer, which enemy guild goes on watch (Notes.lua, GK.WatchGuild): typed in, as the
+-- right-click menu needs one of its players in sight - "la GM skrive inn et guildnavn ... om vi ikke
+-- klarer å finne noen fra den guilden" (the owner, 2026-11-08).
 local ADDON, GK = ...
 local LIB = LibStub("LibForever-1.0")
 
@@ -24,7 +27,12 @@ local KINDS = {
     kos = { title = "Who do you mark?", enemy = true, list = "kos" },
     watch = { title = "Who goes on Shame?", list = "watch" },
     kudos = { title = "Who gets kudos?", list = "kudos" },
+    guild = { title = "Which guild goes on watch?", guild = true, hint = "Type the guild's name",
+        none = "Type the guild's name as the game shows it, in any case: the game's own spelling takes its "
+            .. "place when one of theirs is seen." },
 }
+local HINT = "Type a name, or pick one"
+local NONE = "Nobody to suggest yet. Type their name: first name and surname, as the game shows it."
 
 local function Ink(fs, colour, size) GK.Ink(fs, colour, GK.TEXT_FONT, size) end
 
@@ -137,28 +145,69 @@ local function Suggestions(kind)
 end
 
 --- A typed name as a key, if it can be one: one or two words of letters ("First Surname"), each given
---- a capital first letter. nil for anything else - digits, a realm, a link.
+--- a capital first letter - a to z, ø to Ø and Cyrillic alike (GK.UpperFirst), as the game writes a
+--- name. nil for anything else - digits, a realm, a link.
 function GK.TypedName(text)
-    text = strtrim(text or ""):gsub("%s+", " ")
+    -- spaces, digits and punctuation by their ASCII bytes, never by %s, %d and %p: those follow the
+    -- locale, and under Latin-1 the bytes of a Cyrillic letter count as both (0xBF inside "п", 0xA0
+    -- inside "Р") - "петя" was refused in the smoke test's Lua
+    text = strtrim(text or ""):gsub("[ \t]+", " ")
     if text == "" or #text > 40 then return nil end
     local words = {}
-    for w in text:gmatch("%S+") do
-        if w:find("[%d%p]") then return nil end
-        words[#words + 1] = (w:gsub("^%l", string.upper))
+    for w in text:gmatch("[^ ]+") do
+        if w:find("[0-9!-/:-@%[-`{-~]") then return nil end
+        words[#words + 1] = GK.UpperFirst(w)
     end
     if #words > 2 then return nil end
     return GK.KeyOf(table.concat(words, " "))
+end
+
+--- The rows for a guild to watch: the enemy guilds seen lately, but the one on watch - their guilds are
+--- read only while one is (Sightings.lua), so these come when one takes another's place - and the name
+--- as typed: first when no guild seen has it in its name, last when one does.
+local function GuildRows(text)
+    local raw = strtrim(text or "")
+    local find = GK.Lower(raw)
+    local guilds, order = {}, {}
+    for _, s in ipairs(GK.SeenList()) do                 -- the latest first
+        local g = type(s.g) == "string" and s.g ~= "" and not GK.IsGuildWatched(s.g) and s.g
+        if g then
+            if not guilds[g] then
+                guilds[g] = { n = 0, t = s.t, z = s.z }
+                order[#order + 1] = g
+            end
+            guilds[g].n = guilds[g].n + 1
+        end
+    end
+    local out, have = {}, {}
+    local clock, wall = GetTime(), time()
+    for _, g in ipairs(order) do
+        if find == "" or GK.Lower(g):find(find, 1, true) then
+            if #out == 0 then out[1] = { section = "Seen lately" } end
+            local e = guilds[g]
+            out[#out + 1] = { t = { guild = g }, why = ("%d of theirs, seen %s%s"):format(e.n,
+                GK.Ago(wall - (clock - e.t)), e.z and (" - " .. e.z) or "") }
+            have[GK.Lower(g)] = true
+        end
+    end
+    local typed = find ~= "" and GK.ValidGuildName(raw)
+    if typed and not have[GK.Lower(typed)] then
+        table.insert(out, next(have) and #out + 1 or 1, { t = { guild = typed }, why = "as you wrote it", typed = true })
+    end
+    return out
 end
 
 --- The rows for what is typed: the suggestions whose name has it in them, then everyone else we keep a
 --- record of who does (the guild's notes, the leaderboard's names on an enemy kind, your grudges), and
 --- the name as typed when it is nobody's. Without typing, the suggestions.
 function GK.PickRows(kind, text)
+    if KINDS[kind] and KINDS[kind].guild then return GuildRows(text) end
     local rows = Suggestions(kind)
-    text = strtrim(text or ""):lower()
+    -- in any case, Cyrillic and ø included: string.lower knows a to z only (GK.Lower)
+    text = GK.Lower(strtrim(text or ""))
     if text == "" then return rows end
     local out, have, section = {}, {}, nil
-    local function Match(key) return GK.Show(key):lower():find(text, 1, true) ~= nil end
+    local function Match(key) return GK.Lower(GK.Show(key)):find(text, 1, true) ~= nil end
     for _, r in ipairs(rows) do
         if r.section then section = r.section
         elseif Match(r.t.key) then
@@ -205,7 +254,11 @@ local offset = 0
 local function Pick(r)
     if not (r and r.t) then return end
     frame:Hide()
-    if kind == "order" then
+    if r.t.guild then
+        -- on the kill orders page, under Watched guild, where it shows
+        if GK.WatchGuild(r.t.guild, true) then GK.OpenWindow(1)
+        else print(GK.TAG .. ": only an officer or the guild master can put a guild on watch.") end
+    elseif kind == "order" then
         GK.OpenPost(r.t)
     else
         GK.OpenNoteSheet(r.t, KINDS[kind].list)
@@ -229,8 +282,9 @@ local function Fill()
             b:EnableMouse(true)
             b.head:SetText("")
             b.face:SetShown(true)
-            b.face:Set(r.t)
-            b.name:SetText(r.typed and ('"' .. GK.Show(r.t.key) .. '"') or GK.Show(r.t.key))
+            b.face:Set(r.t.guild and {} or r.t)          -- a guild: the seal, as its row in the ledger
+            local shown = r.t.guild and ("<" .. r.t.guild .. ">") or GK.Show(r.t.key)
+            b.name:SetText(r.typed and ('"' .. shown .. '"') or shown)
             b.why:SetText(r.why or "")
         end
     end
@@ -241,7 +295,7 @@ end
 
 local function Build()
     local f = GK.MakeFrameSheet("GrudgekeeperPick", W, H, "")
-    f.box = GK.FrameBox(f, W - 48, 40, "Type a name, or pick one")
+    f.box = GK.FrameBox(f, W - 48, 40, HINT)
     f.box:SetPoint("TOPLEFT", 26, -38)
     f.box:HookScript("OnTextChanged", function()
         offset = 0
@@ -294,7 +348,6 @@ local function Build()
     f.none:SetWidth(W - 52)
     f.none:SetJustifyH("LEFT")
     f.none:SetSpacing(3)
-    f.none:SetText("Nobody to suggest yet. Type their name: first name and surname, as the game shows it.")
     f:EnableMouseWheel(true)
     f:SetScript("OnMouseWheel", function(_, delta)
         offset = math.max(0, offset - delta * 2)
@@ -305,12 +358,15 @@ local function Build()
     frame = f
 end
 
---- Open the picker for a kind: "order" (a kill order), or a list - "kos", "watch" or "kudos".
+--- Open the picker for a kind: "order" (a kill order), a list - "kos", "watch" or "kudos" - or "guild",
+--- the guild on watch.
 function GK.OpenPicker(k)
     if not KINDS[k] then return end
     if not frame then Build() end
     kind, offset = k, 0
     frame.title:SetText(KINDS[k].title)
+    frame.box.hint:SetText(KINDS[k].hint or HINT)
+    frame.none:SetText(KINDS[k].none or NONE)
     frame.box:SetText("")
     Fill()
     GK.PlaceSheet(frame)

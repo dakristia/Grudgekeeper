@@ -78,7 +78,7 @@ end
 -- A letter is news, and once read it goes: when the letters close, every letter read goes with them. They
 -- were kept three days and piled up - "10 of 10" - each saying what the ledger says anyway: "letters
 -- burde kanskje ikke bare bli liggende?" (the owner, 2026-11-07). While the letters are open, the ones
--- read stay, so the arrows can go back. Later keeps the letter it is on (it is unread again).
+-- read stay, so the arrows can go back.
 local reading = false            -- the letters are open: what was read stays until they close
 
 local function Prune()
@@ -441,7 +441,7 @@ end
 local scroll, note  -- the two views, made on first use
 local index         -- which letter in the pile is showing
 
---- The letters closed - by X, Later, Escape or the scroll rolling up: the read ones go. A moment later,
+--- The letters closed - by X, Close, Escape or the scroll rolling up: the read ones go. A moment later,
 --- as going from a scroll to a note hides one view before it shows the other.
 local function Closed()
     C_Timer.After(0, function()
@@ -454,7 +454,7 @@ local function Closed()
 end
 
 local function Ink(fs, colour, font, size)
-    fs:SetFont(font, size, "")
+    GK.SetFont(fs, font, size)                   -- a family: names in Cyrillic too (Core.lua)
     fs:SetTextColor(colour[1], colour[2], colour[3])
     fs:SetShadowOffset(0, 0)
 end
@@ -797,7 +797,7 @@ end
 -- 2026-11-06); the look was previewed with the addon's own art before it was built.
 -- ---------------------------------------------------------------------------
 local function SheetInk(fs, colour, font, size)
-    fs:SetFont(font, size, "")
+    GK.SetFont(fs, font, size)
     fs:SetTextColor(colour[1], colour[2], colour[3])
     fs:SetShadowOffset(0, 0)
 end
@@ -952,7 +952,7 @@ function GK.SheetLine(f, width, letters, hint, numeric)
     e:EnableMouse(true)
     e:SetAutoFocus(false)
     e:SetMaxLetters(letters)
-    e:SetFont(TEXT_FONT, 13, "")
+    GK.SetFont(e, TEXT_FONT, 13)                 -- what is typed: a name in Cyrillic shows as it is typed
     e:SetTextColor(INK[1], INK[2], INK[3])
     e:SetShadowOffset(0, 0)
     e:SetTextInsets(2, 2, 0, 0)
@@ -1191,7 +1191,7 @@ function GK.MakeNoteFrame(name)
     border:SetTexture(MEDIA .. "letter_frame")
     -- Who it's from, on the plaque in the middle of the top band.
     local plaque = frame:CreateFontString(nil, "OVERLAY")
-    plaque:SetFont(TITLE_FONT, 14, "")
+    GK.SetFont(plaque, TITLE_FONT, 14)
     plaque:SetTextColor(1, 0.82, 0.4)
     plaque:SetShadowOffset(1, -1)
     plaque:SetPoint("TOP", 0, -17)
@@ -1257,19 +1257,18 @@ local function BuildNote()
     f.action = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     f.action:SetSize(160, 22)
     f.action:SetPoint("BOTTOMLEFT", 46, 50)
-    local later = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    later:SetSize(90, 22)
-    later:SetPoint("LEFT", f.action, "RIGHT", 6, 0)
-    later:SetText("Later")
-    -- Later keeps this letter for later: unread again, so it stays when the read ones go (Closed)
-    later:SetScript("OnClick", function()
-        local L = index and GK.char.letters[index]
-        if L then L.read = false end
-        GK.CloseLetters()
-    end)
+    -- Close, beside the letter's own button. It was Later, which kept the letter unread, so the notice
+    -- came straight back with it: "trykke later gir meg bare notification igjen? burde være lukk
+    -- isteden?" (the owner, 2026-11-08). These letters are news the ledger keeps anyway; read is done.
+    local close = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    close:SetSize(90, 22)
+    close:SetPoint("LEFT", f.action, "RIGHT", 6, 0)
+    close:SetText("Close")
+    close:SetScript("OnClick", function() GK.CloseLetters() end)
+    f.closeButton = close
     Pager(f, f, 180, 54)
-    -- A close button: "Later" alone read as the only way out (the owner, 2026-11-05). The game's own X:
-    -- our iron cross sat on top of the frame's iron corner and didn't go with it (2026-11-06).
+    -- And the game's own X in the corner: our iron cross sat on top of the frame's iron corner and
+    -- didn't go with it (2026-11-06).
     GK.MakeGameCloseButton(f, function() GK.CloseLetters() end)
 
     -- Arrives with a small drop and a fade, nothing more.

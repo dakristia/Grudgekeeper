@@ -255,7 +255,8 @@ function GK.PlaceNotice(reset)
 end
 
 --- A target nearby (urgent: red, a sound) or news of one elsewhere (quiet): a line under the letter.
-function GK.Warn(text, urgent)
+--- ownSound: the caller plays a sound of its own (the one picked for a Shame player), so not the chime.
+function GK.Warn(text, urgent, ownSound)
     if not btn then Build() end
     btn.warnText = text
     btn.line:SetText(text)
@@ -264,7 +265,7 @@ function GK.Warn(text, urgent)
     if urgent then
         warnUntil = GetTime() + WARN_FOR
         -- the boss-whisper chime: enough to look up, nothing like a raid warning's horn
-        GK.Sound("UI_RAID_BOSS_WHISPER_WARNING")
+        if not ownSound then GK.Sound("UI_RAID_BOSS_WHISPER_WARNING") end
     end
     GK.NoticeUpdate(false)
     if not urgent then btn.line:SetShown(btn:IsShown()) end

@@ -158,7 +158,7 @@ local function Plain(key)
             plainCount = 0
         end
         name = key:gsub("%-[^%-]*$", "")
-        plainName[key], plainFirst[key] = name, name:match("^%S+") or name
+        plainName[key], plainFirst[key] = name, name:match("^[^ ]+") or name    -- not %S: see GK.SameName
         plainCount = plainCount + 1
     end
     return name, plainFirst[key]
