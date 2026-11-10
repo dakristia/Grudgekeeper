@@ -2,17 +2,19 @@
 -- envelope says you have mail - but on its own, wherever you put it, not on the minimap. It fades in
 -- and blinks when a letter lands, then rests with a faint glow until you read it. Click it to read,
 -- right-click for the hitlist, drag it anywhere; /grudge notice shows it to place it without waiting
--- for mail. When the target of a kill order is near it glows red, with a soft chime and one short line
--- under it; when a guildie sees them, the line alone says who saw them where. That is the only warning Grudgekeeper gives: nothing opens in the middle of
--- the screen.
+-- for mail. When the target of a kill order is near it glows red, with its sound, one short line under
+-- it and a bubble over it that a click targets them from; when a guildie sees them, the line alone says who
+-- saw them where. That is the only warning Grudgekeeper gives: nothing opens in the middle of the screen.
 local ADDON, GK = ...
 
 local SIZE = 46
 local WARN_FOR = 12              -- seconds the red glow and the line stay
+local NEAR_SOUND_GAP = 600       -- the near sound plays for one player (or guild) at most this often
 local MEDIA = "Interface\\AddOns\\Grudgekeeper\\Media\\"
 local btn
 local warnUntil = 0
 local placing = false            -- shown to be dragged into place, letters or not
+local Replace                    -- the click-to-target button laid over its bubble again (below)
 
 local function SavePosition(self)
     local point, _, relPoint, x, y = self:GetPoint(1)
@@ -56,7 +58,7 @@ local function Tooltip(self)
     if GetTime() < warnUntil and btn.warnText then
         GameTooltip:AddLine(btn.warnText, 1, 0.3, 0.25)
     end
-    GameTooltip:AddLine("Click: read  -  Right-click: hitlist  -  Drag: move", 0.7, 0.7, 0.7)
+    GameTooltip:AddLine("Click: read  -  Shift-click: read all  -  Right-click: hitlist  -  Drag: move", 0.7, 0.7, 0.7)
     GameTooltip:Show()
 end
 
@@ -141,7 +143,13 @@ local function Build()
             GK.NoticeUpdate(false)
             return
         end
-        if button == "RightButton" then GK.OpenWindow(1) else GK.OpenLetters() end
+        if button == "RightButton" then
+            GK.OpenWindow(1)
+        elseif IsShiftKeyDown() then
+            GK.ReadAllLetters()                -- the whole pile at once (Letters.lua)
+        else
+            GK.OpenLetters()
+        end
     end)
     btn:SetScript("OnDragStart", function(self)
         self.dragged = true
@@ -150,6 +158,7 @@ local function Build()
     btn:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
         SavePosition(self)
+        Replace()
     end)
     btn:SetScript("OnEnter", Tooltip)
     btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -254,9 +263,177 @@ function GK.PlaceNotice(reset)
     GK.NoticeUpdate(false)
 end
 
+-- ---------------------------------------------------------------------------
+-- The bubble: who is near, said by the letter in the game's own chat bubble, and a click on it that
+-- targets them ("HAN ER I NÆRHETEN, KLIKK FOR TARGET!", the owner, 2026-11-09). No addon may target anyone
+-- by itself; a click on the game's secure button running /targetexact can - and that button can be set up,
+-- shown and hidden only out of combat. So the bubble (ours, shown whenever) and the button laid over it
+-- (the game's, out of combat) are two frames, and a warning in the middle of a fight says to target them
+-- by hand. A button left on screen by a fight stays until it ends, and its bubble with it, so it never
+-- lies invisible where a click would target someone.
+-- ---------------------------------------------------------------------------
+local BUBBLE_W, BUBBLE_H = 230, 66
+local bubble, clicker
+local clickerName                -- whom the button targets now
+
+--- The macro that targets a name: the whole name, else the first name alone - the character's name in the
+--- game, which Forever's surname is added to. nil for anything but letters, spaces, ' and -, so a name off
+--- the wire can never carry a command into it.
+local function TargetMacro(name)
+    if type(name) ~= "string" or #name > 48 or not name:find("^[%a\128-\255][%a\128-\255 '%-]*$") then
+        return nil
+    end
+    local lines = { "/cleartarget", "/targetexact " .. name }
+    local first = name:match("^(.-) ")
+    if first and first ~= "" then lines[#lines + 1] = "/targetexact [noexists] " .. first end
+    return table.concat(lines, "\n")
+end
+
+local function BuildBubble()
+    bubble = CreateFrame("Frame", "GrudgekeeperNearBubble", btn, "BackdropTemplate")
+    bubble:SetSize(BUBBLE_W, BUBBLE_H)
+    bubble:SetPoint("BOTTOMRIGHT", btn, "TOPLEFT", 18, -2)
+    bubble:SetFrameLevel(btn:GetFrameLevel() + 6)
+    bubble:SetClampedToScreen(true)
+    if bubble.SetBackdrop then
+        bubble:SetBackdrop({ bgFile = "Interface\\Tooltips\\ChatBubble-Background",
+            edgeFile = "Interface\\Tooltips\\ChatBubble-Backdrop", tile = true, tileSize = 16, edgeSize = 16,
+            insets = { left = 16, right = 16, top = 16, bottom = 16 } })
+    end
+    bubble.tail = bubble:CreateTexture(nil, "ARTWORK")
+    bubble.tail:SetTexture("Interface\\Tooltips\\ChatBubble-Tail")
+    bubble.tail:SetSize(24, 24)
+    bubble.tail:SetPoint("TOP", bubble, "BOTTOMRIGHT", -26, 5)
+    -- red over black and white over black: read on the bubble's white and on a dark one alike
+    bubble.name = bubble:CreateFontString(nil, "OVERLAY")
+    GK.SetFont(bubble.name, GK.TEXT_FONT, 15, "OUTLINE")
+    bubble.name:SetTextColor(1, 0.22, 0.16)
+    bubble.name:SetPoint("TOP", 0, -14)
+    bubble.name:SetWidth(BUBBLE_W - 24)
+    bubble.name:SetWordWrap(false)
+    bubble.hint = bubble:CreateFontString(nil, "OVERLAY")
+    GK.SetFont(bubble.hint, GK.TEXT_FONT, 11, "OUTLINE")
+    bubble.hint:SetTextColor(1, 0.92, 0.75)
+    bubble.hint:SetPoint("TOP", bubble.name, "BOTTOM", 0, -6)
+    bubble.hint:SetWidth(BUBBLE_W - 24)
+    -- a pop as it comes
+    local pop = bubble:CreateAnimationGroup()
+    local grow = pop:CreateAnimation("Scale")
+    grow:SetScaleFrom(0.6, 0.6)
+    grow:SetScaleTo(1, 1)
+    grow:SetDuration(0.18)
+    grow:SetSmoothing("OUT")
+    grow:SetOrigin("BOTTOMRIGHT", 0, 0)
+    local fade = pop:CreateAnimation("Alpha")
+    fade:SetFromAlpha(0)
+    fade:SetToAlpha(1)
+    fade:SetDuration(0.18)
+    bubble.pop = pop
+    bubble:Hide()
+end
+
+local HideBubble
+
+local function BuildClicker()
+    clicker = CreateFrame("Button", "GrudgekeeperTargetButton", UIParent, "SecureActionButtonTemplate")
+    clicker:SetFrameStrata("HIGH")
+    -- both: the game's secure button acts on the press or the release, as the player's settings say
+    clicker:RegisterForClicks("AnyUp", "AnyDown")
+    clicker:SetAttribute("type", "macro")
+    clicker:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:AddLine(("Target %s"):format(clickerName or "them"))
+        GameTooltip:Show()
+    end)
+    clicker:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    -- targeted: the bubble has done its job (out of combat; in a fight the button can't be hidden)
+    clicker:SetScript("PostClick", function()
+        if bubble then bubble.due = 0 end
+        HideBubble()
+    end)
+    clicker:Hide()
+end
+
+--- The button over the bubble, where the bubble is: a place of its own on the screen, not anchored to the
+--- bubble, so moving the letter in a fight never moves a protected frame. Out of combat only.
+Replace = function()
+    if not (clicker and bubble and clicker:IsShown() and bubble:IsShown()) or InCombatLockdown() then return end
+    local l, b = bubble:GetLeft(), bubble:GetBottom()
+    if not (l and b) then return end
+    local s = bubble:GetEffectiveScale() / UIParent:GetEffectiveScale()
+    clicker:ClearAllPoints()
+    clicker:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", l * s, b * s)
+    clicker:SetSize(bubble:GetWidth() * s, bubble:GetHeight() * s)
+end
+
+--- Gone when its time is up - unless a fight keeps its button on screen; PLAYER_REGEN_ENABLED asks again.
+HideBubble = function()
+    if not bubble or GetTime() < (bubble.due or 0) then return end
+    if clicker and clicker:IsShown() then
+        if InCombatLockdown() then return end
+        clicker:Hide()
+    end
+    bubble:Hide()
+end
+LibStub("LibForever-1.0").On("PLAYER_REGEN_ENABLED", function() HideBubble() end)
+
+--- The bubble over the letter: key is whom it says is near, and a click on it targets them when it can.
+local function ShowBubble(key)
+    if not bubble then BuildBubble() end
+    local name = GK.Show(key)
+    local macro = TargetMacro(name)
+    local hint = ""
+    if clicker and clicker:IsShown() and InCombatLockdown() then
+        -- set up before the fight: it targets whom it was set for, and says so
+        hint = clickerName == name and "Click to target" or ("Click to target %s"):format(clickerName or "")
+    elseif macro and not InCombatLockdown() then
+        if not clicker then BuildClicker() end
+        clicker:SetAttribute("macrotext", macro)
+        clickerName = name
+        hint = "Click to target"
+    elseif macro then
+        hint = "In combat - target them yourself"
+    end
+    bubble.name:SetText(("%s is near!"):format(name))
+    bubble.hint:SetText(hint)
+    bubble.due = GetTime() + WARN_FOR
+    local was = bubble:IsShown()
+    bubble:Show()
+    if not was and bubble.pop then bubble.pop:Play() end
+    -- out of combat the button is over the bubble only when it targets whom the bubble names
+    if clicker and not InCombatLockdown() then
+        if macro and clickerName == name then
+            clicker:Show()
+            Replace()
+        else
+            clicker:Hide()
+        end
+    end
+    C_Timer.After(WARN_FOR + 0.1, HideBubble)
+end
+
+-- When the near sound last played for whom: a target stepping out of sight and back in is not the war all
+-- over again - "bare tillat avspilling 1 gang hvert 10. min elns så den ikke spiller av bare fordi kill
+-- target går litt langt unna view" (the owner, 2026-11-10). The line and the bubble still come each time,
+-- so there is always something to click to target them.
+local soundAt = {}
+local function SoundDue(key)
+    if not key then return true end
+    local now = GetTime()
+    for k, t in pairs(soundAt) do
+        if now - t >= NEAR_SOUND_GAP then soundAt[k] = nil end
+    end
+    if soundAt[key] then return false end
+    soundAt[key] = now
+    return true
+end
+
 --- A target nearby (urgent: red, a sound) or news of one elsewhere (quiet): a line under the letter.
---- ownSound: the caller plays a sound of its own (the one picked for a Shame player), so not the chime.
-function GK.Warn(text, urgent, ownSound)
+--- ownSound: the caller plays a sound of its own (the one picked for a Shame player), so not the near one.
+--- target: the one player the warning is about (their key) - the bubble that says so and targets them.
+--- soundKey: whom the sound is for (a player's key, a guild), so it plays for them once in NEAR_SOUND_GAP;
+--- none, and it plays every time.
+function GK.Warn(text, urgent, ownSound, target, soundKey)
     if not btn then Build() end
     btn.warnText = text
     btn.line:SetText(text)
@@ -264,8 +441,10 @@ function GK.Warn(text, urgent, ownSound)
     btn.line:Show()
     if urgent then
         warnUntil = GetTime() + WARN_FOR
-        -- the boss-whisper chime: enough to look up, nothing like a raid warning's horn
-        if not ownSound then GK.Sound("UI_RAID_BOSS_WHISPER_WARNING") end
+        -- the sound picked for it, the Battleground horn to begin with (it was the boss-whisper chime, and a
+        -- target near deserved more: the owner, 2026-11-09; our own war horn went before 1.2.0)
+        if not ownSound and SoundDue(soundKey) then GK.NearSound() end
+        if target then ShowBubble(target) end
     end
     GK.NoticeUpdate(false)
     if not urgent then btn.line:SetShown(btn:IsShown()) end

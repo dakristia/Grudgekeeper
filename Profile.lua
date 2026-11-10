@@ -176,8 +176,21 @@ function GK.PotRows(o)
         local g = givers[i]
         local note = g.poster and "posted it" or nil
         if owed then
-            local paid = g.poster and o.state == "p" or (not g.poster and o.paid and o.paid[g.who])
-            note = paid and "paid" or "not paid yet"
+            -- each giver pays each hunter a part (GK.Part): paid, part of it, or none yet
+            local due, paid = 0, 0
+            for _, h in ipairs(GK.Hunters(o)) do
+                if h ~= g.who then
+                    due = due + 1
+                    if GK.IsPaid(o, g.who, h) then paid = paid + 1 end
+                end
+            end
+            if due == 0 then
+                note = g.poster and "posted it" or nil
+            elseif paid >= due then
+                note = "paid"
+            else
+                note = paid > 0 and ("paid %d of %d"):format(paid, due) or "not paid yet"
+            end
         end
         rows[#rows + 1] = { GK.Coins(g.copper), Upper(Who(g.who)), note }
     end
@@ -363,7 +376,8 @@ local function Lately(key, me, most)
     local out = {}
     for _, e in ipairs(GK.Store().feed) do
         if #out >= most then break end
-        if DID[e.kind] and (e.who == key or (me and LIB.IsMyStoredName(e.who))) then
+        -- an own order's target got by its poster closed it; on the card it is the kill, not a fulfilment
+        if DID[e.kind] and not (e.kind == "F" and e.own) and (e.who == key or (me and LIB.IsMyStoredName(e.who))) then
             local right
             if e.kind == "K" then
                 right = (e.p or 0) > 0 and ("+%d"):format(e.p) or nil
@@ -394,7 +408,7 @@ end
 --- The latest the news says about a guildie: one line, or nil.
 local function Latest(key, me)
     for _, e in ipairs(GK.Store().feed) do
-        if e.who == key or (me and LIB.IsMyStoredName(e.who)) then
+        if (e.who == key or (me and LIB.IsMyStoredName(e.who))) and not (e.kind == "F" and e.own) then
             local target = GK.Show(e.n)
             local when = GK.Ago(e.t)
             if e.kind == "K" then

@@ -134,6 +134,9 @@ function GK.Held(L) return holding[L] ~= nil end
 -- silent: no sound as it lands - a letter about something you just did yourself, like a kill, is no
 -- news to you, so it only waits by the minimap. hold: it waits a minute and for the fight to end first.
 local function Add(kind, data, silent, hold)
+    -- letters off: nothing arrives as one ("tillat å skru av letters", the owner, 2026-11-09) - the ledger,
+    -- the warnings and the mailbox's card still say what matters
+    if GK.db.anyLetters == false then return data end
     GK.char.letterId = (GK.char.letterId or 0) + 1
     data.id, data.kind, data.t, data.read = GK.char.letterId, kind, time(), false
     local list = GK.char.letters
@@ -145,9 +148,11 @@ local function Add(kind, data, silent, hold)
     return data
 end
 
---- Unread letters: how many, and the first one's place in the pile. A held letter isn't news yet.
+--- Unread letters: how many, and the first one's place in the pile. A held letter isn't news yet, and with
+--- letters off none is: the notice shows only a warning then.
 function GK.Unread()
     local n, first = 0, nil
+    if GK.db.anyLetters == false then return 0, nil end
     for i, l in ipairs(GK.char.letters) do
         if not l.read and not holding[l] then
             n = n + 1
@@ -164,11 +169,13 @@ function GK.OrderLetter(o)
 end
 
 --- Your own kill that fulfilled it waits like a kill letter does.
+--- So does one got with you there (GK.Helped): you were in that fight too.
 function GK.CompleteLetter(o)
     local me = LIB.Me()
+    local ours = o.doneBy == me or GK.Helped(o)
     Add("complete", { n = o.n, c = o.c, r = o.r, l = o.l, by = o.by, reward = o.reward, o = o.key,
-        doneBy = o.doneBy, z = o.doneZone, pot = (GK.Pot(o)), share = o.pot and o.pot[me] or nil },
-        o.doneBy == me, o.doneBy == me)
+        doneBy = o.doneBy, z = o.doneZone, pot = (GK.Pot(o)), share = o.pot and o.pot[me] or nil,
+        helpers = o.helpers }, ours, ours)
 end
 
 --- Somebody paid you for an order you fulfilled: the poster (their reward) or a backer (their share).
@@ -326,28 +333,78 @@ local function ScrollContent(L)
     local where = L.z and (" in " .. L.z) or ""
     local pot = L.pot or L.reward or 0
     local owe = (L.by == me and (L.reward or 0)) or L.share or 0     -- what I promised: reward or share
-    if L.doneBy == me then
-        body[#body + 1] = "You collected the bounty" .. where .. "."
-        if pot > 0 then body[#body + 1] = ("%s in all, to come by mail."):format(GK.MoneyText(pot)) end
-        -- One line in guild chat for the guildies without Grudgekeeper - only ever from this click.
-        if not L.told and not L.sample then
-            buttons[#buttons + 1] = { "Tell the guild", function()
-                if GK.TellGuild(("Grudgekeeper: %s is dead - %s's kill order fulfilled%s."):format(show(L.n),
-                    show(L.by), pot > 0 and (", bounty " .. GK.MoneyText(pot)) or "")) then
-                    L.told = true
-                end
-            end }
+    -- who else was there: the group members near the killing blow (GroupHelpers, Guild.lua) - "det stod ikke
+    -- noe om at han hadde vært med" (the owner, 2026-11-09)
+    local others = {}
+    for _, k in ipairs(L.helpers or {}) do
+        if not LIB.IsMyStoredName(k) then others[#others + 1] = k end
+    end
+    local helped = L.doneBy ~= me and GK.Helped(L)
+    -- "you and Kari", "you, Kari and Lars": you first, then everyone else who was there
+    local function YouAnd(keys)
+        local names = { "you" }
+        for _, k in ipairs(keys) do names[#names + 1] = show(k) end
+        return table.concat(names, ", ", 1, #names - 1) .. " and " .. names[#names]
+    end
+    -- what we have coming: our part of everyone else's gold, the bounty shared among all who got them
+    -- (GK.Part, Guild.lua); the letter's own pot when the order is gone
+    local shared = o and #GK.Hunters(o) > 1
+    local due = o and GK.DueTo(o, me) or nil
+    local function Coming(copper)
+        if copper <= 0 then return end
+        if shared then
+            body[#body + 1] = ("Your part: %s of %s, to come by mail."):format(GK.MoneyText(copper), GK.MoneyText(pot))
+        else
+            body[#body + 1] = ("%s in all, to come by mail."):format(GK.MoneyText(copper))
         end
-    else
-        body[#body + 1] = doneBy .. (L.by == me and " collected the bounty" or " got there first") .. where .. "."
-        if owe > 0 then
-            body[#body + 1] = " "
-            body[#body + 1] = ("You owe them %s - at a mailbox, the Pay bounty button fills it in."):format(
-                GK.MoneyText(owe))
-            if o and (o.state == "d" or o.state == "p") and not (o.paid and o.paid[me]) and not (o.by == me and o.state == "p") then
-                buttons[#buttons + 1] = { "Mark as paid", function() GK.PayShare(o) end }
-            end
+    end
+    if L.doneBy == me and L.by == me then
+        -- your own order: nobody mails you your own reward, only its backers their shares
+        if #others > 0 then
+            body[#body + 1] = ("Your own order - %s got them%s."):format(YouAnd(others), where)
+        else
+            body[#body + 1] = "Your own order - you got them yourself" .. where .. "."
         end
+        local backed = due or (pot - (L.reward or 0))
+        if backed > 0 then body[#body + 1] = ("%s from its backers, to come by mail."):format(GK.MoneyText(backed)) end
+    elseif L.doneBy == me then
+        body[#body + 1] = "You collected the bounty" .. (#others > 0 and (" with " .. GK.NameList(others)) or "")
+            .. where .. "."
+        Coming(due or pot)
+    elseif helped then
+        -- you were there: it is yours too, and yours to tell
+        local all = { L.doneBy }
+        for _, k in ipairs(others) do all[#all + 1] = k end
+        local together = YouAnd(all)
+        body[#body + 1] = ("%s got them%s. %s had the killing blow."):format(together:sub(1, 1):upper()
+            .. together:sub(2), where, doneBy)
+        if L.by ~= me then Coming(due or 0) end
+    end
+    -- One line in guild chat for the guildies without Grudgekeeper - only ever from this click, or the
+    -- order's card in the ledger (GK.TellOrder).
+    if not L.sample and GK.CanTellOrder(o, L) then
+        buttons[#buttons + 1] = { "Tell the guild", function() GK.TellOrder(o, L) end }
+    end
+    if L.doneBy ~= me and not helped then
+        body[#body + 1] = (L.helpers and GK.WhoGotThem(L.doneBy, L.helpers) or doneBy)
+            .. (L.by == me and " collected the bounty" or " got there first") .. where .. "."
+    end
+    -- what we owe on it: a part to each hunter (GK.Owed); as the letter has it when the order is gone
+    local debts = {}
+    if o then
+        for _, e in ipairs(GK.Owed()) do
+            if e.o == o then debts[#debts + 1] = ("%s %s"):format(show(e.to), GK.MoneyText(e.share)) end
+        end
+    end
+    if #debts > 0 then
+        body[#body + 1] = " "
+        body[#body + 1] = ("You owe %s - mail or trade it, and it is marked paid by itself."):format(#debts == 1
+            and debts[1] or (table.concat(debts, ", ", 1, #debts - 1) .. " and " .. debts[#debts]))
+        buttons[#buttons + 1] = { "Mark as paid", function() GK.PayShare(o) end }
+    elseif not o and L.doneBy ~= me and not helped and owe > 0 then
+        body[#body + 1] = " "
+        body[#body + 1] = ("You owe them %s - mail or trade it to them, and it is marked paid by itself."):format(
+            GK.MoneyText(owe))
     end
     -- the order's seal, broken: it has been opened and carried out
     return "ORDER COMPLETE", show(L.n) .. " is dead", info, body, "Posted by " .. show(L.by), "seal_broken",
@@ -1344,6 +1401,24 @@ function GK.ShowLetter(i)
     end
     GK.NoticeUpdate(false)
     GK.Changed()
+end
+
+--- Every letter read at once, and so gone - a pile of them after a while away ("med mange notifications kan
+--- vi tillate noe 'mark all as read'", the owner, 2026-11-09). The ledger keeps what they said. Returns how
+--- many were unread.
+function GK.ReadAllLetters()
+    local n = 0
+    for _, L in ipairs(GK.char.letters) do
+        if not L.read then n = n + 1 end
+        L.read = true
+        holding[L] = nil
+    end
+    GK.CloseLetters()
+    reading = false
+    Prune()
+    GK.NoticeUpdate(false)
+    GK.Changed()
+    return n
 end
 
 --- Open the pile at the first unread letter (or the newest).

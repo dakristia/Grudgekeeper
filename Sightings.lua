@@ -277,7 +277,7 @@ local function GuildNear(guild, key)
         g.who = {}
         table.sort(names)
         if #names > 0 and GK.IsGuildWatched(guild) then
-            GK.Warn(("<%s> near: %s"):format(guild, NameList(names)), true)
+            GK.Warn(("<%s> near: %s"):format(guild, NameList(names)), true, nil, nil, "<" .. guild .. ">")
         end
     end)
 end
@@ -305,7 +305,7 @@ local function Spotted(order, s)
     if GK.db.alertNear then
         if not alerted[order.key] or now - alerted[order.key] > ALERT_GAP then
             alerted[order.key] = now
-            GK.Warn(("%s is near!"):format(GK.Show(order.n)), true)
+            GK.Warn(("%s is near!"):format(GK.Show(order.n)), true, nil, order.n, order.key)
         end
     end
     -- the order's "last seen", filled in where it is: this runs at every look at the target

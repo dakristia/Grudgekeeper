@@ -17,6 +17,7 @@ local TAG = GK.TAG
 
 -- Account settings; the settings page (Options.lua) says what each one does.
 local defaults = {
+    anyLetters = true,       -- letters at all; off, nothing arrives as one (Letters.lua: Add)
     letters = true,          -- kill orders your guildies post arrive as letters
     myLetters = true,        -- a letter for a kill that earns a title, and a death that posts an order
     alertNear = true,        -- warn when the target of any open kill order is near, or a guildie sees them
@@ -41,6 +42,7 @@ local defaults = {
     watchNearby = false,     -- one chat line when a player on your Shame list is near
     watchGroup = true,       -- warn when a Shame list player joins your group
     shameSound = "auto",     -- and the sound it plays (GK.SoundChoices; "off" for none; "auto" until one is picked: GK.ShameSoundKey)
+    nearSound = "kit:PVP_THROUGH_QUEUE", -- the sound of a target near, a Marked player or the watched guild (GK.NearSound)
     kudosGroup = false,      -- one friendly chat line when a Kudos player joins your group (chat: off, the owner doesn't read it)
     plateNotes = true,       -- a small dim mark on the nameplate of a player you have notes on
     guilds = {},             -- [guild key] = { board, orders, wanted, slain, feed, nextId } (Guild.lua)
@@ -451,6 +453,9 @@ end
 -- han" is a Norwegian clip, for the guild it was made for (the owner, 2026-11-09: "det burde nok ikke være
 -- standard lyden med mindre du er medlem i yippyapp.. siden det er norskt", then "kankje bare yippyapp ahr
 -- det som et valg i det hele tatt").
+-- The war horn made for a target near and two God of War clips were taken out before 1.2.0 (the owner,
+-- 2026-11-10: "ta de to ut. fjern warhorn"): a soundtrack's music has no place in a public package, and
+-- the game's own sounds below say "warning" well enough.
 local SOUND_FILES = {
     { "makke", "Måkke ta med han", "Interface\\AddOns\\Grudgekeeper\\Media\\makke.mp3", guild = "YippYapp" },
 }
@@ -463,13 +468,46 @@ local function Offered(s)
     local mine = GetGuildInfo and GetGuildInfo("player")
     return type(mine) == "string" and not Secret(mine) and GK.SameGuild(mine, s.guild)
 end
+-- The game's own, named for where the game plays them. More of them, as LibSharedMedia brings no sounds
+-- of its own ("legg til flere lyder fra libsharedmedia", the owner, 2026-11-10: its only one is None, and
+-- the rest are other addons' files). Each has a file in Forever's live build 70790 (soundkitentry, by
+-- the SoundKitConstants id); one this client lacks in SOUNDKIT is left out.
 local SOUND_KITS = {
-    { "UI_RAID_BOSS_WHISPER_WARNING", "The chime" },
+    { "PVP_THROUGH_QUEUE", "Battleground horn" },
+    { "HARDCORE_DUEL", "Duel to the death" },
+    { "UI_GARRISON_TOAST_INVASION_ALERT", "Invasion alert" },
     { "RAID_WARNING", "Raid warning" },
+    { "RAID_BOSS_EMOTE_WARNING", "Boss emote" },
+    { "UI_RAID_BOSS_WHISPER_WARNING", "The chime" },
+    { "IG_PVP_UPDATE", "PvP update" },
+    { "IG_CREATURE_AGGRO_SELECT", "Hostile target" },
+    { "GM_CHAT_WARNING", "GM warning" },
+    { "MAP_PING", "Map ping" },
     { "READY_CHECK", "Ready check" },
-    { "ALARM_CLOCK_WARNING_3", "Alarm" },
+    { "UI_BATTLEGROUND_COUNTDOWN_FINISHED", "Countdown" },
+    { "ALARM_CLOCK_WARNING_1", "Alarm 1" },
+    { "ALARM_CLOCK_WARNING_2", "Alarm 2" },
+    { "ALARM_CLOCK_WARNING_3", "Alarm 3" },
+    { "UI_RAID_BOSS_DEFEATED", "Boss defeated" },
+    { "UI_PVP_HONOR_PRESTIGE_RANK_UP", "Rank up" },
     { "IG_PLAYER_INVITE", "Group invite" },
 }
+
+--- A pick of a file that left the package (the war horn, the God of War clips) goes back to the default:
+--- it would play the chime under a dropdown showing nothing picked. Only our own files: another addon's
+--- sound may simply not be loaded yet at login.
+function GK.ForgetGoneSounds(db)
+    for field, default in pairs({ nearSound = defaults.nearSound, shameSound = defaults.shameSound }) do
+        local name = type(db[field]) == "string" and db[field]:match("^file:(.+)$")
+        if name then
+            local known = false
+            for _, s in ipairs(SOUND_FILES) do
+                if s[1] == name then known = true end
+            end
+            if not known then db[field] = default end
+        end
+    end
+end
 
 local function SharedMedia()
     if type(LibStub) ~= "table" then return nil end
@@ -527,6 +565,16 @@ function GK.PlayChoice(key)
     if not (file and PlaySoundFile) then return false end
     local ok, played = pcall(PlaySoundFile, file, "Master")
     return ok and played and true or false
+end
+
+--- The sound of a target near (and a Marked player, and the watched guild): the one picked, the chime when it
+--- can't be played - a warning never goes silent because a file went missing - and nothing for None or with
+--- Sounds off.
+function GK.NearSound()
+    if not (GK.db and GK.db.sound) then return end
+    local key = GK.db.nearSound or defaults.nearSound
+    if key == "off" then return end
+    if not GK.PlayChoice(key) then GK.Sound("UI_RAID_BOSS_WHISPER_WARNING") end
 end
 
 --- The sound a Shame player joining plays: the one picked in the settings, and until one is ("auto") the
@@ -750,6 +798,8 @@ SlashCmdList.GRUDGEKEEPER = function(msg)
         -- Not "watch": that is the Shame list's word (NotesUI.lua)
         if GK.CanWatchGuild() then GK.OpenPicker("guild")
         else print(TAG .. ": only an officer or the guild master can put a guild on watch.") end
+    elseif cmd == "debug meter" then
+        GK.MeterProbe()               -- the game's damage meter after a fight (Kills.lua)
     elseif cmd == "debug" then
         if GK.OpenDebug then GK.OpenDebug() else GK.Debug() end
     elseif cmd == "shots" and GK.OpenShots then
@@ -943,6 +993,7 @@ LIB.On("PLAYER_LOGIN", function()
     -- Retired 2026-11-07, when taking an order went: the orders you took, and the warning for every
     -- order beside the one for yours (every order warns now). Gone from the saved files too.
     GK.char.accepted, GK.db.alertAll = nil, nil
+    GK.ForgetGoneSounds(GK.db)
     GK.RekeyStores()
     RegisterMinimap()
     GK.StartGuild()

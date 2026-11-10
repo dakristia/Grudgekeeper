@@ -831,6 +831,14 @@ local function bootSheets(opts)
     function GK.OrderOn(key) return (GK.orders[key] or {})[1] end
     function GK.Pot(o) return o.reward or 0, 0 end
     function GK.Accept() end
+    -- and what a fulfilled order's letter asks of it: who was there, and whether it is yours to tell
+    function GK.Helped() return false end
+    function GK.NameList(keys) return table.concat(keys, " and ") end
+    function GK.CanTellOrder(o, L)
+        local t = o or L
+        return not t.told and t.doneBy == ME
+    end
+    function GK.TellOrder() return false end
     return GK
 end
 

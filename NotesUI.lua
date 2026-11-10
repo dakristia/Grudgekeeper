@@ -315,9 +315,15 @@ end
 for _, list in ipairs({ "watch", "kudos" }) do
     GK.AddLedgerPage({
         name = PAGE_WORD[list], list = list, sortable = true, side = "right", add = { text = ADD[list], kind = list },
+        max = GK.LIST_MAX,                  -- the latest 25 (Window.lua): "ikke evig pages" (the owner, 2026-11-10)
         items = function() return GK.NotesItems(list) end,
         headings = { { "Player", 48, nil, "name", "name, A to Z" }, { "Votes", COL_RIGHT, "RIGHT", "votes", "votes" } },
-        sub = function(items) return ("%s on %s"):format(Plural(#items, "player"), PAGE_WORD[list]) end,
+        -- how many are on it, all of them, and how many of those the page lists when not all
+        sub = function(items, all)
+            all = all or #items
+            local text = ("%s on %s"):format(Plural(all, "player"), PAGE_WORD[list])
+            return all > #items and ("%s - the latest %d here"):format(text, #items) or text
+        end,
     })
 end
 
@@ -739,7 +745,7 @@ local function Nearby(key, s)
     nearAt[key] = now
     local name = GK.Show(key)
     if warn then
-        GK.Warn(("Marked: %s is near!%s"):format(name, TagSuffix(s.tags.kos)), true)
+        GK.Warn(("Marked: %s is near!%s"):format(name, TagSuffix(s.tags.kos)), true, nil, key, key)
     else
         print(("%s: %s from your Shame list is near%s"):format(GK.TAG, name, TagSuffix(s.tags.watch)))
     end
@@ -825,9 +831,10 @@ end
 -- ---------------------------------------------------------------------------
 -- Settings
 -- ---------------------------------------------------------------------------
--- The sound for a Shame player joining, under its box: the game's own dropdown. Picking one plays it, so you
--- hear what you chose, and picking the same one again plays it again. No dropdown in this client: no row.
-local function SoundRow(f, above)
+-- A sound to pick, under its box: the game's own dropdown. Picking one plays it, so you hear what you chose,
+-- and picking the same one again plays it again. No dropdown in this client: no row. get() is the key in use,
+-- set(key) keeps a new one; for a Shame player joining here, and for a target near (Options.lua).
+function GK.SoundRow(f, above, get, set)
     local row = CreateFrame("Frame", nil, f)
     row:SetSize(400, 28)
     row:SetPoint("TOPLEFT", above, "BOTTOMLEFT", 0, -2)
@@ -847,8 +854,8 @@ local function SoundRow(f, above)
     dd:SetupMenu(function(_, root)
         for _, c in ipairs(GK.SoundChoices()) do
             local key = c[1]
-            root:CreateRadio(c[2], function() return GK.ShameSoundKey() == key end, function()
-                GK.db.shameSound = key
+            root:CreateRadio(c[2], function() return get() == key end, function()
+                set(key)
                 GK.PlayChoice(key)
             end)
         end
@@ -866,7 +873,8 @@ GK.OptionSections[#GK.OptionSections + 1] = function(f, anchor, h)
     local nearby = h.Check(alerts, "When a Shame player is near", "watchNearby", "One line in chat, no sound.")
     local group = h.Check(nearby, "When a Shame player joins my group", "watchGroup",
         "A warning with their tag, and the sound below.")
-    local sound = SoundRow(f, group)
+    local sound = GK.SoundRow(f, group, GK.ShameSoundKey, function(key) GK.db.shameSound = key end)
+    sound.which = "shame"
     local kudos = h.Check(sound, "When a Kudos player joins my group", "kudosGroup", "One friendly line in chat.")
     local plate = h.Check(kudos, "Mark their nameplates", "plateNotes",
         "A small mark beside players you have notes on. Needs nameplates on (V).")

@@ -135,6 +135,53 @@ local function FromMeter()
     return nil
 end
 
+--- /grudge debug meter: what the game's damage meter holds of the damage enemies took in the last fight,
+--- and from whom. A probe, to learn whether a kill a mob or another player finished can go to whoever did
+--- the work ("hvis det er mob som dreper så må vi krediteres ... også hvis ... vi har fightet lenge mot han
+--- og noen andre sniper kill", the owner, 2026-11-09). The combat log is closed to addons; this meter is
+--- not, out of combat. Prints only what it can read, and "(secret)" for what it can't.
+function GK.MeterProbe()
+    local meter = C_DamageMeter
+    local types, sessions = Enum and Enum.DamageMeterType, Enum and Enum.DamageMeterSessionType
+    if type(meter) ~= "table" or not (types and sessions and types.EnemyDamageTaken and meter.GetCombatSessionFromType) then
+        print(GK.TAG .. ": this client has no damage meter for the damage enemies take.")
+        return
+    end
+    if InCombatLockdown() then
+        print(GK.TAG .. ": after the fight - the meter is secret during one.")
+        return
+    end
+    local function S(v) if Secret(v) then return "(secret)" end return tostring(v) end
+    for _, kind in ipairs({ "Current", "Overall" }) do
+        local ok, session = pcall(meter.GetCombatSessionFromType, sessions[kind], types.EnemyDamageTaken)
+        if not ok or type(session) ~= "table" or Secret(session) or type(session.combatSources) ~= "table" then
+            print(("%s meter, %s: nothing readable (%s)"):format(GK.TAG, kind, ok and S(session) or tostring(session)))
+        else
+            print(("%s meter, %s: %d enemies took %s"):format(GK.TAG, kind, #session.combatSources, S(session.totalAmount)))
+            for i, src in ipairs(session.combatSources) do
+                if i > 6 then break end
+                print(("  %s, %s %s: took %s, died at %s"):format(S(src.name), S(src.factionGroup), S(src.classFilename),
+                    S(src.totalAmount), S(src.deathTimeSeconds)))
+                local guid = src.sourceGUID
+                if guid and not Secret(guid) and meter.GetCombatSessionSourceFromType then
+                    local ok2, d = pcall(meter.GetCombatSessionSourceFromType, sessions[kind], types.EnemyDamageTaken, guid)
+                    if ok2 and type(d) == "table" and not Secret(d) and type(d.combatSpells) == "table" then
+                        for j, sp in ipairs(d.combatSpells) do
+                            if j > 6 then break end
+                            local u = type(sp.combatSpellDetails) == "table" and sp.combatSpellDetails or {}
+                            print(("    spell %s: %s from %s / %s, mob %s, pet %s, deadly %s"):format(S(sp.spellID),
+                                S(sp.totalAmount), S(sp.creatureName), S(u.unitName), S(u.isMob), S(u.isPet),
+                                S(sp.isDeadly)))
+                        end
+                    else
+                        print("    who hit them: nothing readable")
+                    end
+                end
+            end
+        end
+    end
+end
+
 --- One death of ours to an enemy player. v = { key, guid, c, r, l, spell }
 function GK.RecordDeath(v)
     local f = GK.Foe(v.key, { n = GK.Show(v.key), c = v.c, r = v.r, l = v.l })
