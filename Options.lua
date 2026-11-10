@@ -93,6 +93,7 @@ local function Build(panel)
             GK.Changed()
             if key == "share" and on then GK.SendBoard() end
             if key == "anyLetters" and GK.NoticeUpdate then GK.NoticeUpdate(false) end   -- the icon at once
+            if key == "keepLetters" and not on and GK.FadeLetters then GK.FadeLetters() end  -- what waited fades
         end)
         checks[key] = cb
         return cb
@@ -115,10 +116,13 @@ local function Build(panel)
         "A small sealed letter where you put it; click it to read. Off: orders only show in the ledger.")
     local mine = Check(letters, "Letters for my own kills and deaths", "myLetters",
         "The kill that earns you a new title, and the death that put a kill order on your killer.")
+    local keep = Check(mine, "Letters wait until read", "keepLetters",
+        "On: a letter waits by the letter icon until you read it. Off: an unread one fades after two minutes - "
+        .. "Letters in the ledger still has it.")
     -- Placing the letter icon: it only shows when something came, so it needs a way to be shown now.
     local place = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     place:SetSize(170, 22)
-    place:SetPoint("TOPLEFT", mine, "BOTTOMLEFT", 0, -6)
+    place:SetPoint("TOPLEFT", keep, "BOTTOMLEFT", 0, -6)
     place:SetText("Move the letter icon")
     place:SetScript("OnClick", function() GK.PlaceNotice() end)
     place:SetScript("OnEnter", function(self)

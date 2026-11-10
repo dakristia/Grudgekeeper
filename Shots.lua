@@ -131,9 +131,18 @@ local function Fill()
     c.week = { id = week, p = 38, k = 9, d = 3 }
 
     -- What happened, oldest first: every news line is put back to when it happened.
+    -- Each enemy's last kill on us, the guild's deaths (Died) and your own (SendDeath): heard all in one
+    -- second, every one read "just now" on Most wanted and the poster (the store pictures, 2026-11-10). Set
+    -- once all is in (below), as a death of yours heard later puts its own "now" over the guild's.
+    local lastAt, slainAt = {}, {}
+    local function LastKill(foe, ago) lastAt[foe.key] = math.max(lastAt[foe.key] or 0, now - ago) end
+    -- and when the guild last killed each, the same way: a poster's "by The Iron Oath just now" read
+    -- so beside "20 min ago" in the news (the store pictures, 2026-11-10)
+    local function Slain(foe, ago) slainAt[foe.key] = math.max(slainAt[foe.key] or 0, now - ago) end
     local function Died(who, foe, times, ago)
         Hear(who, "D", 1, foe.key, foe.c, foe.r, foe.l, zones[math.floor(ago / H) % 4 + 1], times)
         Back(ago)
+        LastKill(foe, ago)
     end
     Died(g.elowen, e.mordrek, 11, 52 * H)
     Hear(g.tobias, "C", 1, 101, e.kethra.key, e.kethra.c, e.kethra.r, e.kethra.l, nil, 150000, now - 2 * DAY,
@@ -147,11 +156,13 @@ local function Fill()
     Order(g.tobias, 101).doneAt = now - 27 * H
     GK.SendDeath(e.mordrek, zones[1], 5)
     Back(26 * H)
+    LastKill(e.mordrek, 26 * H)
     local mine = GK.PostOrder(e.sable, 200000, "Picks us off at the flight master.")
     mine.t, mine.exp = now - DAY, now + 6 * DAY
     Back(DAY)
     GK.SendDeath(e.sable, zones[2], 4)
     Back(23 * H)
+    LastKill(e.sable, 23 * H)
     Hear(g.gareth, "T", 1, me, mine.id, 50000)
     Back(22 * H)
     Died(g.gareth, e.thazrak, 3, 20 * H)
@@ -170,9 +181,11 @@ local function Fill()
     Back(3.9 * H)
     GK.SendKill(e.bramm, zones[1], GK.Points(base, e.bramm.l, 0, false), nil, 6)
     Back(3 * H)
+    Slain(e.bramm, 3 * H)
     Hear(g.isolde, "K", 1, e.nyx.key, e.nyx.c, e.nyx.r, e.nyx.l, zones[3], GK.Points(g.isolde.l, e.nyx.l, 0, false),
         nil, 3)
     Back(2 * H)
+    Slain(e.nyx, 2 * H)
     -- a rampage: three of us in a few minutes, and the third death posts an order by itself
     Died(g.gareth, e.vexmora, 1, 58 * 60)
     Died(g.fenna, e.vexmora, 1, 56 * 60)
@@ -183,8 +196,15 @@ local function Fill()
     Hear(g.brannoc, "K", 1, e.thazrak.key, e.thazrak.c, e.thazrak.r, e.thazrak.l, zones[1],
         GK.Points(g.brannoc.l, e.thazrak.l, 0, false) + GK.AVENGE_BONUS, g.elowen.key, 4)
     Back(20 * 60)
+    Slain(e.thazrak, 20 * 60)
     Hear(g.isolde, "S", 1, g.brannoc.key, 102, zones[1], e.mordrek.l)
     if bounty.seen then bounty.seen.t = now - 12 * 60 end
+    for key, t in pairs(lastAt) do
+        if s.wanted[key] then s.wanted[key].last = t end
+    end
+    for key, t in pairs(slainAt) do
+        if s.slain[key] then s.slain[key].last = t end
+    end
 
     -- Your own grudges and what happened lately, newest first.
     local FOES = { { e.mordrek, 2, 5, 26 * H }, { e.bramm, 6, 2, 3 * H }, { e.vexmora, 1, 3, 51 * H },

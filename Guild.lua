@@ -1388,7 +1388,14 @@ local function Ask()
 end
 
 function GK.StartGuild()
-    LIB.RegisterComm(PREFIX, OnMessage)
+    -- While the test panel or the screenshots stand in for the guild (GK.testMode), the real guild's
+    -- messages wait outside: they landed in the made-up store, and the store page's pictures showed four
+    -- real guildies on the made-up leaderboard and "#4 of 19, 22, 24" a few seconds apart (2026-11-10).
+    -- Taken in, it went out with the made-up store when the panel closed anyway; a guildie's score and
+    -- orders come again with their next send, or the answer to our next login.
+    LIB.RegisterComm(PREFIX, function(...)
+        if not GK.testMode then OnMessage(...) end
+    end)
     C_Timer.After(8, function()
         GK.Sweep()
         Ask()

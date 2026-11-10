@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.0
+
+- **Letters in the Grudgekeeper's own voice.** The small letters now read as the old keeper of the guild's grudges talking to you. A new title greets you by it - "Rise, Bloodhound" - tells you who fell and where, and ends with a word of his own for each title. A death, a bounty paid and a kill order that ran out are told the same way, and a kill order's scroll says they are wanted for crimes against the guild.
+- **Unread letters fade.** A letter you haven't read fades from the letter icon after two minutes, so letters don't stand there blinking. It isn't lost: Letters in the ledger still opens it. "Letters wait until read" in the settings keeps them by the icon until you read them.
+- **Most wanted shows a bounty in coins.** The bounty column read "85g" in red; it now shows the game's gold, silver and copper coins, as the kill orders page does. An order with no gold on it still says "order" in red.
+- **Folded, the tabs hang down the ledger's right side, as icons.** One page wide, the tabs under the ledger were cut short to "Lead..." and "Most...". Folded, they now hang down its right side with an icon each, and the mouse over one shows its name. Open, they stay under it with their names.
+- **A long kill order fits its scroll.** An order with a long note, several backers and where it was last seen ran on under the scroll's button, its seal and its bottom roll. The lines that matter least now give way first - who collects, the backers' names, where they were last seen - and the poster's words and the reward stay.
+- **The page count shows beside Read all.** With two or more letters waiting, the Read all button covered the "1-9" of a long list's page count. The count and its arrows now sit just under the list.
+- **A card's last line no longer runs into its buttons.** A line that wrapped onto a second line at the foot of a wanted poster ran into its buttons. A section whose line doesn't fit now gives way whole, heading and all.
+
 ## 1.2.0
 
 - **Letters can be switched off.** "Letters" at the top of the settings' Letters section: off, nothing arrives as a letter, and the letter icon only shows for a warning. The ledger, the warnings and the mailbox card still tell you what matters.

@@ -99,7 +99,56 @@ local holding = setmetatable({}, { __mode = "k" })   -- letter -> GetTime() it m
 local releasePending = false
 local Release
 
+-- An unread letter fades from the letter icon after a while, so they do not stand there blinking for
+-- ever: "kanskje uleste brev fader bort etter en liten stund også. slik at folk ikke blir spammet. og så i
+-- settings kan de velge senere om de vil ha de oppe hele tiden" (the owner, 2026-11-10). It is not thrown
+-- away: it stays in the pile, faded (L.faded, saved), and out of the unread count - Letters in the ledger
+-- still opens it, and what it said is in the ledger and the mailbox's card anyway. "Letters wait until
+-- read" in the settings (GK.db.keepLetters) keeps them by the icon until read, as before.
+local FADE_AFTER = 120
+local landedAt = setmetatable({}, { __mode = "k" })  -- letter -> GetTime() it landed, this session
+local fadePending = false
+local FadeDue
+
+--- A letter is news from now: its time by the icon starts.
+local function Landed(L)
+    landedAt[L] = GetTime()
+    if not fadePending then
+        fadePending = true
+        C_Timer.After(FADE_AFTER + 0.1, FadeDue)
+    end
+end
+
+FadeDue = function()
+    fadePending = false
+    if GK.db.keepLetters then return end
+    local now, soonest, faded = GetTime(), nil, false
+    for _, L in ipairs(GK.char.letters) do
+        local at = landedAt[L]
+        -- the letters open in front of you: nothing fades; Closed looks again once they close
+        if at and not L.read and not L.faded and not holding[L] and not reading then
+            if now - at >= FADE_AFTER then
+                L.faded, faded = true, true
+                landedAt[L] = nil
+            else
+                soonest = math.min(soonest or math.huge, FADE_AFTER - (now - at))   -- again when it is due
+            end
+        end
+    end
+    if soonest and not fadePending then
+        fadePending = true
+        C_Timer.After(soonest + 0.1, FadeDue)
+    end
+    if faded then
+        GK.NoticeUpdate(false, nil, true)
+        GK.Changed()
+    end
+end
+--- "Letters wait until read" unticked: what has waited long enough fades now (Options.lua).
+GK.FadeLetters = FadeDue
+
 local function Hold(L)
+    landedAt[L] = nil                               -- held, it is not by the icon: its time starts on landing
     holding[L] = GetTime() + KILL_HOLD
     if not releasePending then
         releasePending = true
@@ -115,6 +164,7 @@ Release = function()
             soonest = math.min(soonest or math.huge, at - now)
         elseif not InCombatLockdown() then
             holding[L], landed = nil, true
+            Landed(L)
         end
         -- its minute is up but you are fighting: PLAYER_REGEN_ENABLED calls this again
     end
@@ -142,19 +192,19 @@ local function Add(kind, data, silent, hold)
     local list = GK.char.letters
     list[#list + 1] = data
     Prune()
-    if hold then Hold(data) end
+    if hold then Hold(data) else Landed(data) end
     GK.NoticeUpdate(not hold, silent)
     GK.Changed()
     return data
 end
 
---- Unread letters: how many, and the first one's place in the pile. A held letter isn't news yet, and with
---- letters off none is: the notice shows only a warning then.
+--- Unread letters: how many, and the first one's place in the pile. A held letter isn't news yet, nor one
+--- that faded (FadeDue), and with letters off none is: the notice shows only a warning then.
 function GK.Unread()
     local n, first = 0, nil
     if GK.db.anyLetters == false then return 0, nil end
     for i, l in ipairs(GK.char.letters) do
-        if not l.read and not holding[l] then
+        if not l.read and not l.faded and not holding[l] then
             n = n + 1
             first = first or i
         end
@@ -197,7 +247,7 @@ function GK.KillLetter(v, zone, title)
     local L
     if last and last.kind == "kill" and not last.read then
         L = last
-        L.t = time()
+        L.t, L.faded = time(), nil                  -- news again, faded or not
         Hold(L)                                     -- the minute starts again from this kill
     else
         L = Add("kill", {}, true, true)
@@ -257,22 +307,29 @@ local function Order(L)
     return L.o and GK.Store().orders[L.o] or nil
 end
 
---- "Pølse Hans, a level 35 Orc Rogue" - as much as we know. mid: the name is the subject of a
---- sentence that carries on, so the description is closed with a comma too.
-local function Who(L, mid)
-    local name = GK.Show(L.n)
-    local d = GK.Describe(L.l, L.c, L.r)
-    if d == "" then return name end
-    d = d:gsub("^Level", "level")
-    return name .. ", " .. (d:match("^[AEIOU]") and "an " or "a ") .. d .. (mid and "," or "")
-end
 
 -- The Grudgekeeper's last word, picked by the letter's number so a letter always says the same thing.
 local CLOSING = {
     kill = { "That's how a grudge is kept.", "They'll remember your name.", "Keep them coming." },
-    slain = { "Some debts are paid in blood.", "I've written it down. I always do." },
+    slain = { "Some debts are paid in blood.", "I've written it down. I always do.", "Rise, and remember." },
     paid = { "A debt settled. The book balances." },
-    expired = { "Grudges keep. Orders don't." },
+    expired = { "Grudges keep. Orders don't.", "Post it again, if the grudge still burns." },
+}
+
+-- The small letters are the Grudgekeeper talking to you - the old keeper of the guild's book of grudges,
+-- who signs every one - not a receipt: "mer roleplay" and "det skal liksom være en som prater til deg"
+-- (the owner, 2026-11-10). Slogans set apart from the news ("You have the scent now") read like nobody
+-- talks: he says what happened, what it means, and adds a word of his own. A new title is greeted by name,
+-- and what he says last goes with the title; it stands where the closing line would, as the letter has
+-- room for four or five lines.
+local TITLE_REMARKS = {
+    Cutthroat = "Not a bad start.",
+    Bloodhound = "Keep hunting.",
+    Headhunter = "The others have started to notice you.",
+    Slayer = "I hear the enemy whispers your name now.",
+    Executioner = "Not many in this guild have come this far.",
+    Grudgebearer = "I'm running out of pages for you, you know.",
+    ["Dread Reaper"] = "There's no higher name in my book. Wear it well.",
 }
 
 --- The scroll: title, name, info, body (lines), foot, seal, stamp, buttons { { text, fn } }
@@ -286,11 +343,16 @@ local function ScrollContent(L)
     if L.kind == "order" then
         -- An order that posted itself carries the Grudgekeeper's reason, not the poster's words.
         if L.note then body[#body + 1] = L.auto and L.note or ('"' .. L.note .. '"') end
+        -- the lines that give way when the sheet has no room for all, the least needed first (FitBody): the
+        -- scroll ran on under its button, its seal and its bottom roll (the store pictures, 2026-11-10)
+        local killed, seen, backed, sight
         if L.times then
-            body[#body + 1] = ("Has killed %s %s."):format(show(L.by), L.times == 1 and "once" or (L.times .. " times"))
+            killed = ("Has killed %s %s."):format(show(L.by), L.times == 1 and "once" or (L.times .. " times"))
+            body[#body + 1] = killed
         end
         if o and o.seen then
-            body[#body + 1] = ("Last seen in %s, %s."):format(o.seen.z or "the world", Ago(o.seen.t))
+            seen = ("Last seen in %s, %s."):format(o.seen.z or "the world", Ago(o.seen.t))
+            body[#body + 1] = seen
         end
         body[#body + 1] = " "
         -- the pot as it stands now, if we still have the order; as posted otherwise
@@ -309,7 +371,8 @@ local function ScrollContent(L)
                     names[i] = ("%s %s"):format(show(shares[i].who), GK.MoneyText(shares[i].copper))
                 end
                 local more = #shares - #names
-                body[#body + 1] = table.concat(names, ", ") .. (more > 0 and (" and %d more"):format(more) or "")
+                backed = table.concat(names, ", ") .. (more > 0 and (" and %d more"):format(more) or "")
+                body[#body + 1] = backed
             end
         else
             body[#body + 1] = "No bounty - for the guild's honour."
@@ -318,7 +381,9 @@ local function ScrollContent(L)
         -- Nothing to take or accept: the order is the whole message - "hey, we put out an order, kill this
         -- one" (the owner, 2026-11-07). Any guildie's kill fulfils it.
         if o and o.state == "o" then
-            body[#body + 1] = pot > 0 and "Kill on sight. Whoever gets them collects." or "Kill on sight."
+            sight = pot > 0 and "Wanted for crimes against the guild. Whoever ends them collects."
+                or "Wanted for crimes against the guild."
+            body[#body + 1] = sight
         end
         if o and o.state == "o" and o.by ~= me then
             buttons[#buttons + 1] = { "Add to the pot", function() GK.OpenPost({ key = o.n, guid = o.guid, c = o.c,
@@ -326,7 +391,11 @@ local function ScrollContent(L)
         end
         -- short: the foot shares its line with the seal on a 300-wide sheet
         local foot = L.auto and ("Posted by %s's death"):format(show(L.by)) or ("Posted by " .. show(L.by))
-        return "KILL ORDER", show(L.n), info, body, foot, "seal_red", nil, buttons
+        local give = {}
+        for _, t in ipairs({ sight or false, " ", backed or false, seen or false, killed or false }) do
+            if t then give[#give + 1] = t end
+        end
+        return "KILL ORDER", show(L.n), info, body, foot, "seal_red", nil, buttons, give
     end
     -- complete
     local doneBy = L.doneBy and show(L.doneBy) or "Someone"
@@ -423,60 +492,68 @@ local function NoteContent(L)
         -- that got it, where you stand. Seven lines - the kill, its points, a streak, "and 1 more", the total
         -- and the title - ran into the seal ("kanskje ikke så mye text?", the owner, 2026-11-07). A letter
         -- from before then, with no title, says the kill and where you stand.
-        local where = L.z and (" in " .. L.z) or ""
-        local stand = (L.of or 0) > 1 and ("%d points - #%d of %d in the guild."):format(L.total or 0, L.rank, L.of)
-            or ("%d points."):format(L.total or 0)
+        -- "So, Gærd Balle is dead - in Hillsbrad Foothills, I hear." What he heard, and where
+        p[1] = ("So, %s is dead%s."):format(show(L.n), L.z and (" - in " .. L.z .. ", I hear") or "")
+        local stand = (L.of or 0) > 1 and ("That makes you %s of %d in the guild, with %d points."):format(
+            Ordinal(L.rank or 0), L.of, L.total or 0) or ("You have %d points."):format(L.total or 0)
         if L.title then
-            p[1] = ("You are now %s %s."):format(L.title:match("^[AEIOU]") and "an" or "a", L.title)
-            p[2] = ("%s%s was the kill that did it."):format(show(L.n), where)
-        else
-            p[1] = ("You killed %s%s."):format(show(L.n), where)
+            p[1] = p[1] .. (" From today I'm writing you down as %s."):format(L.title)
+            stand = stand .. (TITLE_REMARKS[L.title] and (" " .. TITLE_REMARKS[L.title]) or "")
+            closing = nil                                -- what he says last goes with the title
         end
         p[#p + 1] = stand
         action = { "Leaderboard", function() GK.OpenWindow(2) end }
-        return L.title and "A new title" or "Blood drawn", p, closing, "seal_red", false, action
+        return L.title and ("Rise, " .. L.title) or "Blood drawn", p, closing, "seal_red", false, action
     elseif L.kind == "slain" then
-        p[#p + 1] = ("%s killed you%s%s."):format(Who(L, true), L.spell and (" with " .. L.spell) or "",
+        -- the name alone: the portrait and its badge say what they are, and "Gærd Balle, a level 27 Troll
+        -- Hunter, got you" is not how anyone says it
+        p[#p + 1] = ("%s got you%s%s."):format(show(L.n), L.spell and (" with " .. L.spell) or "",
             L.z and (" in " .. L.z) or "")
         if L.times then
-            p[#p + 1] = L.times == 1 and "The first time. Remember the name."
-                or ("That's the %s time."):format(Ordinal(L.times))
+            -- "my book": the ledger is his; "started a page on them" needed explaining (the owner, 2026-11-10)
+            p[#p + 1] = L.times == 1 and "First time - I've written their name in my book. Don't forget it."
+                or ("That's the %s time they've got you. I've written it down."):format(Ordinal(L.times))
         end
         if L.autoOrder then
-            -- posted in your name by this very death: say so, and where to withdraw it
+            -- posted in your name by this very death: say so - its Hitlist button is the way to it, the
+            -- sentence that said so read as a manual ("den setningen liker jeg ikke", the owner, 2026-11-10)
             -- Short, and no closing line after it: this is the longest of the small letters, and at eight
             -- lines its last one met the seal and signature (the preview of 2026-11-04).
-            p[#p + 1] = "A kill order on them went out to the guild, in your name. The hitlist can withdraw it."
+            p[#p + 1] = "I've told the guild. There's a kill order out on them now, in your name."
             closing = nil
             action = { "Hitlist", function() GK.OpenWindow(1) end }
         elseif GK.OrderOn(L.n, L.guid) then
-            p[#p + 1] = "There's a price on their head already."
+            p[#p + 1] = "There's a price on their head already. Someone will collect."
+            closing = nil                                -- three lines of his: no room for a fourth
             action = { "Hitlist", function() GK.OpenWindow(1) end }
         else
             action = { "Put a price on them", PostOn }
         end
         return "Slain", p, closing, "seal_black", true, action
     elseif L.kind == "paid" then
-        p[#p + 1] = ("%s paid you %s for the head of %s. Check your mail."):format(show(L.by),
-            GK.MoneyText(L.reward), show(L.n))
+        p[#p + 1] = ("%s paid up: %s for the head of %s. It's waiting in your mail."):format(
+            show(L.by), GK.MoneyText(L.reward), show(L.n))
         action = { "Hitlist", function() GK.OpenWindow(1) end }
         return "Bounty paid", p, closing, "seal_red", false, action
     end
     -- expired
-    p[#p + 1] = ("%s outlived your kill order. It ran out after a week."):format(Who(L))
+    -- how long it ran is left out: one your death posted runs three days, not a week (Guild.lua, AUTO_DAYS)
+    p[#p + 1] = ("Your kill order on %s has run out, and they're still walking around."):format(show(L.n))
     action = { "Post it again", PostOn }
     return "Order expired", p, closing, "seal_black", false, action
 end
 
 --- What a letter says, apart from how it is drawn (FillScroll and FillNote draw from it):
 --- { note (a small letter, else the scroll), title, name, info, lines, foot, seal, stamp, blood, buttons =
---- { { text, fn } }, c, rf, sx, key, sample }. name, info, foot and stamp are the scroll's only.
+--- { { text, fn } }, c, rf, sx, key, sample, give }. name, info, foot, stamp and give are the scroll's only:
+--- give lists lines of the body in the order they give way when the sheet has no room for all (FitBody).
 function GK.LetterContent(L)
     local d = { c = L.c, rf = L.rf, sx = L.sx, key = L.n, sample = L.sample }
     if not NOTE[L.kind] then
-        local title, name, info, body, foot, seal, stamp, buttons = ScrollContent(L)
+        local title, name, info, body, foot, seal, stamp, buttons, give = ScrollContent(L)
         d.title, d.name, d.info, d.lines, d.foot, d.seal, d.stamp, d.buttons = title, name, info, body, foot, seal,
             stamp, buttons
+        d.give = give
         return d
     end
     local title, paragraphs, closing, seal, blood, action = NoteContent(L)
@@ -507,6 +584,7 @@ local function Closed()
         Prune()
         GK.NoticeUpdate(false)
         GK.Changed()
+        if not fadePending then FadeDue() end      -- what waited while they were open may fade now
     end)
 end
 
@@ -692,6 +770,36 @@ local function Roll(dir, done)
     end)
 end
 
+--- The body, as much of it as the sheet has room for between the info and the foot's line: a long note,
+--- three backers and where they were last seen ran it on under the button, the seal and the bottom roll
+--- (the store pictures, 2026-11-10). What gives way goes first - give, then a blank line - and what still
+--- runs on is cut at the last line that fits.
+local LINE_H = 16                 -- a line of the body: 13 high, and 3 between lines
+local function FitBody(f, lines, give)
+    local room = BODY_H - (34 + f.title:GetStringHeight() + 12 + f.name:GetStringHeight() + 4
+        + f.info:GetStringHeight() + 16) - (92 + f.foot:GetStringHeight() + 6)
+    local kept = {}
+    for i, t in ipairs(lines) do kept[i] = t end
+    if f.body.SetMaxLines then f.body:SetMaxLines(0) end
+    f.body:SetText(table.concat(kept, "\n"))
+    local order = {}
+    for _, t in ipairs(give or {}) do order[#order + 1] = t end
+    order[#order + 1] = " "
+    for _, t in ipairs(order) do
+        if (f.body:GetStringHeight() or 0) <= room then break end
+        for i = #kept, 1, -1 do
+            if kept[i] == t then
+                table.remove(kept, i)
+                break
+            end
+        end
+        f.body:SetText(table.concat(kept, "\n"))
+    end
+    if (f.body:GetStringHeight() or 0) > room and f.body.SetMaxLines then
+        f.body:SetMaxLines(math.max(1, math.floor((room + 3) / LINE_H)))
+    end
+end
+
 local function FillScroll(L)
     local f = scroll
     local d = GK.LetterContent(L)
@@ -702,8 +810,8 @@ local function FillScroll(L)
     f.title:SetText(title)
     f.name:SetText(name)
     f.info:SetText(info)
-    f.body:SetText(table.concat(body, "\n"))
     f.foot:SetText(foot or "")
+    FitBody(f, body, d.give)
     f.seal:SetTexture(MEDIA .. seal)
     f.stamp:Hide()
     f.stampName = stamp
@@ -1440,6 +1548,10 @@ end
 
 function GK.StartLetters()
     Prune()
+    -- what waited unread since last time is news again from this login, and fades as a new one does
+    for _, L in ipairs(GK.char.letters) do
+        if not L.read and not L.faded then Landed(L) end
+    end
     GK.NoticeUpdate(false)
     LIB.On("PLAYER_REGEN_ENABLED", function() if next(holding) then Release() end end)
     -- An open letter follows changes to its order (taken, paid, closed).

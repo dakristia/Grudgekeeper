@@ -20,6 +20,7 @@ local defaults = {
     anyLetters = true,       -- letters at all; off, nothing arrives as one (Letters.lua: Add)
     letters = true,          -- kill orders your guildies post arrive as letters
     myLetters = true,        -- a letter for a kill that earns a title, and a death that posts an order
+    keepLetters = false,     -- an unread letter waits by the icon until read; off, it fades after a while (Letters.lua)
     alertNear = true,        -- warn when the target of any open kill order is near, or a guildie sees them
     plateMarks = true,       -- a skull over anyone with an open order on them
     -- a screenshot when you fulfil an order: off to begin with, "ikke la screenshots være på ved default"
@@ -424,13 +425,10 @@ function GK.MoneyText(copper)
     return table.concat(out, " ")
 end
 
--- GetCoinTextureString is not a global in Forever: it lives in C_CurrencyInfo. Resolved once, called
--- through pcall, plain text when it isn't there.
-local coinString
+-- GetCoinTextureString is not a global in Forever: it lives in C_CurrencyInfo. Called through pcall, plain
+-- text when it isn't there. Looked up at each call - two table reads - so nothing is kept from before it was.
 function GK.Coins(copper)
-    if coinString == nil then
-        coinString = (C_CurrencyInfo and C_CurrencyInfo.GetCoinTextureString) or false
-    end
+    local coinString = C_CurrencyInfo and C_CurrencyInfo.GetCoinTextureString
     if coinString then
         local ok, s = pcall(coinString, math.floor(tonumber(copper) or 0))
         if ok and type(s) == "string" then return s end

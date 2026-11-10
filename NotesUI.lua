@@ -316,6 +316,9 @@ for _, list in ipairs({ "watch", "kudos" }) do
     GK.AddLedgerPage({
         name = PAGE_WORD[list], list = list, sortable = true, side = "right", add = { text = ADD[list], kind = list },
         max = GK.LIST_MAX,                  -- the latest 25 (Window.lua): "ikke evig pages" (the owner, 2026-11-10)
+        -- its tab folded, down the frame's side (Window.lua): a rogue in the shadows for the ninja looters,
+        -- a gift for a good player
+        icon = "Interface\\Icons\\" .. (list == "watch" and "Ability_Stealth" or "INV_Misc_Gift_02"),
         items = function() return GK.NotesItems(list) end,
         headings = { { "Player", 48, nil, "name", "name, A to Z" }, { "Votes", COL_RIGHT, "RIGHT", "votes", "votes" } },
         -- how many are on it, all of them, and how many of those the page lists when not all

@@ -90,6 +90,20 @@ local TAB_H, TAB_H_ON = 36, 42      -- the tab's art, and the chosen tab's, long
 -- which in this art is on its 2-to-8 line and in the 8-to-17 glow: TAB_PAD more gives 16 a side.
 local TAB_TEXT_Y, TAB_TEXT_Y_ON = 1, -2
 local TAB_PAD = 12
+-- Folded the tabs hang down the frame's right side instead, the art as it lies: under the one page they
+-- were cut to "Lead..." and "Most..." ("collapsed så legger vi tabs på høyre side nedover isteden", the
+-- owner, 2026-11-10). A side tab is as deep as a bottom tab is tall - the button's own 32
+-- (PanelTabButtonTemplate, SharedUIPanelTemplates.xml) - so what is on it sits as far out from the edge.
+-- The first starts under the title bar, level with the page. On each an icon, its name on the mouse: its
+-- words turned to run down it were still cut ("Leade...") and hard to read ("teksten er for lav. men
+-- kanskje vi kunne funnet noe gode ikoner isteden?", the owner, the same day). Long enough for the art's two
+-- corners (16 each) and the icon between them.
+local TAB_BUTTON_H, SIDE_TOP, SIDE_LEN, TAB_ICON = 32, 34, 46, 22
+-- The icons: the ledger's own marks where it has one - the skull seal an order puts over a nameplate, the
+-- gold seal the leaderboard's first wears - and the game's elsewhere, cut round like them. Every one is in
+-- Forever's live build 70790 (manifestinterfacedata). A page another file adds brings its own (def.icon).
+local ICONS = "Interface\\Icons\\"
+local SWAP_ICON = { Friends = ICONS .. "INV_Misc_GroupNeedMore", Enemies = MEDIA .. "mark" }
 
 --- Where each page of a list starts (0-based offsets into it): ROWS rows a page, but a heading is never
 --- the last row of a page - it goes over to the next one with its rows. Turning a page goes from one
@@ -325,8 +339,10 @@ local function WantedItems()
         items[#items + 1] = { key = "w:" .. e.key, name = GK.Show(e.key), desc = Short(e.w.l, e.w.c, e.w.r),
             face = { key = e.key, c = e.w.c }, sub = e.w.last and ("last kill " .. GK.Ago(e.w.last)) or nil,
             c1 = tostring(e.total), killed = e.total, bounty = pot,
-            right = o and (pot > 0 and GK.MoneyText(pot) or "order") or "",
-            rightColour = BLOOD, select = PosterSpec(e.key, e.w), ts = e.w.last,
+            -- gold in the game's coins, as on the kill orders page; a red "85g" read as a word ("kjedelig at
+            -- kill order bounty ikke vise gold icon", the owner, 2026-11-10). An order for honour in red.
+            right = o and (pot > 0 and GK.Coins(pot) or "order") or "",
+            rightColour = (o and pot == 0) and BLOOD or nil, select = PosterSpec(e.key, e.w), ts = e.w.last,
             own = me and e.w.victims[me] and true or nil }            -- Only mine: those who killed you
     end
     return items, "Nobody has killed the guild yet - not that the Grudgekeeper heard of."
@@ -478,18 +494,18 @@ end
 
 --- The ledger's pages, in tab order; other files add theirs with GK.AddLedgerPage. A page is
 --- { name, items = fn -> items, empty text, headings, sub = fn(items, all) -> text, links = fn -> { { text,
---- on, click } }, linksTail = fn -> text, sortable, max, side, add, default = fn(items) -> the row chosen
+--- on, click } }, linksTail = fn -> text, sortable, max, side, add, icon, default = fn(items) -> the row chosen
 --- when none is }. max: a sortable page with no section headings lists at most this many rows (GK.SortItems);
---- all, to sub, is how many there were before it.
+--- all, to sub, is how many there were before it. icon: the texture on its tab folded, down the frame's side.
 --- headings: the column headings over the table, { text, x, justify, sort, tip }: a heading with a sort
 --- (an item field: "name", or a number, the biggest first) sorts the page when clicked, and tip finishes
 --- "Sort by ..." in its tooltip. sortable: the headings sort and Only mine shows. links: ink links under
 --- the title. add: the page's own action, top right - { text, kind } opens the who-picker (Pick.lua) for
 --- that kind. side: "right" puts the tab over the right page in the open book (the friendly lists);
---- anything else is over the left page. Folded, all the tabs share one row. A page with links and a sub
+--- anything else is over the left page. Folded, the page's group hangs down the frame's side. A page with links and a sub
 --- line has the sub text after the links, on their line.
 GK.LedgerPages = {
-    { name = "Kill orders", items = OrderItems,
+    { name = "Kill orders", items = OrderItems, icon = MEDIA .. "mark",
       headings = { { "Name", 48, nil, "name", "name, A to Z" }, { "Bounty", COL_RIGHT, "RIGHT", "bounty", "bounty" } },
       sortable = true, add = { text = "Post a kill order", kind = "order" },
       -- with nothing on the page at all, your own record rather than a blank page; otherwise the first
@@ -506,7 +522,7 @@ GK.LedgerPages = {
           return ("%s  -  you: %s, #%d of %d"):format(Plural(#GK.OpenOrders(), "open order"),
               Plural(GK.char.points, "point"), rank, of)
       end },
-    { name = "Leaderboard", items = BoardItems,
+    { name = "Leaderboard", items = BoardItems, icon = MEDIA .. "rank_1",
       headings = { { "#", 12 }, { "Name", NAME_X_RANKED + 4 }, { "K", COL1, "CENTER" }, { "D", COL2, "CENTER" },
           { "Points", COL_RIGHT, "RIGHT" } },
       links = function()
@@ -520,16 +536,17 @@ GK.LedgerPages = {
           end
       end },
     { name = "Most wanted", items = WantedItems, sortable = true, max = LIST_MAX,
+      icon = ICONS .. "Ability_Hunter_SniperShot",          -- the hunter's mark: marked to be hunted
       headings = { { "Name", 48, nil, "name", "name, A to Z" },
           { "Killed us", COL1, "CENTER", "killed", "how often they killed us" },
           { "Bounty", COL_RIGHT, "RIGHT", "bounty", "bounty" } },
       add = { text = "Post a kill order", kind = "order" },
       sub = function() return "Who has killed the guild most" end },
     -- no heading row: each grudge says its own score, and the order is a word on the section's line
-    { name = "Grudges", items = GrudgeItems, headings = {},
+    { name = "Grudges", items = GrudgeItems, headings = {}, icon = ICONS .. "Ability_DualWield",
       sub = function() return "Who you have a history with" end,       -- not everyone: LIST_MAX of them
       default = function() return { key = "me", select = { kind = "record", key = LIB.Me() } } end },
-    { name = "News", items = NewsItems, sortable = true, max = LIST_MAX,
+    { name = "News", items = NewsItems, sortable = true, max = LIST_MAX, icon = ICONS .. "INV_Scroll_03",
       headings = { { "What happened", 48 } },
       sub = function() return "What the guild has been up to" end },
 }
@@ -1058,9 +1075,11 @@ local function BuildList(page)
     page.empty:SetJustifyH("LEFT")
     page.empty:SetSpacing(3)
     -- turning through a long list: the spellbook's page arrows at the foot, and the mouse wheel
+    -- in the gap between the last row (58 up) and the buttons at the foot (32 up), its arrows 36 to 56 up:
+    -- on the foot's line, Read all covered "1-9" and left "of 21" (the store pictures, 2026-11-10)
     page.count = page:CreateFontString(nil, "ARTWORK")
     Ink(page.count, FADED, TEXT_FONT, 10)
-    page.count:SetPoint("BOTTOMRIGHT", -46, 15)
+    page.count:SetPoint("BOTTOMRIGHT", -46, 39)
     local function Arrow(kind, dir)
         local b = CreateFrame("Button", nil, page)
         b:SetSize(20, 20)
@@ -1243,6 +1262,7 @@ local function FillRich(page, d, L)
     local limit = L.h - L.signY - 22 - (#d.buttons > 0 and 34 or 0)
     for _, sec in ipairs(rich.sections) do
         if y + 32 > limit then break end
+        local top, drawn = y, 0
         -- the section's name in red capitals, its rows' labels in plain grey words: in the same small grey
         -- capitals, every label read as one more heading (the owner, 2026-11-06)
         local head = Text(page, BLOOD, 10)
@@ -1288,6 +1308,7 @@ local function FillRich(page, d, L)
                 s:SetText(e.under or "")
                 s:SetPoint("TOPLEFT", page, "TOPLEFT", pad + 30, -(y + 17))
                 y = y + 30
+                drawn = drawn + 1
             end
         else
             -- facts: a label in plain words, its value beside it, and after the value - on its line when it
@@ -1295,9 +1316,9 @@ local function FillRich(page, d, L)
             local room = w - L.factX - pad
             for _, row in ipairs(sec.rows) do
                 if y + 14 > limit then break end
-                local v
+                local k, v, more
                 if row[1] then
-                    local k = Text(page, FADED, 11)
+                    k = Text(page, FADED, 11)
                     k:SetText(row[1])
                     k:SetPoint("TOPLEFT", page, "TOPLEFT", pad, -(y + 1))
                     v = Text(page, INK, 12, room)
@@ -1310,7 +1331,7 @@ local function FillRich(page, d, L)
                 v:SetText(row[2] or "")
                 local h = Height(v, 13)
                 if row[1] and row[3] then
-                    local more = Text(page, FADED, 11, nil, 1)
+                    more = Text(page, FADED, 11, nil, 1)
                     more:SetText(row[3])
                     local used = math.ceil(TextWidth(v))
                     if h <= 16 and used + 8 + TextWidth(more) <= room then
@@ -1321,8 +1342,24 @@ local function FillRich(page, d, L)
                         h = h + 2 + Height(more, 11)
                     end
                 end
+                -- the whole row or none of it: its first line fitting said nothing of the second, and "died
+                -- to them 5 / times" ran into the poster's buttons (the store pictures, 2026-11-10)
+                if y + h > limit then
+                    if k then k:Hide() end
+                    v:Hide()
+                    if more then more:Hide() end
+                    break
+                end
                 y = y + math.max(18, h + 5)
+                drawn = drawn + 1
             end
+        end
+        -- a heading whose first row did not fit goes too, and nothing after it fits either
+        if drawn == 0 and #sec.rows > 0 then
+            head:Hide()
+            line:Hide()
+            y = top
+            break
         end
         y = y + 6
     end
@@ -1544,6 +1581,23 @@ GK.Tone = function(tex, r, g, b) Tone(tex, r, g, b) end
 --- the other group. Each tab at its words' width; if a row is still wider than the window, the chosen
 --- tab keeps its width and the others share what is left (the game's own PanelTemplates_ResizeTabsToFit
 --- does the same, but wants the tabs in one numbered row).
+local TabSide                    -- made with the tabs' art, below: under the frame, or down its right side
+
+--- The icon on a tab folded: ours as drawn, the game's cut round like ours - the square's border trimmed and
+--- the round mask on (as Blizzard rounds an icon, AlertFrameSystems.lua) - so they sit together as medallions.
+local function SetTabIcon(t, path)
+    t.icon:SetTexture(path)
+    local game = path:sub(1, #ICONS) == ICONS
+    local a, b = game and 0.08 or 0, game and 0.92 or 1
+    t.icon:SetTexCoord(a, b, a, b)
+    if game and not t.iconMasked then
+        t.icon:AddMaskTexture(t.iconMask)
+    elseif not game and t.iconMasked then
+        t.icon:RemoveMaskTexture(t.iconMask)
+    end
+    t.iconMasked = game
+end
+
 local function PlaceTabs(folded)
     local current = GK.LedgerPages[tab]
     local friends = current ~= nil and current.side == "right"
@@ -1558,10 +1612,28 @@ local function PlaceTabs(folded)
         win.swap:SetText(friends and "Enemies" or "Friends")
         row[#row + 1] = win.swap
     end
+    -- down the side only in the heavy art, which is drawn as a side tab; the game's thin art is not. Every
+    -- tab, the hidden ones too, so none waits the other way round for the next fold
+    local side = folded and win.swap.heavy ~= nil
+    for _, t in ipairs(win.tabs) do TabSide(t, side) end
+    TabSide(win.swap, side)
+    for i, t in ipairs(row) do
+        t.gap = (i > 1 and (t == win.swap or t.side ~= row[i - 1].side)) and GROUP_GAP or TAB_GAP
+    end
+    if side then
+        -- down the right side, an icon each (TabSide); the switch shows the group it switches to
+        SetTabIcon(win.swap, SWAP_ICON[friends and "Enemies" or "Friends"])
+        for i, t in ipairs(row) do
+            t:SetSize(TAB_BUTTON_H, SIDE_LEN)
+            t:ClearAllPoints()
+            if i == 1 then t:SetPoint("TOPLEFT", win, "TOPRIGHT", -TAB_TUCK, -SIDE_TOP)
+            else t:SetPoint("TOPLEFT", row[i - 1], "BOTTOMLEFT", 0, -t.gap) end
+        end
+        return
+    end
     local width, chosen = 0, nil
     for i, t in ipairs(row) do
         PanelTemplates_TabResize(t, TAB_PAD)
-        t.gap = (i > 1 and (t == win.swap or t.side ~= row[i - 1].side)) and GROUP_GAP or TAB_GAP
         width = width + t:GetWidth() + (i > 1 and t.gap or 0)
         if t.selected then chosen = t end
     end
@@ -1575,7 +1647,8 @@ local function PlaceTabs(folded)
         end
     end
     -- Open, the friendly pages sit at the frame's right edge, apart from the enemy's ("skyv shame og kudos
-    -- lenger ut til høyre", the owner, 2026-11-07); folded, the row runs on from the left as before.
+    -- lenger ut til høyre", the owner, 2026-11-07); folded under the frame (no heavy art), the row runs on
+    -- from the left.
     local firstRight
     if not folded then
         for i, t in ipairs(row) do
@@ -1611,6 +1684,8 @@ local function Layout()
         Tone(win.sheet)
     end
     win.divider:SetShown(not folded)                 -- folded there is one page: nothing to divide
+    -- folded, the tabs down the right side stay on the screen with the frame (PlaceTabs)
+    win:SetClampRectInsets(0, folded and -(TAB_H_ON - TAB_TUCK) or 0, 0, 0)
     win.list:ClearAllPoints()
     win.list:SetPoint("TOPLEFT", b.x, -b.y)
     win.detail:ClearAllPoints()
@@ -1641,7 +1716,8 @@ end
 
 --- One of the heavy art's atlases over a tab (HEAVY, at the top), cut in six: two rows - what stretches with
 --- the tab's height, then the cut corners - by three columns - a corner, what stretches with its width, a
---- corner. Turned a quarter clockwise: the art's x runs down the tab, its y from the tab's right to its left.
+--- corner. Under the frame turned a quarter clockwise: the art's x runs down the tab, its y from the tab's
+--- right to its left. Down the frame's side as it lies (HeavyCoords): its x across the tab, its y down it.
 local function HeavyPieces(t, info, layer, sub, cut, fade)
     local l, r, top, bottom = info.leftTexCoord, info.rightTexCoord, info.topTexCoord, info.bottomTexCoord
     local function U(x) return l + (r - l) * x / HEAVY_SIZE end
@@ -1656,13 +1732,41 @@ local function HeavyPieces(t, info, layer, sub, cut, fade)
         for j, y in ipairs(cols) do
             local p = t:CreateTexture(nil, layer, nil, sub)
             p:SetTexture(info.file or info.filename)
-            -- top left, bottom left, top right, bottom right: the art's bottom left, bottom right, top left,
-            -- top right - the quarter turn
-            p:SetTexCoord(U(x[1]), V(y[2]), U(x[2]), V(y[2]), U(x[1]), V(y[1]), U(x[2]), V(y[1]))
+            p.u, p.v = { U(x[1]), U(x[2]) }, { V(y[1]), V(y[2]) }      -- its piece of the art (HeavyCoords)
             set[i][j] = p
         end
     end
     return set
+end
+
+--- The pieces' corners of the art for the way the tab hangs (t.sideways): under the frame the art a quarter
+--- turned clockwise; down its right side the art as it lies, as drawn - square side against the frame, cut
+--- corners out. The glow's short fade from the frame's edge goes with it: down from the top, or across from
+--- the left (HeavyTab says why it fades).
+local function HeavyCoords(t)
+    local side = t.sideways
+    for key, set in pairs(t.heavy) do
+        local full = key == "hover" and HOVER_ALPHA or 1
+        for i, row in ipairs(set) do
+            for _, p in ipairs(row) do
+                local u, v = p.u, p.v
+                if side then
+                    p:SetTexCoord(u[1], u[2], v[1], v[2])
+                else
+                    -- top left, bottom left, top right, bottom right: the art's bottom left, bottom right,
+                    -- top left, top right - the quarter turn
+                    p:SetTexCoord(u[1], v[2], u[2], v[2], u[1], v[1], u[2], v[1])
+                end
+                if set.fade and i == 1 then
+                    if side then
+                        p:SetGradient("HORIZONTAL", CreateColor(1, 1, 1, 0), CreateColor(1, 1, 1, full))
+                    else
+                        p:SetGradient("VERTICAL", CreateColor(1, 1, 1, full), CreateColor(1, 1, 1, 0))
+                    end
+                end
+            end
+        end
+    end
 end
 
 --- Forever's heavy art in place of the tab's thin art: false, and the tab left as the game draws it, when
@@ -1696,12 +1800,7 @@ local function HeavyTab(t)
     -- The hover's faintness goes into the gradient itself: with SetAlpha as well, the fade's row ended at
     -- full, about twice the rest of the hover glow ("fortsatt glød cut midt på?", the owner, 2026-11-09:
     -- 97 then 49 across that seam, as 1 to 0.45) - the gradient's colours carry an alpha, and it won.
-    for _, key in ipairs({ "glow", "hover" }) do
-        local full = key == "hover" and HOVER_ALPHA or 1
-        for _, p in ipairs(t.heavy[key][1]) do
-            p:SetGradient("VERTICAL", CreateColor(1, 1, 1, full), CreateColor(1, 1, 1, 0))
-        end
-    end
+    HeavyCoords(t)
     -- the game's thin art and its glow stay, unseen: the tab's least width is theirs (PanelTemplates_TabResize)
     for _, k in ipairs({ "Left", "Middle", "Right", "LeftActive", "MiddleActive", "RightActive",
         "LeftHighlight", "MiddleHighlight", "RightHighlight" }) do
@@ -1713,32 +1812,63 @@ end
 --- The heavy art laid out for the tab's state: the chosen tab longer and lit, as the game's own chosen
 --- tab is longer. The glow, lit or hover, starts below the frame's edge (HeavyTab says why).
 local function TabLook(t)
-    if not t.heavy then return end
     local on = t.selected and true or false
+    -- the icon (folded, down the side) in the middle of what shows of the tab, as far out from the edge as
+    -- the words under the frame sit down from it: 1 toward the edge, and 2 out on the chosen, longer tab
+    t.icon:SetPoint("CENTER", t, "CENTER", on and -TAB_TEXT_Y_ON or -TAB_TEXT_Y, 0)
+    if not t.heavy then return end
     local h, C = on and TAB_H_ON or TAB_H, HEAVY_CORNER
     for key, set in pairs(t.heavy) do
         local from = (key == "glow" or key == "hover") and TAB_TUCK or 0
-        -- the rows' heights down the tab: the fade's own (the glow), what stretches, the cut corners
+        -- the rows' depths out from the frame's edge: the fade's own (the glow), what stretches, the cut
+        -- corners - down the tab under the frame, across it down the frame's side
         local tall = set.fade and { set.fade, h - C - from - set.fade, C } or { h - C - from, C }
-        local y = -from
+        local at = from
         for i, row in ipairs(set) do
             for j, p in ipairs(row) do
                 p:ClearAllPoints()
-                p:SetHeight(tall[i])
-                if j == 2 then
-                    p:SetPoint("TOPLEFT", t, "TOPLEFT", C, y)
-                    p:SetPoint("TOPRIGHT", t, "TOPRIGHT", -C, y)
+                if t.sideways then
+                    -- a row of the art is a column here, its three pieces down the tab: the art's bottom
+                    -- (piece 1) at the tab's bottom, what stretches with the tab's length between the corners
+                    p:SetWidth(tall[i])
+                    if j == 2 then
+                        p:SetPoint("TOPLEFT", t, "TOPLEFT", at, -C)
+                        p:SetPoint("BOTTOMLEFT", t, "BOTTOMLEFT", at, C)
+                    else
+                        local corner = j == 1 and "BOTTOMLEFT" or "TOPLEFT"
+                        p:SetHeight(C)
+                        p:SetPoint(corner, t, corner, at, 0)
+                    end
                 else
-                    p:SetWidth(C)
-                    p:SetPoint(j == 1 and "TOPLEFT" or "TOPRIGHT", t, j == 1 and "TOPLEFT" or "TOPRIGHT", 0, y)
+                    p:SetHeight(tall[i])
+                    if j == 2 then
+                        p:SetPoint("TOPLEFT", t, "TOPLEFT", C, -at)
+                        p:SetPoint("TOPRIGHT", t, "TOPRIGHT", -C, -at)
+                    else
+                        p:SetWidth(C)
+                        p:SetPoint(j == 1 and "TOPLEFT" or "TOPRIGHT", t, j == 1 and "TOPLEFT" or "TOPRIGHT", 0, -at)
+                    end
                 end
             end
-            y = y - tall[i]
+            at = at + tall[i]
         end
     end
     for _, row in ipairs(t.heavy.glow) do
         for _, p in ipairs(row) do p:SetShown(on) end
     end
+end
+
+--- Hang a tab under the frame (side false) or down its right side (side true, folded): the art turned or as
+--- it lies (HeavyCoords), and its words, or down the side its icon in their place (Tab, SetTabIcon).
+TabSide = function(t, side)
+    side = side and true or false
+    if t.sideways == side then return end
+    t.sideways = side
+    t.Text:SetShown(not side)
+    t.icon:SetShown(side)
+    if not side then t:SetHeight(TAB_BUTTON_H) end
+    if t.heavy then HeavyCoords(t) end
+    TabLook(t)
 end
 
 local function SelectTab(i)
@@ -1802,7 +1932,7 @@ end
 --- OnShow and OnEvent size it to its words again, which undid a row squeezed to fit the folded window.
 --- It sits at the frame's own level, under its edge (Build raises the edge), in Forever's heavy art
 --- (HeavyTab), its text in the middle of what shows; the game's select and deselect read the two offsets.
-local function Tab(text, onClick)
+local function Tab(text, onClick, icon)
     local t = CreateFrame("Button", nil, win, "PanelTabButtonTemplate")
     t:SetFrameLevel(win:GetFrameLevel())
     t.deselectedTextY, t.selectedTextY = TAB_TEXT_Y, TAB_TEXT_Y_ON
@@ -1813,7 +1943,26 @@ local function Tab(text, onClick)
         GK.Sound("IG_CHARACTER_INFO_TAB")
         onClick(self)
     end)
-    if HeavyTab(t) then TabLook(t) end
+    -- folded, down the frame's side: an icon in its words' place (TabSide), and its name on the mouse
+    t.icon = t:CreateTexture(nil, "ARTWORK")
+    t.icon:SetSize(TAB_ICON, TAB_ICON)
+    t.icon:Hide()
+    t.iconMask = t:CreateMaskTexture()
+    t.iconMask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE",
+        "CLAMPTOBLACKADDITIVE")
+    t.iconMask:SetAllPoints(t.icon)
+    SetTabIcon(t, icon or (ICONS .. "INV_Misc_QuestionMark"))       -- a page that brought none
+    t:HookScript("OnEnter", function(self)
+        if not self.sideways then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(self:GetText() or "")
+        GameTooltip:Show()
+    end)
+    t:HookScript("OnLeave", function(self)
+        if self.sideways then GameTooltip:Hide() end
+    end)
+    HeavyTab(t)
+    TabLook(t)
     return t
 end
 
@@ -1870,7 +2019,7 @@ local function Build()
     -- the tabs (PlaceTabs puts them under the frame)
     win.tabs = {}
     for i, def in ipairs(GK.LedgerPages) do
-        local t = Tab(def.name, function() SelectTab(i) end)
+        local t = Tab(def.name, function() SelectTab(i) end, def.icon)
         t.side = def.side
         win.tabs[i] = t
     end
@@ -2107,10 +2256,11 @@ function GK.FoldLedger(on)
     if win then Fold(on) else GK.db.ledgerFolded = on or nil end
 end
 
---- The ledger's frame and its tabs, which hang below it: what a picture of the ledger has to take in.
+--- The ledger's frame and its tabs, which hang below it - folded, down its right side: what a picture of the
+--- ledger has to take in.
 function GK.LedgerFrames()
     if not win then return {} end
-    local list = { win, win.swap }                  -- the swap tab: folded, the last of the row
+    local list = { win, win.swap }                  -- the swap tab: folded, the last of them
     for _, t in ipairs(win.tabs) do list[#list + 1] = t end
     return list
 end

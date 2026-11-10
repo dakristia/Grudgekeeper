@@ -126,6 +126,20 @@ local function Build()
             blink:Play()
         end
     end)
+    -- Leaving: unread letters that waited their while fade from the icon (Letters.lua, FadeDue), and the
+    -- letter goes the way it came rather than at once
+    local vanish = btn:CreateAnimationGroup()
+    local out = vanish:CreateAnimation("Alpha")
+    out:SetFromAlpha(1)
+    out:SetToAlpha(0)
+    out:SetDuration(1.5)
+    out:SetSmoothing("IN")
+    vanish:SetToFinalAlpha(true)
+    vanish:SetScript("OnFinished", function()
+        btn:Hide()
+        btn:SetAlpha(1)
+    end)
+    btn.vanish = vanish
 
     -- The one line under the letter: a target nearby, or how to place it.
     btn.line = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -197,22 +211,30 @@ local function Settle()
 end
 
 --- Show, hide and dress the letter for what is waiting. landed: a new letter just came; silent: no
---- sound for it (news of something you did yourself).
-function GK.NoticeUpdate(landed, silent)
+--- sound for it (news of something you did yourself); fading: the last unread ones faded (Letters.lua), so
+--- the letter fades out rather than going at once.
+function GK.NoticeUpdate(landed, silent, fading)
     if not GK.char then return end
     if not btn then Build() end
     local unread, first = GK.Unread()
     local warning = GetTime() < warnUntil
     if unread == 0 and not warning and not placing then
         btn.breathe:Stop()
-        btn:Hide()
+        if fading and btn:IsShown() then
+            if not btn.vanish:IsPlaying() then btn.vanish:Play() end
+        else
+            btn.vanish:Stop()
+            btn:Hide()
+        end
         return
     end
+    btn.vanish:Stop()                               -- something came while it faded: it stays
+    btn:SetAlpha(1)
     -- the badge of the newest unread letter; a warning keeps the sealed scroll and glows red
     local icon = MEDIA .. "notice"
     for i = #GK.char.letters, first or 1, -1 do
         local L = GK.char.letters[i]
-        if not L.read and not GK.Held(L) then
+        if not L.read and not L.faded and not GK.Held(L) then
             icon = GK.LETTER_ICON[L.kind] or icon
             break
         end

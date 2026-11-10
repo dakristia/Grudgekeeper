@@ -1115,7 +1115,10 @@ LIB.On("PLAYER_GUILD_UPDATE", GuildMayHaveChanged)
 LIB.On("PLAYER_LOGIN", function()
     if not (GK.db and GK.char) then return end
     queueGuild = LIB.GuildKey()
-    LIB.RegisterComm(PREFIX, OnMessage)
+    -- not while the test panel or the screenshots stand in for the guild: see GK.StartGuild (Guild.lua)
+    LIB.RegisterComm(PREFIX, function(...)
+        if not GK.testMode then OnMessage(...) end
+    end)
     -- the question waits for the guild's name, which can come a little after login
     local function Ask(tries)
         if not Send(Encode.Q()) and IsInGuild() and not GK.testMode and tries < 6 then
