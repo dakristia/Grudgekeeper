@@ -17,7 +17,7 @@ local recapId          -- the death recap the last "You died" line pointed at
 local deathPending
 local lastDeath = "none this session"
 local lastAssist = "none this session"
-local pending = {}      -- [guid] = { v, with, at }: a groupmate's kill waiting for the meter to be readable
+local pending = {}      -- [guid] = { v, at }: a groupmate's kill waiting for the meter to be readable
 local PENDING_FOR = 120 -- seconds a kill may wait for a readable meter before it is dropped
 
 function GK.LastDeathDebug() return lastDeath end
@@ -196,13 +196,18 @@ local function Settle()
         else
             pending[guid] = nil
             if dmg > 0 then
-                lastAssist = ("%s, with %s (%d damage from you)"):format(v.key, p.with, dmg)
+                lastAssist = ("%s, with %s (%d damage from you)"):format(v.key, v.with, dmg)
                 GK.RecordAssist(v)
             else
-                lastAssist = ("%s got %s, but the meter shows no damage from you"):format(p.with, v.key)
+                lastAssist = ("%s got %s, but the meter shows no damage from you"):format(v.with, v.key)
             end
         end
     end
+end
+
+--- Once a fight is over: the meter may need a moment, and a read it refused is tried again a little later.
+local function SettleSoon()
+    for _, delay in ipairs({ 1, 3, 6 }) do C_Timer.After(delay, Settle) end
 end
 
 --- PARTY_KILL (attacker GUID, victim GUID). A function of its own so the smoke test can call it.
@@ -223,9 +228,9 @@ function GK.OnPartyKill(attacker, target)
         return
     end
     v.with = with
-    pending[target] = { v = v, with = with, at = GetTime() }
+    pending[target] = { v = v, at = GetTime() }
     lastAssist = ("%s, with %s: waiting for the fight to end"):format(v.key, with)
-    if not InCombatLockdown() then Settle() end
+    if not InCombatLockdown() then SettleSoon() end
 end
 
 -- ---------------------------------------------------------------------------
@@ -395,8 +400,7 @@ end
 
 function GK.StartKills()
     LIB.On("PARTY_KILL", function(attacker, target) GK.OnPartyKill(attacker, target) end)
-    -- The meter may need a moment after the fight ends.
-    LIB.On("PLAYER_REGEN_ENABLED", function() C_Timer.After(1, Settle) end)
+    LIB.On("PLAYER_REGEN_ENABLED", SettleSoon)
     LIB.On("CHAT_MSG_SYSTEM", function(text)
         if type(text) ~= "string" or Secret(text) then return end
         local id = text:match("|Hdeath:(%d+)|h")

@@ -2045,12 +2045,25 @@ test("assist: none when the meter shows only the groupmate's damage", function()
     eq(GK.char.assists, 0, "settled once, not again")
 end)
 
-test("assist: a kill out of combat settles at once, no event needed", function()
+test("assist: a kill out of combat settles a moment later, no event needed", function()
     local GK = bootKills()
     W.fight.combat = false
     W.fight.dmg[FOE_GUID] = { { "Kari", 900 }, { "Me", 65 } }
     GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    eq(GK.char.assists, 0, "the meter gets a moment first")
+    W.advance(1)
     eq(GK.char.assists, 1)
+end)
+
+test("assist: a meter that won't say at the end of the fight is asked again a few seconds on", function()
+    local GK, LIB = bootKills()
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    W.fight.secret = true
+    endFight(LIB, { { "Me", 65 } })
+    eq(GK.char.assists, 0, "secret at 1 s")
+    W.fight.secret = false
+    W.advance(2)
+    eq(GK.char.assists, 1, "read at 3 s")
 end)
 
 test("assist: none for a stranger's kill, even with your damage in the meter", function()
