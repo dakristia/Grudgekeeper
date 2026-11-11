@@ -13,7 +13,7 @@ local frame
 local target            -- { key, guid, c, r, l }
 
 local function Ink(fs, colour, font, size)
-    fs:SetFont(font, size, "")
+    GK.SetFont(fs, font, size)                   -- a family: names in Cyrillic too (Core.lua)
     fs:SetTextColor(colour[1], colour[2], colour[3])
     fs:SetShadowOffset(0, 0)
 end

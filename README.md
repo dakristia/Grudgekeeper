@@ -13,7 +13,7 @@ leaderboard, and kill orders with a bounty on them.
 - Right-click a player and pick **Grudgekeeper profile**: a wanted poster for an enemy, the record of a
   guildie. On an enemy, **Post a kill order** is right below it, and for an officer **Watch their guild**
   when they are in one: the guild watches one enemy guild at a time, and anyone from it warns whoever
-  comes across them.
+  comes across them. `/grudge guild` puts a guild on watch by its name, for one nobody has met lately.
 - A grudge that is wrong goes with **Forget grudge** on that player's card (two clicks): your record of
   them, here and in the guild's lists. Your score stays.
 - Inspect a guildie and the **Grudgekeeper** tab below the game's own shows their page of the ledger.

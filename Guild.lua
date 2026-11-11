@@ -171,7 +171,7 @@ local function Plain(key)
             plainCount = 0
         end
         name = key:gsub("%-[^%-]*$", "")
-        plainName[key], plainFirst[key] = name, name:match("^%S+") or name
+        plainName[key], plainFirst[key] = name, name:match("^[^ ]+") or name    -- not %S: see GK.SameName
         plainCount = plainCount + 1
     end
     return name, plainFirst[key]
@@ -310,33 +310,123 @@ function GK.AllOrders()
     return list
 end
 
---- What I owe for orders somebody else fulfilled: my reward on orders I posted, my share of the pot
---- on orders I backed. { { o = order, share = copper } }, the oldest first.
+-- ---------------------------------------------------------------------------
+-- The bounty, shared: everyone who got the target - the killing blow and the guildies with them
+-- (GroupHelpers, below) - gets an equal part of every gold piece in the pot ("samarbeider folk i samme
+-- guild så fortjener de begge delt reward", the owner, 2026-11-09). Each who put gold in pays each hunter
+-- their part straight, so nobody lays out for anyone; what doesn't divide goes to the killing blow. A
+-- payment is kept per payer and hunter (o.paidTo), and said per hunter with Y. An older client knows only
+-- the whole: a backer's o.paid, the poster's state "p" - both still mean everything is paid.
+-- ---------------------------------------------------------------------------
+--- Who got an order's target: the killing blow first, then who was with them. {} while it is open.
+function GK.Hunters(o)
+    if not o.doneBy then return {} end
+    local out, have = { o.doneBy }, { [o.doneBy] = true }
+    for _, k in ipairs(o.helpers or {}) do
+        if not have[k] then
+            have[k] = true
+            out[#out + 1] = k
+        end
+    end
+    return out
+end
+
+--- A hunter's part of an amount: an equal share, the killing blow taking what doesn't divide. 0 for anyone
+--- who didn't get them.
+function GK.Part(o, amount, hunter)
+    local hunters = GK.Hunters(o)
+    local n = #hunters
+    if n == 0 or (amount or 0) <= 0 then return 0 end
+    local each = math.floor(amount / n)
+    for i, h in ipairs(hunters) do
+        if h == hunter then return i == 1 and (amount - each * (n - 1)) or each end
+    end
+    return 0
+end
+
+--- What a payer put into an order: the poster their reward, a backer their share.
+local function Given(o, payer)
+    if payer == o.by then return o.reward or 0 end
+    return o.pot and o.pot[payer] or 0
+end
+
+--- Whether a payer has paid a hunter their part: per hunter, or the whole as an older client marks it.
+function GK.IsPaid(o, payer, hunter)
+    if payer == o.by and o.state == "p" then return true end
+    if o.paid and o.paid[payer] then return true end
+    return o.paidTo ~= nil and o.paidTo[payer] ~= nil and o.paidTo[payer][hunter] == true
+end
+
+--- Whether a payer has paid every hunter but themselves.
+local function AllPaid(o, payer)
+    for _, h in ipairs(GK.Hunters(o)) do
+        if h ~= payer and not GK.IsPaid(o, payer, h) then return false end
+    end
+    return true
+end
+
+local function MarkPaidTo(o, payer, hunter)
+    o.paidTo = o.paidTo or {}
+    o.paidTo[payer] = o.paidTo[payer] or {}
+    o.paidTo[payer][hunter] = true
+end
+
+--- What a hunter has coming from an order: their part of everyone else's gold (their own stays theirs).
+function GK.DueTo(o, hunter)
+    local due = 0
+    if o.by ~= hunter then due = due + GK.Part(o, o.reward or 0, hunter) end
+    for who, copper in pairs(o.pot or {}) do
+        if who ~= hunter then due = due + GK.Part(o, copper, hunter) end
+    end
+    return due
+end
+
+--- What I owe for orders others got: my reward on orders I posted and my share on orders I backed, a
+--- part to each hunter but me. { { o = order, share = copper, to = hunter } }, the oldest first.
 function GK.Owed()
     local me, list = LIB.Me(), {}
     for _, o in pairs(GK.Store().orders) do
-        if o.doneBy and o.doneBy ~= me then
-            if o.by == me and o.state == "d" and (o.reward or 0) > 0 then
-                list[#list + 1] = { o = o, share = o.reward }
+        if o.doneBy and (o.state == "d" or o.state == "p") then
+            local function Owe(amount)
+                if amount <= 0 then return end
+                for _, h in ipairs(GK.Hunters(o)) do
+                    if h ~= me and not GK.IsPaid(o, me, h) then
+                        local part = GK.Part(o, amount, h)
+                        if part > 0 then list[#list + 1] = { o = o, share = part, to = h } end
+                    end
+                end
             end
+            if o.by == me then Owe(o.reward or 0) end
             local mine = o.pot and o.pot[me]
-            if mine and mine > 0 and (o.state == "d" or o.state == "p") and not (o.paid and o.paid[me]) then
-                list[#list + 1] = { o = o, share = mine }
-            end
+            if mine and o.by ~= me then Owe(mine) end
         end
     end
-    table.sort(list, function(a, b) return (a.o.doneAt or 0) < (b.o.doneAt or 0) end)
+    table.sort(list, function(a, b)
+        if (a.o.doneAt or 0) ~= (b.o.doneAt or 0) then return (a.o.doneAt or 0) < (b.o.doneAt or 0) end
+        return a.to < b.to
+    end)
     return list
 end
 
---- My part of a fulfilled order is paid: the poster's through the order's state, a backer's with Y.
-function GK.PayShare(o)
+--- My part of a fulfilled order is paid: to one hunter (to), or to every hunter. Each said with Y; all paid,
+--- the whole is marked as every client knows it - the poster's order "p", a backer's o.paid.
+function GK.PayShare(o, to)
     local me = LIB.Me()
-    if o.by == me then return GK.MarkPaid(o) end
-    if not (o.pot and o.pot[me]) then return end
-    o.paid = o.paid or {}
-    o.paid[me] = true
-    Send(Msg("Y", PROTO, o.by, o.id))
+    if Given(o, me) <= 0 or not o.doneBy then return end
+    for _, h in ipairs(to and { to } or GK.Hunters(o)) do
+        if h ~= me and not GK.IsPaid(o, me, h) then
+            MarkPaidTo(o, me, h)
+            Send(Msg("Y", PROTO, o.by, o.id, h))
+        end
+    end
+    if AllPaid(o, me) then
+        if o.by == me then
+            GK.MarkPaid(o)
+        else
+            o.paid = o.paid or {}
+            o.paid[me] = true
+        end
+    end
     GK.Changed()
 end
 
@@ -446,19 +536,80 @@ function GK.MarkPaid(o)
     GK.Changed()
 end
 
+-- ---------------------------------------------------------------------------
+-- Who helped: the group members near when our kill fulfilled an order. The killing blow is one player's,
+-- the kill is often two or three ("jeg og kompis ... gikk sammen og drepte han. jeg fikk killing blow og det
+-- stod ikke noe om at han hadde vært med", the owner, 2026-11-09). A member of our party or raid in sight
+-- (UnitIsVisible: within about a hundred yards) counts - the combat log that would say who hit them is
+-- closed to addons. They go with the F, so each of them hears it was theirs too.
+-- ---------------------------------------------------------------------------
+local MAX_HELPERS = 4
+
+local function GroupHelpers()
+    if not (IsInGroup and IsInGroup()) then return nil end
+    local raid = IsInRaid and IsInRaid()
+    local n = GetNumGroupMembers and GetNumGroupMembers() or 0
+    local out = {}
+    for i = 1, raid and n or (n - 1) do
+        local unit = (raid and "raid" or "party") .. i
+        if UnitExists(unit) and not UnitIsUnit(unit, "player") and UnitIsVisible(unit) then
+            local key = GK.UnitKey(unit)
+            if key and not GK.Secret(key) then out[#out + 1] = key end
+            if #out >= MAX_HELPERS then break end
+        end
+    end
+    return #out > 0 and out or nil
+end
+
+--- An order's helpers as the F carries them: keys, comma between ("" for none).
+local function HelpersText(o)
+    return o.helpers and table.concat(o.helpers, ",") or ""
+end
+
+--- Whether we are one of an order's helpers.
+local function Helped(o)
+    for _, k in ipairs(o.helpers or {}) do
+        if LIB.IsMyStoredName(k) then return true end
+    end
+    return false
+end
+GK.Helped = Helped
+
+--- Players by name, as a sentence says them: "Kari", "Kari and Lars", "Kari, Lars and Edvard".
+function GK.NameList(keys)
+    local names = {}
+    for _, k in ipairs(keys) do names[#names + 1] = GK.Show(k) end
+    if #names <= 1 then return names[1] or "" end
+    return table.concat(names, ", ", 1, #names - 1) .. " and " .. names[#names]
+end
+
+--- Who got an order's target, the killing blow first: "Vebjorn", "Vebjorn and Kari".
+function GK.WhoGotThem(doneBy, helpers)
+    local keys = { doneBy }
+    for _, k in ipairs(helpers or {}) do keys[#keys + 1] = k end
+    return GK.NameList(keys)
+end
+
 --- Our kill fulfilled this order.
 function GK.Fulfil(o, zone)
     if o.state ~= "o" then return end
     local me = LIB.Me()
     o.state, o.doneBy, o.doneAt, o.doneZone = "d", me, time(), zone
     Touched()
-    -- For the profile: orders fulfilled, and the bounties they carried when the kill was made.
-    GK.char.done = (GK.char.done or 0) + 1
-    GK.char.won = (GK.char.won or 0) + (GK.Pot(o))
+    -- For the profile: orders fulfilled, and the bounties they carried when the kill was made. Not your
+    -- own order: getting its target yourself closes it, but you fulfilled nobody's order ("hvis jeg
+    -- fulfiller min egen order burde den ikke ligge som 'fulfilled' på profilen", the owner, 2026-11-09).
+    local own = o.by == me
+    o.helpers = GroupHelpers()
+    if not own then
+        GK.char.done = (GK.char.done or 0) + 1
+        GK.char.won = (GK.char.won or 0) + GK.DueTo(o, me)        -- our part, the bounty shared (GK.Part)
+    end
     -- Sent whatever "share" says: fulfilling an order is the one thing the order exists for.
-    Send(Msg("F", PROTO, o.by, o.id, zone))
-    if o.by == me then SendOrder(o) end
-    AddFeed({ t = o.doneAt, who = me, kind = "F", n = o.n, c = o.c, l = o.l, p = o.reward, z = zone })
+    Send(Msg("F", PROTO, o.by, o.id, zone, HelpersText(o)))
+    if own then SendOrder(o) end
+    AddFeed({ t = o.doneAt, who = me, kind = "F", n = o.n, c = o.c, l = o.l, p = o.reward, z = zone,
+        own = own or nil, h = o.helpers })
     GK.CompleteLetter(o)
 end
 
@@ -474,6 +625,33 @@ function GK.TellGuild(text)
     local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
     if not send then return false end
     return (pcall(send, LIB.Sanitize(text, 240), "GUILD"))
+end
+
+--- Whether we may tell the guild an order was fulfilled: it was, by us or with us there, and it is not told
+--- yet. o: the order, L: its letter - either can be missing (a letter outlives a trimmed order, and an order
+--- its read letter).
+function GK.CanTellOrder(o, L)
+    if (o and o.told) or (L and L.told) then return false end
+    local t = o or L
+    if not (t and t.doneBy) or (o and o.state == "o") then return false end
+    return LIB.IsMyStoredName(t.doneBy) or Helped(t)
+end
+
+--- An order fulfilled, in one line of guild chat, for the guildies without Grudgekeeper - from the player's
+--- click on its letter or on its card in the ledger, and once: told from either, neither offers it again.
+--- A read letter is gone, and the card is where it can still be told ("jeg hadde lukket letter så fikk det
+--- ikke opp igjen", the owner, 2026-11-09). Returns true when it went.
+function GK.TellOrder(o, L)
+    local t = o or L
+    if not t then return false end
+    local pot = o and (GK.Pot(o)) or L.pot or L.reward or 0
+    local text = ("Grudgekeeper: %s is dead - %s's kill order, fulfilled by %s%s."):format(GK.Show(t.n),
+        GK.Show(t.by), GK.WhoGotThem(t.doneBy, t.helpers), pot > 0 and (", bounty " .. GK.MoneyText(pot)) or "")
+    if not GK.TellGuild(text) then return false end
+    if o then o.told = true end
+    if L then L.told = true end
+    GK.Changed()
+    return true
 end
 
 --- Where we saw an order's target: o.seen as Sightings.lua filled it in, our own spot included.
@@ -705,6 +883,22 @@ end
 -- passes on only what nobody has said since the ask (Answer, below).
 local heard = {}
 
+-- [order key] = GetTime() we last said again that our kill fulfilled it (ApplyOrder)
+local resaid = {}
+local RESAY_GAP = 60
+
+--- Money owed is the one kind of news that also goes in chat: what we owe on the order, to each hunter.
+local function Owing(o)
+    local parts = {}
+    for _, e in ipairs(GK.Owed()) do
+        if e.o == o then parts[#parts + 1] = ("%s %s"):format(GK.Show(e.to), GK.MoneyText(e.share)) end
+    end
+    if #parts == 0 then return end
+    local list = #parts == 1 and parts[1] or (table.concat(parts, ", ", 1, #parts - 1) .. " and " .. parts[#parts])
+    print(("%s: %s fulfilled the kill order on %s - mail or trade %s."):format(GK.TAG,
+        GK.WhoGotThem(o.doneBy, o.helpers), GK.Show(o.n), list))
+end
+
 --- A guildie a relay names, in our spelling. Every guildie reaches us without a realm and is filed under
 --- ours (GK.LocalKey's note), so one we have not heard of yet is filed under ours too: else the order a
 --- relay brought and the one its poster sends later would be two.
@@ -727,6 +921,21 @@ end
 local function KeepLook(name, rf, sx)
     rf, sx = ReadLook(rf, sx)
     if rf and sx then GK.KeepLooks(name, { rf = rf, sx = sx }) end
+end
+
+--- The helpers an F names, in our spelling: at most MAX_HELPERS, each once, never the killer.
+local function ReadHelpers(field, sender)
+    if type(field) ~= "string" or field == "" then return nil end
+    local out, have = {}, {}
+    for part in field:gmatch("[^,]+") do
+        local key = GuildieKey(GK.Clean(part, 64))
+        if key and key ~= sender and not have[key] then
+            have[key] = true
+            out[#out + 1] = key
+        end
+        if #out >= MAX_HELPERS then break end
+    end
+    return #out > 0 and out or nil
 end
 
 --- A guildie's row on the board from a B (their own word, base 0) or an R (another guildie's copy of it,
@@ -849,14 +1058,31 @@ local function ApplyOrder(by, f, base, relayed)
     if o.state ~= "o" and not o.doneAt then o.doneAt = now end
     Touched()
     Trim(s)
+    -- The poster still calls it open, and our kill fulfilled it: they were away when it happened, and
+    -- nobody else may tell them (OnRelayedOrder takes no order of theirs from a third). So we say it
+    -- again, at most once a minute - every answer to a login carries their orders.
+    if not relayed and state == "o" and o.state == "d" and o.doneBy == LIB.Me() and o.by ~= o.doneBy then
+        local last = resaid[o.key]
+        if not last or GetTime() - last > RESAY_GAP then
+            resaid[o.key] = GetTime()
+            Send(Msg("F", PROTO, o.by, o.id, o.doneZone, HelpersText(o)))
+        end
+    end
     if fresh and o.state == "o" then
         -- the news is what happened while you were here: an order passed on to you is a letter, not news
         if not relayed then
             AddFeed({ t = now, who = by, kind = "C", n = o.n, c = o.c, l = o.l, p = o.reward, au = o.auto and true or nil })
         end
         if GK.db.letters then GK.OrderLetter(o) end
-    elseif not relayed and was ~= o.state and o.state == "p" and o.doneBy == LIB.Me() and (o.reward or 0) > 0 then
-        GK.PaidLetter(o)
+    elseif not relayed and was ~= o.state and o.state == "p" and o.doneBy == LIB.Me() and (o.reward or 0) > 0
+        and not (o.paidTo and o.paidTo[o.by] and o.paidTo[o.by][o.doneBy]) then
+        -- the poster's whole, from a client that pays it so (a newer one said our part with Y already)
+        GK.PaidLetter(o, nil, GK.Part(o, o.reward, o.doneBy))
+    elseif was == "o" and (o.state == "d" or o.state == "p") and o.doneBy and o.doneBy ~= LIB.Me()
+        and o.pot and (o.pot[LIB.Me()] or 0) > 0 then
+        -- a share of ours in an order fulfilled while we were away: the letter its F would have brought
+        GK.CompleteLetter(o)
+        Owing(o)
     end
 end
 
@@ -886,17 +1112,22 @@ local function OnFulfil(sender, f)
     local o = OrderNamed(GK.Clean(f[3], 64), Int(f[4], 1, 2 ^ 31))
     if not o or o.state ~= "o" then return end      -- the first one we hear of wins
     o.state, o.doneBy, o.doneAt, o.doneZone = "d", sender, time(), GK.Clean(f[5], 40)
+    o.helpers = ReadHelpers(f[6], sender)
     Touched()
-    AddFeed({ t = o.doneAt, who = sender, kind = "F", n = o.n, c = o.c, l = o.l, p = o.reward, z = o.doneZone })
+    AddFeed({ t = o.doneAt, who = sender, kind = "F", n = o.n, c = o.c, l = o.l, p = o.reward, z = o.doneZone,
+        own = o.by == sender or nil, h = o.helpers })
     local me = LIB.Me()
     local share = (o.by == me and (o.reward or 0)) or (o.pot and o.pot[me]) or 0
     if o.by == me then SendOrder(o) end               -- the poster's word settles who was first
-    if o.by == me or share > 0 then GK.CompleteLetter(o) end      -- yours, or backed by you
-    if share > 0 then
-        -- Money owed is the one kind of news that also goes in chat.
-        print(("%s: %s fulfilled the kill order on %s - send them %s in the mail."):format(GK.TAG,
-            GK.Show(sender), GK.Show(o.n), GK.MoneyText(share)))
+    -- got with you there: yours too, on your profile as on the killer's (not your own order: GK.Fulfil)
+    if Helped(o) and o.by ~= me then
+        GK.char.done = (GK.char.done or 0) + 1
+        GK.char.won = (GK.char.won or 0) + GK.DueTo(o, me)
+        GK.SendBoard()
     end
+    -- yours, backed by you, or got with you there
+    if o.by == me or share > 0 or Helped(o) then GK.CompleteLetter(o) end
+    if share > 0 then Owing(o) end
 end
 
 local function OnPot(sender, f)
@@ -932,12 +1163,31 @@ local function OnRelayedPot(sender, f)
     o.pot[backer] = copper
 end
 
+--- Y: the sender paid a hunter their part (the hunter named), or - from an older client - a backer paid it
+--- all. Only the payer's own payments, and only to someone who got the target.
 local function OnSharePaid(sender, f)
     local o = OrderNamed(GK.Clean(f[3], 64), Int(f[4], 1, 2 ^ 31))
-    if not (o and o.pot and o.pot[sender]) or (o.paid and o.paid[sender]) then return end
-    o.paid = o.paid or {}
-    o.paid[sender] = true
-    if o.doneBy == LIB.Me() then GK.PaidLetter(o, sender, o.pot[sender]) end
+    if not (o and o.doneBy) then return end
+    local given = Given(o, sender)
+    if given <= 0 then return end
+    local named = f[5] ~= nil and f[5] ~= ""
+    if named then
+        local hunter = GuildieKey(GK.Clean(f[5], 64))
+        local part = hunter and GK.Part(o, given, hunter) or 0
+        if part <= 0 or GK.IsPaid(o, sender, hunter) then return end
+        MarkPaidTo(o, sender, hunter)
+        if sender ~= o.by and AllPaid(o, sender) then
+            o.paid = o.paid or {}
+            o.paid[sender] = true
+        end
+        if LIB.IsMyStoredName(hunter) then GK.PaidLetter(o, sender, part) end
+    else
+        if sender == o.by or (o.paid and o.paid[sender]) then return end
+        o.paid = o.paid or {}
+        o.paid[sender] = true
+        if o.doneBy == LIB.Me() then GK.PaidLetter(o, sender, given) end
+    end
+    GK.Changed()
 end
 
 local function OnSighting(sender, f)
@@ -1016,10 +1266,22 @@ local function Answer()
         local recent = o.state == "o" or now - (o.doneAt or o.t or 0) < ORDER_DAYS * GK.DAY
         if recent then
             if o.by == me then Paced(function() return OrderText(o) end) end
+            -- an order of someone else's that our kill fulfilled, said again while it is unpaid: its poster
+            -- or a backer may have been away when it happened, and only we may say it (ApplyOrder)
+            if o.doneBy == me and o.by ~= me and o.state == "d" then
+                Paced(function() return o.state == "d" and Msg("F", PROTO, o.by, o.id, o.doneZone, HelpersText(o)) or nil end)
+            end
             local mine = o.pot and o.pot[me]
             if mine then
                 Paced(function() return Msg("T", PROTO, o.by, o.id, mine) end)
                 if o.paid and o.paid[me] then Paced(function() return Msg("Y", PROTO, o.by, o.id) end) end
+            end
+            -- what we have paid each hunter, while not all of it is: the whole goes as T's Y above, or
+            -- as the poster's state
+            if (mine or o.by == me) and not (o.paid and o.paid[me]) and not (o.by == me and o.state == "p") then
+                for h in pairs(o.paidTo and o.paidTo[me] or {}) do
+                    Paced(function() return Msg("Y", PROTO, o.by, o.id, h) end)
+                end
             end
         end
     end
@@ -1157,7 +1419,14 @@ local function Ask()
 end
 
 function GK.StartGuild()
-    LIB.RegisterComm(PREFIX, OnMessage)
+    -- While the test panel or the screenshots stand in for the guild (GK.testMode), the real guild's
+    -- messages wait outside: they landed in the made-up store, and the store page's pictures showed four
+    -- real guildies on the made-up leaderboard and "#4 of 19, 22, 24" a few seconds apart (2026-11-10).
+    -- Taken in, it went out with the made-up store when the panel closed anyway; a guildie's score and
+    -- orders come again with their next send, or the answer to our next login.
+    LIB.RegisterComm(PREFIX, function(...)
+        if not GK.testMode then OnMessage(...) end
+    end)
     C_Timer.After(8, function()
         GK.Sweep()
         Ask()

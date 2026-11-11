@@ -33,7 +33,8 @@ local function PutBack(into, from)
 end
 
 local function Restore()
-    if not GK.testMode then return end
+    -- not ours to put back: test mode with nothing saved here is the screenshot mode's (Shots.lua)
+    if not (GK.testMode and saved) then return end
     GK.testMode = false
     if saved then
         PutBack(GK.char, saved.char)
@@ -86,7 +87,10 @@ local KARI_ORDER = 901
 local ACTIONS = {
     { "Letters and the notice" },
     { "Sample letters", function() GK.SampleLetters() end },
-    { "Your target is near", function() GK.Warn(GK.Show(TheEnemy().key) .. " is near!", true) end },
+    { "Your target is near", function()
+        local v = TheEnemy()
+        GK.Warn(GK.Show(v.key) .. " is near!", true, nil, v.key)
+    end },
     { "Place the letter icon", function() GK.PlaceNotice() end },
     { "Open the window", function() GK.OpenWindow(1) end },
 
@@ -106,7 +110,7 @@ local ACTIONS = {
         GK.RecordDeath(v)
     end },
     { "You owe a bounty", function()
-        -- your own order, fulfilled by Edvard: the Pay bounty button shows at a mailbox
+        -- your own order, fulfilled by Edvard: the card of what you owe shows at a mailbox
         local o = GK.PostOrder(Enemy("Gærd Balle", "HUNTER"), 50000, "Test: you owe Edvard 5g")
         if o then Hear("Edvard", "F", 1, LIB.Me(), o.id, GK.Zone()) end
     end },
@@ -241,6 +245,10 @@ end
 --- /grudge debug: open the test panel, and test mode with it.
 function GK.OpenDebug()
     if not GK.char then return end
+    if GK.shotMode then
+        Say("close the screenshot panel first.")
+        return
+    end
     if not panel then Build() end
     Begin()
     panel:Show()

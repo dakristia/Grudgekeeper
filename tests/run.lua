@@ -831,18 +831,26 @@ local function bootSheets(opts)
     function GK.OrderOn(key) return (GK.orders[key] or {})[1] end
     function GK.Pot(o) return o.reward or 0, 0 end
     function GK.Accept() end
+    -- and what a fulfilled order's letter asks of it: who was there, and whether it is yours to tell
+    function GK.Helped() return false end
+    function GK.NameList(keys) return table.concat(keys, " and ") end
+    function GK.CanTellOrder(o, L)
+        local t = o or L
+        return not t.told and t.doneBy == ME
+    end
+    function GK.TellOrder() return false end
     return GK
 end
 
 -- A kill gets a letter only for a new title, in three short lines (the owner, 2026-11-07: "kanskje ikke så
 -- mye text?" - seven lines ran into the seal).
-test("letter content: a kill letter is a note: the title, the kill, where you stand, then its closing line", function()
+test("letter content: a kill letter is a note: greeted by the title, its own line, the kill, where you stand", function()
     local GK = bootSheets({ me = ME })
     local L = { id = 2, kind = "kill", n = GANK, c = "ROGUE", r = "Orc", l = 35, z = "Hillsbrad", title = "Bloodhound",
         rank = 4, of = 12, total = 31, sample = true }
     local d = GK.LetterContent(L)
     eq(d.note, true)
-    eq(d.title, "A new title")
+    eq(d.title, "Rise, Bloodhound")
     eq(d.seal, "seal_red")
     eq(d.blood, false)
     eq(d.key, GANK)
@@ -850,8 +858,8 @@ test("letter content: a kill letter is a note: the title, the kill, where you st
     eq(d.sample, true)
     eq(#d.buttons, 1)
     eq(d.buttons[1][1], "Leaderboard")
-    eq(table.concat(d.lines, "\n"), "You are now a Bloodhound.\nGank Master in Hillsbrad was the kill that did it.\n"
-        .. "31 points - #4 of 12 in the guild.\n\nKeep them coming.")
+    eq(table.concat(d.lines, "\n"), "So, Gank Master is dead - in Hillsbrad, I hear. From today I'm writing "
+        .. "you down as Bloodhound.\nThat makes you 4th of 12 in the guild, with 31 points. Keep hunting.")
 end)
 
 test("letter content: a kill letter from before titles says the kill and where you stand", function()
@@ -860,7 +868,7 @@ test("letter content: a kill letter from before titles says the kill and where y
         total = 40 }
     local d = GK.LetterContent(L)
     eq(d.title, "Blood drawn")
-    eq(table.concat(d.lines, "\n"), "You killed Gank Master.\n40 points - #1 of 3 in the guild.\n\n"
+    eq(table.concat(d.lines, "\n"), "So, Gank Master is dead.\nThat makes you 1st of 3 in the guild, with 40 points.\n\n"
         .. "They'll remember your name.")
 end)
 

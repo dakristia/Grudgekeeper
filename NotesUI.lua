@@ -282,7 +282,8 @@ end
 --- officer the way to take it off. nil when it is not the watched guild (any more).
 function GK.GuildCard(guild)
     local name, by, ts = GK.WatchedGuild()
-    if name ~= guild then return nil end
+    if not GK.SameGuild(name, guild) then return nil end
+    guild = name                    -- as it is spelled now: a name typed in gets the game's spelling later
     local d = { title = "WATCHED GUILD", name = "<" .. guild .. ">", info = "Anyone of theirs near warns you.",
         lines = {}, buttons = {}, seal = "mark" }
     d.lines[1] = ("Put on watch by %s, %s."):format(by and Who(by) or "an officer", GK.Ago(ts))
@@ -315,9 +316,18 @@ end
 for _, list in ipairs({ "watch", "kudos" }) do
     GK.AddLedgerPage({
         name = PAGE_WORD[list], list = list, sortable = true, side = "right", add = { text = ADD[list], kind = list },
+        max = GK.LIST_MAX,                  -- the latest 25 (Window.lua): "ikke evig pages" (the owner, 2026-11-10)
+        -- its tab folded, down the frame's side (Window.lua): a rogue in the shadows for the ninja looters,
+        -- a gift for a good player
+        icon = "Interface\\Icons\\" .. (list == "watch" and "Ability_Stealth" or "INV_Misc_Gift_02"),
         items = function() return GK.NotesItems(list) end,
         headings = { { "Player", 48, nil, "name", "name, A to Z" }, { "Votes", COL_RIGHT, "RIGHT", "votes", "votes" } },
-        sub = function(items) return ("%s on %s"):format(Plural(#items, "player"), PAGE_WORD[list]) end,
+        -- how many are on it, all of them, and how many of those the page lists when not all
+        sub = function(items, all)
+            all = all or #items
+            local text = ("%s on %s"):format(Plural(all, "player"), PAGE_WORD[list])
+            return all > #items and ("%s - the latest %d here"):format(text, #items) or text
+        end,
     })
 end
 
@@ -739,7 +749,7 @@ local function Nearby(key, s)
     nearAt[key] = now
     local name = GK.Show(key)
     if warn then
-        GK.Warn(("Marked: %s is near!%s"):format(name, TagSuffix(s.tags.kos)), true)
+        GK.Warn(("Marked: %s is near!%s"):format(name, TagSuffix(s.tags.kos)), true, nil, key, key)
     else
         print(("%s: %s from your Shame list is near%s"):format(GK.TAG, name, TagSuffix(s.tags.watch)))
     end
@@ -769,10 +779,18 @@ local function RefreshPlates()
     for unit in pairs(plates) do Look(unit) end
 end
 
+--- The sound for a Shame player joining: the one picked in the settings, the chime when that one can't be
+--- played (a warning must never go silent because a file went missing), nothing for None.
+local function ShameSound()
+    local key = GK.ShameSoundKey()
+    if not GK.db.sound or key == "off" then return end
+    if not GK.PlayChoice(key) then GK.Sound("UI_RAID_BOSS_WHISPER_WARNING") end
+end
+
 --- Who joined the group since the last update: Shame warns, Kudos says one friendly line.
 function GK.CheckNotesGroup()
     if not (GK.db and GK.char) then return end
-    local current = {}
+    local current, shamed = {}, false
     local function Add(unit)
         local key = PlayerKey(unit)
         if not key then return end
@@ -783,7 +801,8 @@ function GK.CheckNotesGroup()
         GK.LearnPerson(key, ReadPlayer(unit))
         local name = GK.Show(key)
         if #s.lists.watch > 0 and GK.db.watchGroup then
-            GK.Warn(("Shame list: %s joined your group%s"):format(name, TagSuffix(s.tags.watch)), true)
+            GK.Warn(("Shame list: %s joined your group%s"):format(name, TagSuffix(s.tags.watch)), true, true)
+            shamed = true
         end
         if #s.lists.kudos > 0 and GK.db.kudosGroup then
             print(("%s: |cff4dff66Kudos:|r %s joined your group%s"):format(GK.TAG, name, TagSuffix(s.tags.kudos)))
@@ -795,6 +814,8 @@ function GK.CheckNotesGroup()
         for i = 1, 4 do Add("party" .. i) end
     end
     lastGroup = current
+    -- one sound however many of them joined at once
+    if shamed then ShameSound() end
 end
 
 -- (Guild Grudge's raid-warning alert style was left out of the merge, 2026-11-05: Grudgekeeper's warnings
@@ -814,6 +835,39 @@ end
 -- ---------------------------------------------------------------------------
 -- Settings
 -- ---------------------------------------------------------------------------
+-- A sound to pick, under its box: the game's own dropdown. Picking one plays it, so you hear what you chose,
+-- and picking the same one again plays it again. No dropdown in this client: no row. get() is the key in use,
+-- set(key) keeps a new one; for a Shame player joining here, and for a target near (Options.lua).
+function GK.SoundRow(f, above, get, set)
+    local row = CreateFrame("Frame", nil, f)
+    row:SetSize(400, 28)
+    row:SetPoint("TOPLEFT", above, "BOTTOMLEFT", 0, -2)
+    local label = row:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    label:SetPoint("LEFT", 30, 0)                 -- under the box's label, not its box
+    label:SetText("Sound")
+    local ok, dd = pcall(CreateFrame, "DropdownButton", nil, row, "WowStyle1DropdownTemplate")
+    if not (ok and type(dd) == "table" and dd.SetupMenu) then
+        label:Hide()
+        row:SetHeight(1)
+        return row
+    end
+    dd:SetWidth(200)
+    dd:SetPoint("LEFT", label, "RIGHT", 10, 0)
+    -- shown when the one picked is gone (a sound pack uninstalled): the chime is what then plays
+    if dd.SetDefaultText then dd:SetDefaultText("The chime") end
+    dd:SetupMenu(function(_, root)
+        for _, c in ipairs(GK.SoundChoices()) do
+            local key = c[1]
+            root:CreateRadio(c[2], function() return get() == key end, function()
+                set(key)
+                GK.PlayChoice(key)
+            end)
+        end
+    end)
+    row.dropdown = dd
+    return row
+end
+
 -- This file loads before Options.lua, which makes the list: start it here if it isn't there yet.
 GK.OptionSections = GK.OptionSections or {}
 GK.OptionSections[#GK.OptionSections + 1] = function(f, anchor, h)
@@ -821,8 +875,11 @@ GK.OptionSections[#GK.OptionSections + 1] = function(f, anchor, h)
     local head = h.Section(anchor, "Notes")
     local alerts = h.Check(head, "When a Marked player is near", "noteAlerts", "The same warning as for a kill order's target.")
     local nearby = h.Check(alerts, "When a Shame player is near", "watchNearby", "One line in chat, no sound.")
-    local group = h.Check(nearby, "When a Shame player joins my group", "watchGroup", "A warning with their tag.")
-    local kudos = h.Check(group, "When a Kudos player joins my group", "kudosGroup", "One friendly line in chat.")
+    local group = h.Check(nearby, "When a Shame player joins my group", "watchGroup",
+        "A warning with their tag, and the sound below.")
+    local sound = GK.SoundRow(f, group, GK.ShameSoundKey, function(key) GK.db.shameSound = key end)
+    sound.which = "shame"
+    local kudos = h.Check(sound, "When a Kudos player joins my group", "kudosGroup", "One friendly line in chat.")
     local plate = h.Check(kudos, "Mark their nameplates", "plateNotes",
         "A small mark beside players you have notes on. Needs nameplates on (V).")
     return plate
@@ -933,7 +990,7 @@ end
 local OURS = { note = true, watch = true, shame = true, kudos = true, move = true, notes = true, import = true }
 -- what Core.lua's /grudge answers itself; anything else it meets it answers with its help
 local CORE = { orders = true, hitlist = true, board = true, leaderboard = true, post = true, letters = true,
-    read = true, test = true, notice = true, options = true, settings = true, debug = true }
+    read = true, test = true, notice = true, options = true, settings = true, debug = true, guild = true }
 
 local function PrintHelp()
     print("  /grudge note [first surname] <text>  - write a note on a player (no name: your target)")

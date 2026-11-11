@@ -653,6 +653,14 @@ local function GuildName(s)
     s = s:match("^%s*(.-)%s*$")
     return s ~= "" and s or nil
 end
+GK.ValidGuildName = GuildName          -- for a name typed in (Pick.lua)
+
+--- The same guild, whatever the case: a name can be typed now, and "crimson fang" is <Crimson Fang> -
+--- "la GM skrive inn et guildnavn ... om vi ikke klarer å finne noen fra den guilden" (the owner,
+--- 2026-11-08). Before, the name only ever came from the game, spelled as the game spells it.
+function GK.SameGuild(a, b)
+    return type(a) == "string" and type(b) == "string" and GK.Lower(a) == GK.Lower(b)
+end
 
 --- The watch as the guild's store holds it - { name (nil once taken off), by, ts } - or nil if never set.
 --- Read at every enemy Sightings looks at, so a plain field.
@@ -670,7 +678,7 @@ end
 --- Is this the watched guild?
 function GK.IsGuildWatched(name)
     local w = Watch()
-    return type(name) == "string" and w ~= nil and w.name == name
+    return w ~= nil and GK.SameGuild(w.name, name)
 end
 
 --- Is a guild watched at all? While none is, nobody's guild is even read.
@@ -715,11 +723,22 @@ function GK.WatchGuild(name, on)
     name = GuildName(name)
     if not (me and name) or not GK.CanWatchGuild() then return false end
     local current = GK.WatchedGuild()
-    if (on and current == name) or (not on and current ~= name) then return true end
+    -- on: the same spelling is nothing to do, another one is put right (SpellWatchedGuild); off: only the
+    -- guild on watch, in any case
+    if (on and current == name) or (not on and not GK.SameGuild(current, name)) then return true end
     if not Put.Watch({ name = on and name or nil, by = me, ts = NextTs(Watch()) }) then return false end
     Send(Encode.W(Watch()))
     GK.Changed()
     return true
+end
+
+--- One of the watched guild's players in sight (Sightings.lua): if an officer typed its name in another
+--- case, their own client puts the game's spelling on watch in its place, for the whole guild, once.
+function GK.SpellWatchedGuild(name)
+    local current = GK.WatchedGuild()
+    if current and current ~= name and GK.SameGuild(current, name) and GK.CanWatchGuild() then
+        GK.WatchGuild(name, true)
+    end
 end
 
 -- ---------------------------------------------------------------------------
@@ -1096,7 +1115,10 @@ LIB.On("PLAYER_GUILD_UPDATE", GuildMayHaveChanged)
 LIB.On("PLAYER_LOGIN", function()
     if not (GK.db and GK.char) then return end
     queueGuild = LIB.GuildKey()
-    LIB.RegisterComm(PREFIX, OnMessage)
+    -- not while the test panel or the screenshots stand in for the guild: see GK.StartGuild (Guild.lua)
+    LIB.RegisterComm(PREFIX, function(...)
+        if not GK.testMode then OnMessage(...) end
+    end)
     -- the question waits for the guild's name, which can come a little after login
     local function Ask(tries)
         if not Send(Encode.Q()) and IsInGuild() and not GK.testMode and tries < 6 then

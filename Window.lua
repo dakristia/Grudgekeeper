@@ -55,7 +55,55 @@ local LIST_TOP = 96                                  -- the first row, down from
 local COL1, COL2, COL_WIDE, COL_RIGHT = 232, 266, 196, PAGE_W - 36
 local SCORE_X = COL_RIGHT - 34                       -- the middle of a grudge's score ("0 - 1")
 local SUGGEST = 5            -- with no open order, who killed us most: this many, on the orders page
+-- How far a list runs: its first LIST_MAX rows, about three pages, and under the open kill orders the
+-- CLOSED_MAX closed last. A list ran to every row the store holds - 200 on Most wanted, 500 on the
+-- leaderboard: "vi kan ikke ha evig pages heller. på most wanted og alt mulig" (the owner, 2026-11-10).
+-- Only the pages stop: the store keeps what it kept, and posters, tooltips and warnings know everyone.
+local LIST_MAX, CLOSED_MAX = 25, 10
+GK.LIST_MAX = LIST_MAX       -- for the pages other files add (NotesUI.lua)
 local TAB_GAP, GROUP_GAP = 3, 16                     -- between two tabs; and before the friendly pages, or Friends
+-- How far up the tabs go, behind the frame's bottom edge. The game's own windows put them 2 up and over
+-- the edge, which here read as buttons set under the book: "føler ikke tabsene henger helt ordentlig på?"
+-- (the owner, 2026-11-08). The edge is 11 deep (rows 30-40 of the owner's screenshot). 10 up hid their tops
+-- behind it and they hung from the book, but short: "de er litt lave, trenger ikke være så langt inn under"
+-- (the owner, the same day). 6 up, half way.
+local TAB_TUCK = 6
+-- They are drawn in Forever's heavy tab art, not the game's bottom tabs: those (uiframe-tab-*-c60) have one
+-- thin line where the frame's edge has a double one about 6 deep - "de ikke er like tykke i border som selve
+-- ramma" (the owner, 2026-11-08). ui-frame-metal-Tabs-c60 is 60 x 60 (and a 2x copy): the same double
+-- line, about 6 deep, square on its left side, its right corners cut off (looked at in the art, 2026-11-08).
+-- Turned a quarter clockwise it is a bottom tab - the square side meets the frame, the cut corners hang
+-- below. HEAVY_CUT leaves off the band along its square side, as the frame's edge is where a tab starts;
+-- HEAVY_CORNER keeps the cut corners whole at any width. Its dark ground (-BG-) comes with it, and its
+-- yellow glow (-Glow-), full on the chosen tab and fainter on hover (HeavyTab). The glow fades in from the
+-- square side as far as 17 (GLOW_CUT): cut at 8 like the line, the rest drew a yellow bar under the edge.
+local HEAVY = { ground = "ui-frame-metal-Tabs-BG-c60", edge = "ui-frame-metal-Tabs-c60", glow = "ui-frame-metal-Tabs-Glow-c60" }
+local HEAVY_SIZE, HEAVY_CUT, GLOW_CUT, HEAVY_CORNER, HOVER_ALPHA = 60, 8, 17, 16, 0.45
+local GLOW_FADE = 6          -- how far down the glow comes in from nothing, below the frame's edge (HeavyTab)
+local TAB_H, TAB_H_ON = 36, 42      -- the tab's art, and the chosen tab's, longer: the game's own two heights
+-- The text in the middle of what shows between the frame's edge and the art's bottom line, and clear of
+-- its side lines and glow: "text er litt overlap med gløden og kantene på knappene" (the owner,
+-- 2026-11-08). Measured on that screenshot: the inside runs from 4 to 27 down a tab (to 33 down the
+-- chosen one, 6 longer), and the words' capitals stood at 14 to 21 (17 to 24 chosen), their tails to 24
+-- (27): 3 up puts as much room over the capitals as under the tails. The game's
+-- own tab puts its words 10 from each side (TAB_SIDES_PADDING 20 for both, SharedUIPanelTemplates.lua),
+-- which in this art is on its 2-to-8 line and in the 8-to-17 glow: TAB_PAD more gives 16 a side.
+local TAB_TEXT_Y, TAB_TEXT_Y_ON = 1, -2
+local TAB_PAD = 12
+-- Folded the tabs hang down the frame's right side instead, the art as it lies: under the one page they
+-- were cut to "Lead..." and "Most..." ("collapsed så legger vi tabs på høyre side nedover isteden", the
+-- owner, 2026-11-10). A side tab is as deep as a bottom tab is tall - the button's own 32
+-- (PanelTabButtonTemplate, SharedUIPanelTemplates.xml) - so what is on it sits as far out from the edge.
+-- The first starts under the title bar, level with the page. On each an icon, its name on the mouse: its
+-- words turned to run down it were still cut ("Leade...") and hard to read ("teksten er for lav. men
+-- kanskje vi kunne funnet noe gode ikoner isteden?", the owner, the same day). Long enough for the art's two
+-- corners (16 each) and the icon between them.
+local TAB_BUTTON_H, SIDE_TOP, SIDE_LEN, TAB_ICON = 32, 34, 46, 22
+-- The icons: the ledger's own marks where it has one - the skull seal an order puts over a nameplate, the
+-- gold seal the leaderboard's first wears - and the game's elsewhere, cut round like them. Every one is in
+-- Forever's live build 70790 (manifestinterfacedata). A page another file adds brings its own (def.icon).
+local ICONS = "Interface\\Icons\\"
+local SWAP_ICON = { Friends = ICONS .. "INV_Misc_GroupNeedMore", Enemies = MEDIA .. "mark" }
 
 --- Where each page of a list starts (0-based offsets into it): ROWS rows a page, but a heading is never
 --- the last row of a page - it goes over to the next one with its rows. Turning a page goes from one
@@ -130,54 +178,92 @@ local function Short(l, c, r, sx)
     return s ~= "" and s or nil
 end
 
+-- The closed orders fold away under their heading, a click from showing: the page is for the open ones
+-- ("history med kill orders som er lukket kan kanskje bare være en knapp eller noe? litt færre ting å gå
+-- igjennom", the owner, 2026-11-10). Folded again at every login: a look back, not a setting.
+local showClosed = false
+
+--- The orders the page lists. open: the open ones, the biggest bounty first, LIST_MAX of them and any of
+--- yours past those - an order you posted or put gold in never drops off. closed, latest first: those that
+--- still ask something of you - a bounty you owe on it, or yours to tell the guild, its card's buttons
+--- (DetailCard) - and, unfolded, the CLOSED_MAX latest of the rest. more: how many of those unfolding shows.
+local function ListedOrders(me)
+    local open, closed, nOpen, others, owing = {}, {}, 0, 0, {}
+    for _, e in ipairs(GK.Owed()) do owing[e.o] = true end
+    for _, o in ipairs(GK.AllOrders()) do
+        if o.state == "o" then
+            nOpen = nOpen + 1
+            if nOpen <= LIST_MAX or (me and (o.by == me or (o.pot and o.pot[me]))) then open[#open + 1] = o end
+        elseif owing[o] or GK.CanTellOrder(o) then
+            closed[#closed + 1] = o                                  -- never folded away: it wants you
+        else
+            others = others + 1
+            if showClosed and others <= CLOSED_MAX then closed[#closed + 1] = o end
+        end
+    end
+    return open, closed, math.min(others, CLOSED_MAX)
+end
+
+--- One order's row on the page, open or closed.
+local function OrderRow(o, me)
+    local pot, backers = GK.Pot(o)
+    local it = { key = "o:" .. o.key, name = GK.Show(o.n), face = { key = o.n, c = o.c, r = o.r },
+        select = PosterSpec(o.n, o, o), desc = Short(o.l, o.c, o.r, GK.SexOf(o.n, o.sx)), ts = o.t,
+        own = me and (o.by == me or o.doneBy == me or (o.pot and o.pot[me])) or nil }
+    if o.state == "o" then
+        it.bounty = pot
+        it.right = pot > 0 and GK.Coins(pot) or "honour"
+        -- your own order by you, as its card says: "by Critical Mango" over a card's "Posted by You"
+        local byMe = o.by == me
+        local bits = { o.auto and (byMe and "by your death" or ("by %s's death"):format(GK.Show(o.by)))
+            or ("by " .. (byMe and "you" or GK.Show(o.by))) }
+        if backers > 0 then bits[#bits + 1] = Plural(backers, "backer") end
+        -- where a guildie saw them last: what a hunter needs, and every guildie is one
+        if o.seen then
+            bits[#bits + 1] = o.seen.z and ("seen in %s, %s"):format(o.seen.z, GK.Ago(o.seen.t))
+                or ("seen " .. GK.Ago(o.seen.t))
+        end
+        it.sub = table.concat(bits, " - ")
+    else
+        it.faded, it.right, it.rightColour = true, STATE_WORD[o.state] or "", BLOOD
+        it.sub = (o.doneBy and ("by " .. (o.doneBy == me and "you" or GK.Show(o.doneBy)) .. " - ") or "")
+            .. GK.Ago(o.paidAt or o.doneAt)
+    end
+    return it
+end
+
 local function OrderItems()
     local items, me = {}, LIB.Me()
-    for _, o in ipairs(GK.AllOrders()) do
-        local pot, backers = GK.Pot(o)
-        local it = { key = "o:" .. o.key, name = GK.Show(o.n), face = { key = o.n, c = o.c, r = o.r },
-            select = PosterSpec(o.n, o, o),
-            desc = Short(o.l, o.c, o.r, GK.SexOf(o.n, o.sx)), ts = o.t,
-            own = me and (o.by == me or o.doneBy == me or (o.pot and o.pot[me])) or nil }
-        if o.state == "o" then
-            it.bounty = pot
-            it.right = pot > 0 and GK.Coins(pot) or "honour"
-            -- your own order by you, as its card says: "by Critical Mango" over a card's "Posted by You"
-            local byMe = o.by == me
-            local bits = { o.auto and (byMe and "by your death" or ("by %s's death"):format(GK.Show(o.by)))
-                or ("by " .. (byMe and "you" or GK.Show(o.by))) }
-            if backers > 0 then bits[#bits + 1] = Plural(backers, "backer") end
-            -- where a guildie saw them last: what a hunter needs, and every guildie is one
-            if o.seen then
-                bits[#bits + 1] = o.seen.z and ("seen in %s, %s"):format(o.seen.z, GK.Ago(o.seen.t))
-                    or ("seen " .. GK.Ago(o.seen.t))
-            end
-            it.sub = table.concat(bits, " - ")
-        else
-            it.faded, it.right, it.rightColour = true, STATE_WORD[o.state] or "", BLOOD
-            it.sub = (o.doneBy and ("by " .. (o.doneBy == me and "you" or GK.Show(o.doneBy)) .. " - ") or "")
-                .. GK.Ago(o.paidAt or o.doneAt)
-        end
-        items[#items + 1] = it
-    end
+    local open, closed, more = ListedOrders(me)
+    for _, o in ipairs(open) do items[#items + 1] = OrderRow(o, me) end
     -- No open order: the first page of the ledger was a blank one (the owner, 2026-11-06). Who has killed
     -- the guild most stands in - the ones you would put a price on - each a click from their poster and
-    -- its Post a kill order. The closed orders follow under a heading of their own.
-    if #GK.OpenOrders() == 0 then
+    -- its Post a kill order.
+    if #open == 0 then
         local wanted = GK.MostWanted()
         if #wanted > 0 then
-            local top = { { header = true, name = "Killed us most - no order yet" } }
+            items[#items + 1] = { header = true, name = "Killed us most - no order yet" }
             for i = 1, math.min(#wanted, SUGGEST) do
                 local e = wanted[i]
-                top[#top + 1] = { key = "w:" .. e.key, name = GK.Show(e.key),
+                items[#items + 1] = { key = "w:" .. e.key, name = GK.Show(e.key),
                     desc = Short(e.w.l, e.w.c, e.w.r, GK.SexOf(e.key, e.w.sx)),
                     face = { key = e.key, c = e.w.c, r = e.w.r }, wide = "killed us " .. e.total,
                     select = PosterSpec(e.key, e.w),
                     ts = e.w.last }
             end
-            if #items > 0 then top[#top + 1] = { header = true, name = "Closed orders" } end
-            for _, it in ipairs(items) do top[#top + 1] = it end
-            items = top
         end
+    end
+    -- The closed orders under a heading of their own, folded: its word at the right shows them. What
+    -- still wants you is there folded or not.
+    if #closed > 0 or more > 0 then
+        local head = { header = true, name = "Closed orders" }
+        if more > 0 then
+            head.order = showClosed and "hide" or ("show " .. more)
+            head.clickTip = showClosed and "Click: fold the closed orders away" or "Click: show the latest closed orders"
+            head.click = function() showClosed = not showClosed end
+        end
+        items[#items + 1] = head
+        for _, o in ipairs(closed) do items[#items + 1] = OrderRow(o, me) end
     end
     -- Marked: enemies the guild marked to kill on sight, with no bounty and no end date (Guild Grudge's
     -- list). It had a tab of its own, one too many: kill orders and Most wanted say the rest ("most wanted
@@ -188,34 +274,49 @@ local function OrderItems()
     if #marked > 0 then
         items[#items + 1] = { header = true, name = "Marked", order = "mark someone",
             clickTip = "Mark an enemy to kill on sight, with no bounty", click = function() GK.OpenPicker("kos") end }
-        for _, it in ipairs(marked) do
+        for i = 1, math.min(#marked, LIST_MAX) do               -- the latest marked: the list's own order
+            local it = marked[i]
             it.right = ""
             items[#items + 1] = it
         end
     end
     -- The watched guild: an enemy guild the guild knows, anyone of theirs near warns you (Notes.lua). An
-    -- officer puts it on watch from the right-click menu on one of its players, which gives its name as
-    -- the game spells it; one at a time.
+    -- officer puts it on watch from the right-click menu on one of its players, or types its name in from
+    -- the word at this heading's right, with none of theirs in sight ("la GM skrive inn et guildnavn", the
+    -- owner, 2026-11-08); one at a time. The heading stays for an officer while none is watched, but not
+    -- on a page with nothing else: there it would hide what the page says about posting, which says this
+    -- too.
     local guilds = GK.WatchedGuildItems and GK.WatchedGuildItems() or {}
-    if #guilds > 0 then
-        items[#items + 1] = { header = true, name = "Watched guild" }
+    local officer = GK.CanWatchGuild and GK.CanWatchGuild()
+    if #guilds > 0 or (officer and #items > 0) then
+        local head = { header = true, name = "Watched guild" }
+        if officer then
+            head.order = #guilds > 0 and "watch another" or "watch a guild"
+            head.clickTip = "Type the name of an enemy guild: anyone of theirs near warns everyone"
+            head.click = function() GK.OpenPicker("guild") end
+        end
+        items[#items + 1] = head
         for _, it in ipairs(guilds) do items[#items + 1] = it end
     end
     return items, "No kill orders. Post one with Post a kill order, at the top of this page - or right-click "
-        .. "an enemy player and pick it there."
+        .. "an enemy player and pick it there." .. (officer and " Put an enemy guild on watch with /grudge guild."
+        or "")
 end
 
 local function BoardItems()
     local items, listed = {}, {}
-    local function Add(r, p, k, d)
-        local i = #items + 1
+    local function Add(r, p, k, d, rank)
+        rank = rank or #items + 1
         listed[r.who] = true
-        items[i] = { key = "b:" .. r.who, rank = i, seal = i <= 3 and p > 0,
+        items[#items + 1] = { key = "b:" .. r.who, rank = rank, seal = rank <= 3 and p > 0,
             name = GK.Show(r.who), sub = GK.Title(r.total), face = { key = r.who, rf = r.rf, sx = r.sx, c = r.c },
             c1 = tostring(k), c2 = tostring(d), right = tostring(p), mine = r.me,
             select = { kind = "record", key = r.who } }
     end
-    for _, r in ipairs(GK.Board(weekly)) do Add(r, r.p, r.k, r.d) end
+    -- the top LIST_MAX, and you under them at your own place if you are further down
+    for i, r in ipairs(GK.Board(weekly)) do
+        if i <= LIST_MAX or r.me then Add(r, r.p, r.k, r.d, i) end
+    end
     -- This week a short board fills its first page with the rest of the guild, at nothing yet: three rows
     -- and six empty ones under them looked like a list that hadn't loaded ("vis this week leaderboard folk
     -- med 0 poeng også", the owner, 2026-11-07). Only the first page - pages of zeros say nothing - and the
@@ -242,8 +343,10 @@ local function WantedItems()
             face = { key = e.key, c = e.w.c, r = e.w.r },
             sub = e.w.last and ("last kill " .. GK.Ago(e.w.last)) or nil,
             c1 = tostring(e.total), killed = e.total, bounty = pot,
-            right = o and (pot > 0 and GK.MoneyText(pot) or "order") or "",
-            rightColour = BLOOD, select = PosterSpec(e.key, e.w), ts = e.w.last,
+            -- gold in the game's coins, as on the kill orders page; a red "85g" read as a word ("kjedelig at
+            -- kill order bounty ikke vise gold icon", the owner, 2026-11-10). An order for honour in red.
+            right = o and (pot > 0 and GK.Coins(pot) or "order") or "",
+            rightColour = (o and pot == 0) and BLOOD or nil, select = PosterSpec(e.key, e.w), ts = e.w.last,
             own = me and e.w.victims[me] and true or nil }            -- Only mine: those who killed you
     end
     return items, "Nobody has killed the guild yet - not that the Grudgekeeper heard of."
@@ -269,23 +372,28 @@ local function GrudgeItems()
         if (v.k or 0) + (v.d or 0) > 0 then foes[#foes + 1] = { key = k, f = v, name = GK.Show(k) } end
     end
     local how = GRUDGE_ORDERS[grudgeOrder][1]
-    table.sort(foes, function(a, b)
-        if how == "recent" then
+    local function Before(a, b, by)
+        if by == "recent" then
             if (a.f.last or 0) ~= (b.f.last or 0) then return (a.f.last or 0) > (b.f.last or 0) end
-        elseif how == "fought" then
+        elseif by == "fought" then
             local x, y = (a.f.k or 0) + (a.f.d or 0), (b.f.k or 0) + (b.f.d or 0)
             if x ~= y then return x > y end
         end
         if a.name:lower() ~= b.name:lower() then return a.name:lower() < b.name:lower() end
         return a.key < b.key
-    end)
+    end
+    -- LIST_MAX of them, the first by the order chosen; A to Z the latest met, put in that order - the
+    -- first names of the alphabet would say nothing about who matters
+    table.sort(foes, function(a, b) return Before(a, b, how == "name" and "recent" or how) end)
+    for i = #foes, LIST_MAX + 1, -1 do foes[i] = nil end
+    if how == "name" then table.sort(foes, function(a, b) return Before(a, b, "name") end) end
     if #foes > 0 then
         local nextOrder = GRUDGE_ORDERS[grudgeOrder % #GRUDGE_ORDERS + 1]
         items[#items + 1] = { header = true, name = "Your grudges", order = GRUDGE_ORDERS[grudgeOrder][2],
             clickTip = "Click: " .. nextOrder[2],
             click = function() grudgeOrder = grudgeOrder % #GRUDGE_ORDERS + 1 end }
     end
-    for i = 1, math.min(#foes, 40) do
+    for i = 1, #foes do
         local e = foes[i]
         local you, they = e.f.k or 0, e.f.d or 0
         -- what happened last, and where: "killed you 11 min ago · Ashenvale" says more than "last met"
@@ -302,9 +410,9 @@ local function GrudgeItems()
             select = PosterSpec(e.key, e.f), you = you, they = they, ts = e.f.last, own = true }
     end
     if #c.log > 0 then items[#items + 1] = { header = true, name = "Lately" } end
-    for i, e in ipairs(c.log) do
-        local it = { key = "l:" .. i, face = { key = e.n, c = e.c, r = e.r },
-            select = PosterSpec(e.n, e), ts = e.t, own = true,
+    for i = 1, math.min(#c.log, LIST_MAX) do                   -- the latest: your log is newest first
+        local e = c.log[i]
+        local it ={ key = "l:" .. i, face = { key = e.n, c = e.c, r = e.r }, select = PosterSpec(e.n, e), ts = e.t, own = true,
             sub = table.concat({ e.z or "", GK.Ago(e.t) }, e.z and " - " or "") }
         if e.k == "K" then
             it.name = "Killed " .. GK.Show(e.n)
@@ -328,7 +436,7 @@ local SAID = { K = "%s killed %s", D = "%s fell to %s", F = "%s fulfilled the or
 --- A name by its first word: the character's own name, without the surname.
 local function FirstName(key)
     local s = GK.Show(key)
-    return s:match("^%S+") or s
+    return s:match("^[^ ]+") or s                   -- not %S: see GK.SameName
 end
 
 local function NewsItems()
@@ -345,9 +453,18 @@ local function NewsItems()
                 if kind == "AU" then return mine and "Your" or (n .. "'s") end
                 return mine and "You" or n
             end
+            -- an order got together: everyone who was there, the killing blow first (GK.WhoGotThem)
+            local function Who2(show)
+                local names = { Who(show(e.who)) }
+                if kind == "F" and type(e.h) == "table" then
+                    for _, k in ipairs(e.h) do names[#names + 1] = LIB.IsMyStoredName(k) and "you" or show(k) end
+                end
+                if #names == 1 then return names[1] end
+                return table.concat(names, ", ", 1, #names - 1) .. " and " .. names[#names]
+            end
             -- the short form, for a line too long for its row (FillRow): first names only
-            line = said:format(Who(GK.Show(e.who)), GK.Show(e.n))
-            short = said:format(Who(FirstName(e.who)), FirstName(e.n))
+            line = said:format(Who2(GK.Show), GK.Show(e.n))
+            short = said:format(Who2(FirstName), FirstName(e.n))
         end
         if kind == "K" then
             right = (e.p or 0) > 0 and ("+%d"):format(e.p) or nil
@@ -380,30 +497,36 @@ local function ResetText()
 end
 
 --- The ledger's pages, in tab order; other files add theirs with GK.AddLedgerPage. A page is
---- { name, items = fn -> items, empty text, headings, sub = fn(items) -> text, links = fn -> { { text, on,
---- click } }, linksTail = fn -> text, sortable, side, add, default = fn(items) -> the row chosen when none is }.
+--- { name, items = fn -> items, empty text, headings, sub = fn(items, all) -> text, links = fn -> { { text,
+--- on, click } }, linksTail = fn -> text, sortable, max, side, add, icon, default = fn(items) -> the row chosen
+--- when none is }. max: a sortable page with no section headings lists at most this many rows (GK.SortItems);
+--- all, to sub, is how many there were before it. icon: the texture on its tab folded, down the frame's side.
 --- headings: the column headings over the table, { text, x, justify, sort, tip }: a heading with a sort
 --- (an item field: "name", or a number, the biggest first) sorts the page when clicked, and tip finishes
 --- "Sort by ..." in its tooltip. sortable: the headings sort and Only mine shows. links: ink links under
 --- the title. add: the page's own action, top right - { text, kind } opens the who-picker (Pick.lua) for
 --- that kind. side: "right" puts the tab over the right page in the open book (the friendly lists);
---- anything else is over the left page. Folded, all the tabs share one row. A page with links and a sub
+--- anything else is over the left page. Folded, the page's group hangs down the frame's side. A page with links and a sub
 --- line has the sub text after the links, on their line.
 GK.LedgerPages = {
-    { name = "Kill orders", items = OrderItems,
+    { name = "Kill orders", items = OrderItems, icon = MEDIA .. "mark",
       headings = { { "Name", 48, nil, "name", "name, A to Z" }, { "Bounty", COL_RIGHT, "RIGHT", "bounty", "bounty" } },
       sortable = true, add = { text = "Post a kill order", kind = "order" },
       -- with nothing on the page at all, your own record rather than a blank page; otherwise the first
       -- open order, or the first of who killed us most (a closed order alone is not chosen by itself)
       default = function(items)
-          if #items == 0 then return { key = "me", select = { kind = "record", key = LIB.Me() } } end
+          for _, it in ipairs(items) do
+              if not it.header then return nil end           -- a row, if only a closed order: none chosen
+          end
+          -- nothing but headings - the closed orders folded under theirs - is a page with nothing on it
+          return { key = "me", select = { kind = "record", key = LIB.Me() } }
       end,
       sub = function()
           local rank, of = GK.MyRank()
           return ("%s  -  you: %s, #%d of %d"):format(Plural(#GK.OpenOrders(), "open order"),
               Plural(GK.char.points, "point"), rank, of)
       end },
-    { name = "Leaderboard", items = BoardItems,
+    { name = "Leaderboard", items = BoardItems, icon = MEDIA .. "rank_1",
       headings = { { "#", 12 }, { "Name", NAME_X_RANKED + 4 }, { "K", COL1, "CENTER" }, { "D", COL2, "CENTER" },
           { "Points", COL_RIGHT, "RIGHT" } },
       links = function()
@@ -416,17 +539,18 @@ GK.LedgerPages = {
               if it.mine then return it end
           end
       end },
-    { name = "Most wanted", items = WantedItems, sortable = true,
+    { name = "Most wanted", items = WantedItems, sortable = true, max = LIST_MAX,
+      icon = ICONS .. "Ability_Hunter_SniperShot",          -- the hunter's mark: marked to be hunted
       headings = { { "Name", 48, nil, "name", "name, A to Z" },
           { "Killed us", COL1, "CENTER", "killed", "how often they killed us" },
           { "Bounty", COL_RIGHT, "RIGHT", "bounty", "bounty" } },
       add = { text = "Post a kill order", kind = "order" },
       sub = function() return "Who has killed the guild most" end },
     -- no heading row: each grudge says its own score, and the order is a word on the section's line
-    { name = "Grudges", items = GrudgeItems, headings = {},
-      sub = function() return "Everyone you have a history with" end,
+    { name = "Grudges", items = GrudgeItems, headings = {}, icon = ICONS .. "Ability_DualWield",
+      sub = function() return "Who you have a history with" end,       -- not everyone: LIST_MAX of them
       default = function() return { key = "me", select = { kind = "record", key = LIB.Me() } } end },
-    { name = "News", items = NewsItems, sortable = true,
+    { name = "News", items = NewsItems, sortable = true, max = LIST_MAX, icon = ICONS .. "INV_Scroll_03",
       headings = { { "What happened", 48 } },
       sub = function() return "What the guild has been up to" end },
 }
@@ -463,23 +587,36 @@ function GK.SortBy(page, key)
     GK.db.sortBy[page.name] = (GK.SortKey(page) ~= key) and key or nil
 end
 
---- A page's rows in the order its clicked heading asks for, and only yours with GK.db.mineOnly. Sorting or
---- filtering drops the header rows and sorts the rest together; the page's own order, without Only mine,
---- is left alone. Names go A to Z, numbers the biggest first; ties go A to Z. Returns a new list, or the
---- same one untouched.
+--- A page's rows in the order its clicked heading asks for, and only yours with GK.db.mineOnly; the page's
+--- own order, without Only mine, is left alone. Each section is sorted on its own, under its heading: the
+--- open kill orders among themselves, the closed ones folded under theirs - sorted together, a FULFILLED
+--- stood among the open orders ("sortering i kill orders burde ikke ta med fulfulled og withdrawn", the
+--- owner, 2026-11-10). A heading Only mine left with no rows goes. Names go A to Z, numbers the biggest
+--- first; ties go A to Z. A page with a max keeps that many, the first in its own order, after Only mine and
+--- before the sort: Most wanted by name is still the 25 who killed us most, A to Z, and Only mine finds the
+--- one who killed you if they are 40th. Returns a new list, or the same one untouched, and how many rows
+--- it had before the max.
 function GK.SortItems(items, page)
     local key, mineOnly = GK.SortKey(page), GK.db.mineOnly == true
-    if not (page and page.sortable) or (not key and not mineOnly) then return items end
-    local out, at = {}, {}
+    local max = page and page.max
+    if not (page and page.sortable) or (not key and not mineOnly and not max) then return items, #items end
+    -- the sections: the rows before the first heading, then each heading with the rows under it
+    local section, at, all = { rows = {} }, {}, 0
+    local sections = { section }
     for _, it in ipairs(items) do
-        if not it.header and (not mineOnly or it.own or it.mine) then
-            out[#out + 1] = it
-            at[it] = #out
+        if it.header then
+            section = { head = it, rows = {} }
+            sections[#sections + 1] = section
+        elseif not mineOnly or it.own or it.mine then
+            all = all + 1
+            if not max or all <= max then
+                section.rows[#section.rows + 1] = it
+                at[it] = all
+            end
         end
     end
-    if not key then return out end
     local function SortName(it) return (it.name or ""):lower() end
-    table.sort(out, function(a, b)
+    local function Before(a, b)
         if key ~= "name" then
             local x, y = tonumber(a[key]) or 0, tonumber(b[key]) or 0
             if x ~= y then return x > y end
@@ -487,8 +624,14 @@ function GK.SortItems(items, page)
         local na, nb = SortName(a), SortName(b)
         if na ~= nb then return na < nb end
         return at[a] < at[b]                   -- table.sort needs a strict order, or it can error
-    end)
-    return out
+    end
+    local out = {}
+    for _, s in ipairs(sections) do
+        if key then table.sort(s.rows, Before) end
+        if s.head and (#s.rows > 0 or not mineOnly) then out[#out + 1] = s.head end
+        for _, it in ipairs(s.rows) do out[#out + 1] = it end
+    end
+    return out, all
 end
 
 -- ---------------------------------------------------------------------------
@@ -506,18 +649,22 @@ local function DetailCard(spec)
     local d = GK.PosterCard(spec.t, true)
     local o = spec.order
     if o and o.state ~= "o" then
-        local me = LIB.Me()
         local word = STATE_WORD[o.state] or "CLOSED"
         local rows = { { "Closed", ("%s%s, %s"):format(word:sub(1, 1) .. word:sub(2):lower(),
-            o.doneBy and (" by " .. GK.Show(o.doneBy)) or "", GK.Ago(o.paidAt or o.doneAt)) } }
-        local owe = 0
+            o.doneBy and (" by " .. GK.WhoGotThem(o.doneBy, o.helpers)) or "", GK.Ago(o.paidAt or o.doneAt)) } }
+        -- what we owe on it: a part to each hunter, the bounty shared (GK.Owed)
+        local owe = {}
         for _, e in ipairs(GK.Owed()) do
-            if e.o == o then owe = owe + e.share end
+            if e.o == o then owe[#owe + 1] = ("%s %s"):format(GK.Show(e.to), GK.MoneyText(e.share)) end
         end
-        if owe > 0 and o.doneBy ~= me then
-            rows[2] = { "You owe", ("%s %s - at a mailbox, Pay bounty fills it in."):format(GK.Show(o.doneBy),
-                GK.MoneyText(owe)) }
+        if #owe > 0 then
+            rows[2] = { "You owe", ("%s - mail or trade it, and it is marked paid."):format(#owe == 1 and owe[1]
+                or (table.concat(owe, ", ", 1, #owe - 1) .. " and " .. owe[#owe])) }
             d.buttons = { { "Mark as paid", function() GK.PayShare(o) end } }
+        end
+        -- yours to tell, by your kill or with you there: here too, since a read letter is gone (GK.TellOrder)
+        if GK.CanTellOrder(o) then
+            d.buttons = { { "Tell the guild", function() GK.TellOrder(o) end }, d.buttons and d.buttons[1] }
         end
         -- the order's own section first, and the kicker says it is over ("ORDER FULFILLED") - unless a
         -- newer order on them is open, which keeps its own WANTED and its own section
@@ -932,9 +1079,11 @@ local function BuildList(page)
     page.empty:SetJustifyH("LEFT")
     page.empty:SetSpacing(3)
     -- turning through a long list: the spellbook's page arrows at the foot, and the mouse wheel
+    -- in the gap between the last row (58 up) and the buttons at the foot (32 up), its arrows 36 to 56 up:
+    -- on the foot's line, Read all covered "1-9" and left "of 21" (the store pictures, 2026-11-10)
     page.count = page:CreateFontString(nil, "ARTWORK")
     Ink(page.count, FADED, TEXT_FONT, 10)
-    page.count:SetPoint("BOTTOMRIGHT", -46, 15)
+    page.count:SetPoint("BOTTOMRIGHT", -46, 39)
     local function Arrow(kind, dir)
         local b = CreateFrame("Button", nil, page)
         b:SetSize(20, 20)
@@ -988,6 +1137,12 @@ local function BuildList(page)
         function() return SETTINGS or "Settings" end, "Grudgekeeper's settings: letters, warnings, sharing.")
     page.settings:SetPoint("LEFT", page.letters, "RIGHT", 6, 0)
     page.settings:Set(SETTINGS or "Settings")
+    -- a pile of letters, read in one click (GK.ReadAllLetters): there while two or more wait (Refresh)
+    page.readAll = Foot(function() GK.ReadAllLetters() end, function() return "Read all letters" end,
+        "Every letter waiting, read at once - and so gone. The ledger keeps what they said.")
+    page.readAll:SetPoint("LEFT", page.settings, "RIGHT", 6, 0)
+    page.readAll:Set("Read all")
+    page.readAll:Hide()
 end
 
 -- Where the card's parts sit, in units from the page's top left. The ledger's right page has these; the
@@ -1111,6 +1266,7 @@ local function FillRich(page, d, L)
     local limit = L.h - L.signY - 22 - (#d.buttons > 0 and 34 or 0)
     for _, sec in ipairs(rich.sections) do
         if y + 32 > limit then break end
+        local top, drawn = y, 0
         -- the section's name in red capitals, its rows' labels in plain grey words: in the same small grey
         -- capitals, every label read as one more heading (the owner, 2026-11-06)
         local head = Text(page, BLOOD, 10)
@@ -1156,6 +1312,7 @@ local function FillRich(page, d, L)
                 s:SetText(e.under or "")
                 s:SetPoint("TOPLEFT", page, "TOPLEFT", pad + 30, -(y + 17))
                 y = y + 30
+                drawn = drawn + 1
             end
         else
             -- facts: a label in plain words, its value beside it, and after the value - on its line when it
@@ -1163,9 +1320,9 @@ local function FillRich(page, d, L)
             local room = w - L.factX - pad
             for _, row in ipairs(sec.rows) do
                 if y + 14 > limit then break end
-                local v
+                local k, v, more
                 if row[1] then
-                    local k = Text(page, FADED, 11)
+                    k = Text(page, FADED, 11)
                     k:SetText(row[1])
                     k:SetPoint("TOPLEFT", page, "TOPLEFT", pad, -(y + 1))
                     v = Text(page, INK, 12, room)
@@ -1178,7 +1335,7 @@ local function FillRich(page, d, L)
                 v:SetText(row[2] or "")
                 local h = Height(v, 13)
                 if row[1] and row[3] then
-                    local more = Text(page, FADED, 11, nil, 1)
+                    more = Text(page, FADED, 11, nil, 1)
                     more:SetText(row[3])
                     local used = math.ceil(TextWidth(v))
                     if h <= 16 and used + 8 + TextWidth(more) <= room then
@@ -1189,8 +1346,24 @@ local function FillRich(page, d, L)
                         h = h + 2 + Height(more, 11)
                     end
                 end
+                -- the whole row or none of it: its first line fitting said nothing of the second, and "died
+                -- to them 5 / times" ran into the poster's buttons (the store pictures, 2026-11-10)
+                if y + h > limit then
+                    if k then k:Hide() end
+                    v:Hide()
+                    if more then more:Hide() end
+                    break
+                end
                 y = y + math.max(18, h + 5)
+                drawn = drawn + 1
             end
+        end
+        -- a heading whose first row did not fit goes too, and nothing after it fits either
+        if drawn == 0 and #sec.rows > 0 then
+            head:Hide()
+            line:Hide()
+            y = top
+            break
         end
         y = y + 6
     end
@@ -1412,6 +1585,23 @@ GK.Tone = function(tex, r, g, b) Tone(tex, r, g, b) end
 --- the other group. Each tab at its words' width; if a row is still wider than the window, the chosen
 --- tab keeps its width and the others share what is left (the game's own PanelTemplates_ResizeTabsToFit
 --- does the same, but wants the tabs in one numbered row).
+local TabSide                    -- made with the tabs' art, below: under the frame, or down its right side
+
+--- The icon on a tab folded: ours as drawn, the game's cut round like ours - the square's border trimmed and
+--- the round mask on (as Blizzard rounds an icon, AlertFrameSystems.lua) - so they sit together as medallions.
+local function SetTabIcon(t, path)
+    t.icon:SetTexture(path)
+    local game = path:sub(1, #ICONS) == ICONS
+    local a, b = game and 0.08 or 0, game and 0.92 or 1
+    t.icon:SetTexCoord(a, b, a, b)
+    if game and not t.iconMasked then
+        t.icon:AddMaskTexture(t.iconMask)
+    elseif not game and t.iconMasked then
+        t.icon:RemoveMaskTexture(t.iconMask)
+    end
+    t.iconMasked = game
+end
+
 local function PlaceTabs(folded)
     local current = GK.LedgerPages[tab]
     local friends = current ~= nil and current.side == "right"
@@ -1426,10 +1616,28 @@ local function PlaceTabs(folded)
         win.swap:SetText(friends and "Enemies" or "Friends")
         row[#row + 1] = win.swap
     end
+    -- down the side only in the heavy art, which is drawn as a side tab; the game's thin art is not. Every
+    -- tab, the hidden ones too, so none waits the other way round for the next fold
+    local side = folded and win.swap.heavy ~= nil
+    for _, t in ipairs(win.tabs) do TabSide(t, side) end
+    TabSide(win.swap, side)
+    for i, t in ipairs(row) do
+        t.gap = (i > 1 and (t == win.swap or t.side ~= row[i - 1].side)) and GROUP_GAP or TAB_GAP
+    end
+    if side then
+        -- down the right side, an icon each (TabSide); the switch shows the group it switches to
+        SetTabIcon(win.swap, SWAP_ICON[friends and "Enemies" or "Friends"])
+        for i, t in ipairs(row) do
+            t:SetSize(TAB_BUTTON_H, SIDE_LEN)
+            t:ClearAllPoints()
+            if i == 1 then t:SetPoint("TOPLEFT", win, "TOPRIGHT", -TAB_TUCK, -SIDE_TOP)
+            else t:SetPoint("TOPLEFT", row[i - 1], "BOTTOMLEFT", 0, -t.gap) end
+        end
+        return
+    end
     local width, chosen = 0, nil
     for i, t in ipairs(row) do
-        PanelTemplates_TabResize(t, 0)
-        t.gap = (i > 1 and (t == win.swap or t.side ~= row[i - 1].side)) and GROUP_GAP or TAB_GAP
+        PanelTemplates_TabResize(t, TAB_PAD)
         width = width + t:GetWidth() + (i > 1 and t.gap or 0)
         if t.selected then chosen = t end
     end
@@ -1439,11 +1647,12 @@ local function PlaceTabs(folded)
         for i, t in ipairs(row) do if i > 1 then gaps = gaps + t.gap end end
         local share = math.floor((room - gaps - (chosen and chosen:GetWidth() or 0)) / (#row - (chosen and 1 or 0)))
         for _, t in ipairs(row) do
-            if t ~= chosen then PanelTemplates_TabResize(t, 0, share) end
+            if t ~= chosen then PanelTemplates_TabResize(t, TAB_PAD, share) end
         end
     end
     -- Open, the friendly pages sit at the frame's right edge, apart from the enemy's ("skyv shame og kudos
-    -- lenger ut til høyre", the owner, 2026-11-07); folded, the row runs on from the left as before.
+    -- lenger ut til høyre", the owner, 2026-11-07); folded under the frame (no heavy art), the row runs on
+    -- from the left.
     local firstRight
     if not folded then
         for i, t in ipairs(row) do
@@ -1452,13 +1661,13 @@ local function PlaceTabs(folded)
     end
     for i, t in ipairs(row) do
         t:ClearAllPoints()
-        if i == 1 then t:SetPoint("TOPLEFT", win, "BOTTOMLEFT", 12, 2)
+        if i == 1 then t:SetPoint("TOPLEFT", win, "BOTTOMLEFT", 12, TAB_TUCK)
         elseif not firstRight or i < firstRight then t:SetPoint("TOPLEFT", row[i - 1], "TOPRIGHT", t.gap, 0) end
     end
     if firstRight then
         for i = #row, firstRight, -1 do
             local t = row[i]
-            if i == #row then t:SetPoint("TOPRIGHT", win, "BOTTOMRIGHT", -12, 2)
+            if i == #row then t:SetPoint("TOPRIGHT", win, "BOTTOMRIGHT", -12, TAB_TUCK)
             else t:SetPoint("TOPRIGHT", row[i + 1], "TOPLEFT", -row[i + 1].gap, 0) end
         end
     end
@@ -1479,6 +1688,8 @@ local function Layout()
         Tone(win.sheet)
     end
     win.divider:SetShown(not folded)                 -- folded there is one page: nothing to divide
+    -- folded, the tabs down the right side stay on the screen with the frame (PlaceTabs)
+    win:SetClampRectInsets(0, folded and -(TAB_H_ON - TAB_TUCK) or 0, 0, 0)
     win.list:ClearAllPoints()
     win.list:SetPoint("TOPLEFT", b.x, -b.y)
     win.detail:ClearAllPoints()
@@ -1507,12 +1718,170 @@ local function Fold(on)
     Refresh()
 end
 
+--- One of the heavy art's atlases over a tab (HEAVY, at the top), cut in six: two rows - what stretches with
+--- the tab's height, then the cut corners - by three columns - a corner, what stretches with its width, a
+--- corner. Under the frame turned a quarter clockwise: the art's x runs down the tab, its y from the tab's
+--- right to its left. Down the frame's side as it lies (HeavyCoords): its x across the tab, its y down it.
+local function HeavyPieces(t, info, layer, sub, cut, fade)
+    local l, r, top, bottom = info.leftTexCoord, info.rightTexCoord, info.topTexCoord, info.bottomTexCoord
+    local function U(x) return l + (r - l) * x / HEAVY_SIZE end
+    local function V(y) return top + (bottom - top) * y / HEAVY_SIZE end
+    local S, C = HEAVY_SIZE, HEAVY_CORNER
+    local rows, cols = { { cut, S - C }, { S - C, S } }, { { S - C, S }, { C, S - C }, { 0, C } }
+    -- with a fade, a short row of its own on top, as long on screen as in the art (TabLook)
+    if fade then rows = { { cut, cut + fade }, { cut + fade, S - C }, { S - C, S } } end
+    local set = { fade = fade }
+    for i, x in ipairs(rows) do
+        set[i] = {}
+        for j, y in ipairs(cols) do
+            local p = t:CreateTexture(nil, layer, nil, sub)
+            p:SetTexture(info.file or info.filename)
+            p.u, p.v = { U(x[1]), U(x[2]) }, { V(y[1]), V(y[2]) }      -- its piece of the art (HeavyCoords)
+            set[i][j] = p
+        end
+    end
+    return set
+end
+
+--- The pieces' corners of the art for the way the tab hangs (t.sideways): under the frame the art a quarter
+--- turned clockwise; down its right side the art as it lies, as drawn - square side against the frame, cut
+--- corners out. The glow's short fade from the frame's edge goes with it: down from the top, or across from
+--- the left (HeavyTab says why it fades).
+local function HeavyCoords(t)
+    local side = t.sideways
+    for key, set in pairs(t.heavy) do
+        local full = key == "hover" and HOVER_ALPHA or 1
+        for i, row in ipairs(set) do
+            for _, p in ipairs(row) do
+                local u, v = p.u, p.v
+                if side then
+                    p:SetTexCoord(u[1], u[2], v[1], v[2])
+                else
+                    -- top left, bottom left, top right, bottom right: the art's bottom left, bottom right,
+                    -- top left, top right - the quarter turn
+                    p:SetTexCoord(u[1], v[2], u[2], v[2], u[1], v[1], u[2], v[1])
+                end
+                if set.fade and i == 1 then
+                    if side then
+                        p:SetGradient("HORIZONTAL", CreateColor(1, 1, 1, 0), CreateColor(1, 1, 1, full))
+                    else
+                        p:SetGradient("VERTICAL", CreateColor(1, 1, 1, full), CreateColor(1, 1, 1, 0))
+                    end
+                end
+            end
+        end
+    end
+end
+
+--- Forever's heavy art in place of the tab's thin art: false, and the tab left as the game draws it, when
+--- the client has any of the three missing (the client's data has all three, build 70425).
+local function HeavyTab(t)
+    local info = {}
+    for key, atlas in pairs(HEAVY) do
+        info[key] = C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(atlas)
+        if not (info[key] and (info[key].file or info[key].filename)) then return false end
+    end
+    t.heavy = {
+        ground = HeavyPieces(t, info.ground, "BACKGROUND", 1, HEAVY_CUT),
+        glow = HeavyPieces(t, info.glow, "BORDER", 0, GLOW_CUT, GLOW_FADE),
+        edge = HeavyPieces(t, info.edge, "BORDER", 1, HEAVY_CUT),
+        hover = HeavyPieces(t, info.glow, "HIGHLIGHT", 0, GLOW_CUT, GLOW_FADE),
+    }
+    for i, row in ipairs(t.heavy.hover) do
+        for _, p in ipairs(row) do
+            p:SetBlendMode("ADD")
+            if i > 1 then p:SetAlpha(HOVER_ALPHA) end        -- the fade's row has it in its gradient, below
+        end
+    end
+    -- The glow begins where the frame's edge ends (TabLook) and fades in from nothing there, over its top
+    -- GLOW_FADE. Begun there at full it stopped hard against the edge: "hover gløden har litt hard kant
+    -- opp mot ramma ... ser cutoff" (the owner, 2026-11-08). Begun behind the edge instead it showed
+    -- through the edge's lower band, which is not solid ("nope", the owner's screenshot the same day: the
+    -- band yellow over the tab's sides only). Faded down the whole of the sides, they were brightest just
+    -- over the cut corners, which begin at full - "fortsatt en strek midt over gløden?" (the next
+    -- screenshot: 115 then 60 across that seam). A gradient's first colour is its bottom, as the game's
+    -- nameplates fade theirs (Blizzard_NamePlates.lua) - and as those screenshots showed, brighter down.
+    -- The hover's faintness goes into the gradient itself: with SetAlpha as well, the fade's row ended at
+    -- full, about twice the rest of the hover glow ("fortsatt glød cut midt på?", the owner, 2026-11-09:
+    -- 97 then 49 across that seam, as 1 to 0.45) - the gradient's colours carry an alpha, and it won.
+    HeavyCoords(t)
+    -- the game's thin art and its glow stay, unseen: the tab's least width is theirs (PanelTemplates_TabResize)
+    for _, k in ipairs({ "Left", "Middle", "Right", "LeftActive", "MiddleActive", "RightActive",
+        "LeftHighlight", "MiddleHighlight", "RightHighlight" }) do
+        if type(t[k]) == "table" then t[k]:SetAlpha(0) end
+    end
+    return true
+end
+
+--- The heavy art laid out for the tab's state: the chosen tab longer and lit, as the game's own chosen
+--- tab is longer. The glow, lit or hover, starts below the frame's edge (HeavyTab says why).
+local function TabLook(t)
+    local on = t.selected and true or false
+    -- the icon (folded, down the side) in the middle of what shows of the tab, as far out from the edge as
+    -- the words under the frame sit down from it: 1 toward the edge, and 2 out on the chosen, longer tab
+    t.icon:SetPoint("CENTER", t, "CENTER", on and -TAB_TEXT_Y_ON or -TAB_TEXT_Y, 0)
+    if not t.heavy then return end
+    local h, C = on and TAB_H_ON or TAB_H, HEAVY_CORNER
+    for key, set in pairs(t.heavy) do
+        local from = (key == "glow" or key == "hover") and TAB_TUCK or 0
+        -- the rows' depths out from the frame's edge: the fade's own (the glow), what stretches, the cut
+        -- corners - down the tab under the frame, across it down the frame's side
+        local tall = set.fade and { set.fade, h - C - from - set.fade, C } or { h - C - from, C }
+        local at = from
+        for i, row in ipairs(set) do
+            for j, p in ipairs(row) do
+                p:ClearAllPoints()
+                if t.sideways then
+                    -- a row of the art is a column here, its three pieces down the tab: the art's bottom
+                    -- (piece 1) at the tab's bottom, what stretches with the tab's length between the corners
+                    p:SetWidth(tall[i])
+                    if j == 2 then
+                        p:SetPoint("TOPLEFT", t, "TOPLEFT", at, -C)
+                        p:SetPoint("BOTTOMLEFT", t, "BOTTOMLEFT", at, C)
+                    else
+                        local corner = j == 1 and "BOTTOMLEFT" or "TOPLEFT"
+                        p:SetHeight(C)
+                        p:SetPoint(corner, t, corner, at, 0)
+                    end
+                else
+                    p:SetHeight(tall[i])
+                    if j == 2 then
+                        p:SetPoint("TOPLEFT", t, "TOPLEFT", C, -at)
+                        p:SetPoint("TOPRIGHT", t, "TOPRIGHT", -C, -at)
+                    else
+                        p:SetWidth(C)
+                        p:SetPoint(j == 1 and "TOPLEFT" or "TOPRIGHT", t, j == 1 and "TOPLEFT" or "TOPRIGHT", 0, -at)
+                    end
+                end
+            end
+            at = at + tall[i]
+        end
+    end
+    for _, row in ipairs(t.heavy.glow) do
+        for _, p in ipairs(row) do p:SetShown(on) end
+    end
+end
+
+--- Hang a tab under the frame (side false) or down its right side (side true, folded): the art turned or as
+--- it lies (HeavyCoords), and its words, or down the side its icon in their place (Tab, SetTabIcon).
+TabSide = function(t, side)
+    side = side and true or false
+    if t.sideways == side then return end
+    t.sideways = side
+    t.Text:SetShown(not side)
+    t.icon:SetShown(side)
+    if not side then t:SetHeight(TAB_BUTTON_H) end
+    if t.heavy then HeavyCoords(t) end
+    TabLook(t)
+end
+
 local function SelectTab(i)
     tab, offset, turned = i, 0, false
     -- the game's chosen look: the tab raised and joined to the frame, and not clickable again
     for j, t in ipairs(win.tabs) do
         t.selected = j == i
         if t.selected then PanelTemplates_SelectTab(t) else PanelTemplates_DeselectTab(t) end
+        TabLook(t)
     end
     PlaceTabs(Folded())                              -- folded, the row shows the group of the page
     Refresh()
@@ -1565,8 +1934,12 @@ end
 
 --- One of the game's tabs under the frame. Its size and place are PlaceTabs' alone: the template's own
 --- OnShow and OnEvent size it to its words again, which undid a row squeezed to fit the folded window.
-local function Tab(text, onClick)
+--- It sits at the frame's own level, under its edge (Build raises the edge), in Forever's heavy art
+--- (HeavyTab), its text in the middle of what shows; the game's select and deselect read the two offsets.
+local function Tab(text, onClick, icon)
     local t = CreateFrame("Button", nil, win, "PanelTabButtonTemplate")
+    t:SetFrameLevel(win:GetFrameLevel())
+    t.deselectedTextY, t.selectedTextY = TAB_TEXT_Y, TAB_TEXT_Y_ON
     t:SetText(text)
     t:SetScript("OnShow", nil)
     t:SetScript("OnEvent", nil)
@@ -1574,6 +1947,26 @@ local function Tab(text, onClick)
         GK.Sound("IG_CHARACTER_INFO_TAB")
         onClick(self)
     end)
+    -- folded, down the frame's side: an icon in its words' place (TabSide), and its name on the mouse
+    t.icon = t:CreateTexture(nil, "ARTWORK")
+    t.icon:SetSize(TAB_ICON, TAB_ICON)
+    t.icon:Hide()
+    t.iconMask = t:CreateMaskTexture()
+    t.iconMask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE",
+        "CLAMPTOBLACKADDITIVE")
+    t.iconMask:SetAllPoints(t.icon)
+    SetTabIcon(t, icon or (ICONS .. "INV_Misc_QuestionMark"))       -- a page that brought none
+    t:HookScript("OnEnter", function(self)
+        if not self.sideways then return end
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText(self:GetText() or "")
+        GameTooltip:Show()
+    end)
+    t:HookScript("OnLeave", function(self)
+        if self.sideways then GameTooltip:Hide() end
+    end)
+    HeavyTab(t)
+    TabLook(t)
     return t
 end
 
@@ -1630,7 +2023,7 @@ local function Build()
     -- the tabs (PlaceTabs puts them under the frame)
     win.tabs = {}
     for i, def in ipairs(GK.LedgerPages) do
-        local t = Tab(def.name, function() SelectTab(i) end)
+        local t = Tab(def.name, function() SelectTab(i) end, def.icon)
         t.side = def.side
         win.tabs[i] = t
     end
@@ -1643,10 +2036,15 @@ local function Build()
     end)
     PanelTemplates_DeselectTab(win.swap)
     win.swap:Hide()
-    -- the template's X: its click is our own, as the template's HideUIPanel does nothing in combat
+    -- The frame's edge over the tabs' tops (they are at the frame's own level, Tab), and under the inner
+    -- frame and the pages as before. The template makes it at the frame's own level too.
+    if type(win.NineSlice) == "table" then win.NineSlice:SetFrameLevel(level + 1) end
+    -- the template's X: its click is our own, as the template's HideUIPanel does nothing in combat. Over
+    -- the edge, now the edge is raised: the X sits on its corner.
     local close = type(win.ClosePanelButton) == "table" and win.ClosePanelButton
         or CreateFrame("Button", nil, win, "UIPanelCloseButton")
     close:SetScript("OnClick", function() win:Hide() end)
+    close:SetFrameLevel(level + 4)
     win.close = close
     -- The fold: the spells panel's own button beside the X (the owner's screenshot, 2026-11-06), the
     -- game's red square with the arrow - out to open the window, in to fold it to one page. Its own
@@ -1706,7 +2104,8 @@ Refresh = function()
     local folded = Folded()
     local def = GK.LedgerPages[tab]
     local items, empty = def.items()
-    if def.sortable then items = GK.SortItems(items, def) end
+    local all = #items                                 -- before the page's max (GK.SortItems)
+    if def.sortable then items, all = GK.SortItems(items, def) end
     local list, detail = win.list, win.detail
     local chosen = Chosen(items)
     -- the list page
@@ -1740,7 +2139,7 @@ Refresh = function()
     -- the line stops short of Only mine, on its own line at the page's right (after links it is free:
     -- no page has both)
     list.sub:SetWidth(last and 0 or (PAGE_W - 24 - (sortable and list.mine.width + 10 or 0)))
-    list.sub:SetText(def.sub and def.sub(items) or "")
+    list.sub:SetText(def.sub and def.sub(items, all) or "")
     list.add:SetShown(def.add ~= nil)
     list.underline:SetShown(#def.headings > 0)
     -- A page with no heading row starts its list where the headings would be: the Grudges page's list
@@ -1803,6 +2202,7 @@ Refresh = function()
     list.letters:Set(unread > 0 and ("Letters \194\183 %d new"):format(unread) or "Letters")      -- "Letters · 2 new"
     -- with no letter waiting it has nothing to open: a read letter is gone once closed (Letters.lua)
     list.letters:SetEnabled(#GK.char.letters > 0)
+    list.readAll:SetShown(unread > 1)
     -- the detail: the right-hand page, or the page turned
     local showDetail = not folded or turned
     list:SetShown(not folded or not turned)
@@ -1832,6 +2232,41 @@ end
 
 function GK.ToggleWindow()
     if win and win:IsShown() then win:Hide() else GK.OpenWindow() end
+end
+
+--- The ledger open at a page found by its name, on the row with this key when the page has one; the book
+--- open or folded (folded, nil: as it is) and the leaderboard on this week or all time (weeklyBoard, nil:
+--- as it is). For the screenshot mode (Shots.lua), which names the page it wants a picture of. False when
+--- there is no such page.
+function GK.ShowLedgerPage(name, rowKey, folded, weeklyBoard)
+    if not win then Build() end
+    for i, def in ipairs(GK.LedgerPages) do
+        if def.name == name then
+            if folded ~= nil and folded ~= Folded() then Fold(folded) end
+            if weeklyBoard ~= nil then weekly = weeklyBoard end
+            SelectTab(i)
+            selected[i] = rowKey
+            win:Show()
+            win:Raise()
+            Refresh()
+            return true
+        end
+    end
+    return false
+end
+
+--- Fold the ledger to one page (on) or open it to two, kept as the choice, as its own button does.
+function GK.FoldLedger(on)
+    if win then Fold(on) else GK.db.ledgerFolded = on or nil end
+end
+
+--- The ledger's frame and its tabs, which hang below it - folded, down its right side: what a picture of the
+--- ledger has to take in.
+function GK.LedgerFrames()
+    if not win then return {} end
+    local list = { win, win.swap }                  -- the swap tab: folded, the last of them
+    for _, t in ipairs(win.tabs) do list[#list + 1] = t end
+    return list
 end
 
 -- Once per burst of changes (GK.Changed gathers them); Refresh returns at once while the book is shut.

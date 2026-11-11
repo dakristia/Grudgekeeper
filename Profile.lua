@@ -103,7 +103,7 @@ local function AndList(names)
     return table.concat(shown, ", ", 1, #shown - 1) .. " and " .. shown[#shown]
 end
 
-local function Upper(s) return (s:gsub("^%l", string.upper)) end
+local function Upper(s) return GK.UpperFirst(s) end      -- a name's first letter in any alphabet (Core.lua)
 
 --- What a tile counts, said for one or for more: "1 DEATH", "3 DEATHS".
 local function Counted(n, word) return n == 1 and word or (word .. "s") end
@@ -111,6 +111,7 @@ local function Counted(n, word) return n == 1 and word or (word .. "s") end
 --- Our guild's name, for the line under an enemy's kills and deaths; "us" without one, or while the
 --- client can't say.
 local function OurGuild()
+    if GK.shotGuild then return GK.shotGuild end        -- the screenshot mode's made-up guild (Shots.lua)
     local name = GetGuildInfo and GetGuildInfo("player")
     if type(name) == "string" and name ~= "" and not GK.Secret(name) then return name end
     return "us"
@@ -175,8 +176,21 @@ function GK.PotRows(o)
         local g = givers[i]
         local note = g.poster and "posted it" or nil
         if owed then
-            local paid = g.poster and o.state == "p" or (not g.poster and o.paid and o.paid[g.who])
-            note = paid and "paid" or "not paid yet"
+            -- each giver pays each hunter a part (GK.Part): paid, part of it, or none yet
+            local due, paid = 0, 0
+            for _, h in ipairs(GK.Hunters(o)) do
+                if h ~= g.who then
+                    due = due + 1
+                    if GK.IsPaid(o, g.who, h) then paid = paid + 1 end
+                end
+            end
+            if due == 0 then
+                note = g.poster and "posted it" or nil
+            elseif paid >= due then
+                note = "paid"
+            else
+                note = paid > 0 and ("paid %d of %d"):format(paid, due) or "not paid yet"
+            end
         end
         rows[#rows + 1] = { GK.Coins(g.copper), Upper(Who(g.who)), note }
     end
@@ -279,7 +293,8 @@ function GK.PosterCard(t, inLedger)
         local by = Who(o.by)
         if o.auto then
             by = (by == "you" and "your" or (by .. "'s")) .. " death"
-            local why = o.note and (o.note:gsub("^%u", string.lower)) or nil
+            -- A to Z only: %u follows the locale, and under Latin-1 it takes the lead byte of a Cyrillic letter
+            local why = o.note and (o.note:gsub("^[A-Z]", string.lower)) or nil
             lines[#lines + 1] = why and ("The guild wants them dead: %s"):format(why) or "The guild wants them dead."
         elseif o.note and o.note ~= "" then
             lines[#lines + 1] = ("Why: %s"):format(o.note)
@@ -361,7 +376,8 @@ local function Lately(key, me, most)
     local out = {}
     for _, e in ipairs(GK.Store().feed) do
         if #out >= most then break end
-        if DID[e.kind] and (e.who == key or (me and LIB.IsMyStoredName(e.who))) then
+        -- an own order's target got by its poster closed it; on the card it is the kill, not a fulfilment
+        if DID[e.kind] and not (e.kind == "F" and e.own) and (e.who == key or (me and LIB.IsMyStoredName(e.who))) then
             local right
             if e.kind == "K" then
                 right = (e.p or 0) > 0 and ("+%d"):format(e.p) or nil
@@ -392,7 +408,7 @@ end
 --- The latest the news says about a guildie: one line, or nil.
 local function Latest(key, me)
     for _, e in ipairs(GK.Store().feed) do
-        if e.who == key or (me and LIB.IsMyStoredName(e.who)) then
+        if (e.who == key or (me and LIB.IsMyStoredName(e.who))) and not (e.kind == "F" and e.own) then
             local target = GK.Show(e.n)
             local when = GK.Ago(e.t)
             if e.kind == "K" then
@@ -529,7 +545,7 @@ local card            -- the frame, made on first use
 local showing         -- { poster = t } or { record = key, unit = unit } or { make = fn }
 
 local function Ink(fs, colour, font, size)
-    fs:SetFont(font, size, "")
+    GK.SetFont(fs, font, size)                   -- a family: names in Cyrillic too (Core.lua)
     fs:SetTextColor(colour[1], colour[2], colour[3])
     fs:SetShadowOffset(0, 0)
 end
@@ -718,10 +734,11 @@ local function OnEnemyMenu(_, root, ctx)
     if ok and not GK.Secret(guild) and type(guild) == "string" and guild ~= "" and GK.CanWatchGuild
         and GK.CanWatchGuild() then
         local current = GK.WatchedGuild()
-        local label = (current == guild and ("Stop watching <%s>"):format(guild))
+        local same = GK.SameGuild(current, guild)        -- the one on watch, if typed in another case
+        local label = (same and ("Stop watching <%s>"):format(guild))
             or (current and ("Watch <%s> instead of <%s>"):format(guild, current))
             or ("Watch their guild <%s>"):format(guild)
-        root:CreateButton(label, function() GK.WatchGuild(guild, current ~= guild) end)
+        root:CreateButton(label, function() GK.WatchGuild(same and current or guild, not same) end)
     end
 end
 

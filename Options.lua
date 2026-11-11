@@ -92,6 +92,8 @@ local function Build(panel)
             GK.db[key] = on
             GK.Changed()
             if key == "share" and on then GK.SendBoard() end
+            if key == "anyLetters" and GK.NoticeUpdate then GK.NoticeUpdate(false) end   -- the icon at once
+            if key == "keepLetters" and not on and GK.FadeLetters then GK.FadeLetters() end  -- what waited fades
         end)
         checks[key] = cb
         return cb
@@ -107,14 +109,20 @@ local function Build(panel)
     local h1 = Heading(f, "Letters")
     h1:SetPoint("TOPLEFT", sub, "BOTTOMLEFT", 0, -20)
     h1.isHeading = true
-    local letters = Check(h1, "Kill orders as letters", "letters",
+    local any = Check(h1, "Letters", "anyLetters",
+        "News as small sealed letters by the letter icon. Off: none at all - the ledger, the warnings and the "
+        .. "mailbox still tell you what matters.")
+    local letters = Check(any, "Kill orders as letters", "letters",
         "A small sealed letter where you put it; click it to read. Off: orders only show in the ledger.")
     local mine = Check(letters, "Letters for my own kills and deaths", "myLetters",
         "The kill that earns you a new title, and the death that put a kill order on your killer.")
+    local keep = Check(mine, "Letters wait until read", "keepLetters",
+        "On: a letter waits by the letter icon until you read it. Off: an unread one fades after two minutes - "
+        .. "Letters in the ledger still has it.")
     -- Placing the letter icon: it only shows when something came, so it needs a way to be shown now.
     local place = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     place:SetSize(170, 22)
-    place:SetPoint("TOPLEFT", mine, "BOTTOMLEFT", 0, -6)
+    place:SetPoint("TOPLEFT", keep, "BOTTOMLEFT", 0, -6)
     place:SetText("Move the letter icon")
     place:SetScript("OnClick", function() GK.PlaceNotice() end)
     place:SetScript("OnEnter", function(self)
@@ -126,8 +134,12 @@ local function Build(panel)
 
     local h2 = Section(place, "Warnings")
     local near = Check(h2, "When a kill order's target is near", "alertNear",
-        "Near you: a red glow, a soft chime and who it is. Seen by a guildie: who saw them, and where.")
-    local marks = Check(near, "Skull over targets' nameplates", "plateMarks",
+        "Near you: the sound below (once per player in 10 minutes) and a bubble by the letter - click it to "
+        .. "target them. Seen by a guildie: who saw them, and where.")
+    local nearSound = GK.SoundRow(f, near, function() return GK.db.nearSound end,
+        function(key) GK.db.nearSound = key end)
+    nearSound.which = "near"
+    local marks = Check(nearSound, "Skull over targets' nameplates", "plateMarks",
         "Over anyone with an open order on them. Needs enemy nameplates on (V).")
     local pins = Check(marks, "Last seen on the map", "mapPins",
         "Where a guildie saw an order's target, for 15 minutes. Click it for the poster.")
@@ -148,7 +160,7 @@ local function Build(panel)
         end)
     local mini = Box(guildBadge, "Minimap button", "Left-click opens Grudgekeeper, right-click these settings.",
         GK.SetMinimapShown)
-    local sound = Check(mini, "Sounds", "sound", "A page turning, the stamp, the chime of a target near.")
+    local sound = Check(mini, "Sounds", "sound", "A page turning, the stamp, the horn of a target near.")
     local h5 = Section(sound, "Screenshots")
     local shot = Check(h5, "When I fulfil a kill order", "shotFulfil", "Saved where the game saves screenshots.")
     local every = Check(shot, "At every kill", "shotEveryKill")
