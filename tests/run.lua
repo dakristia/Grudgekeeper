@@ -1943,21 +1943,36 @@ end)
 -- ---------------------------------------------------------------------------
 local FOE_GUID, KARI_GUID = "Player-1-0000FOE", "Player-1-000KARI"
 
---- Kills.lua over a fake group: Kari in party1, an Orc rogue to fight. W.fight.target is your target's
---- guid, W.fight.combat whether you are in combat.
+--- Kills.lua over a fake group: Kari in party1, an Orc rogue to fight. W.fight.combat is whether you are
+--- in combat, W.fight.dmg[guid] the meter's list of { attacker name, amount } on that enemy, and
+--- W.fight.secret whether the meter is unreadable.
 local function bootKills()
     local GK, LIB = boot({ me = ME })
-    W.fight = { combat = true }
+    W.fight = { combat = true, dmg = {} }
+    _G.InCombatLockdown = function() return W.fight.combat end
     _G.UnitGUID = function(unit)
         if unit == "player" then return "Player-1-0000ME" end
         if unit == "party1" then return KARI_GUID end
-        if unit == "target" then return W.fight.target end
         return nil
     end
     _G.UnitExists = function(unit) return _G.UnitGUID(unit) ~= nil end
-    _G.UnitAffectingCombat = function() return W.fight.combat end
-    _G.UnitCanAttack = function(_, unit) return _G.UnitGUID(unit) == FOE_GUID end
-    _G.UnitName = function(unit) return unit == "party1" and "Kari" or nil end
+    _G.UnitName = function(unit)
+        if unit == "player" then return "Me" end
+        return unit == "party1" and "Kari" or nil
+    end
+    _G.Enum = _G.Enum or {}
+    _G.Enum.DamageMeterType = { EnemyDamageTaken = 2 }
+    _G.Enum.DamageMeterSessionType = { Current = 1 }
+    _G.C_DamageMeter = {
+        GetCombatSessionSourceFromType = function(session, kind, guid)
+            if W.fight.secret then return nil end
+            local list = {}
+            for _, e in ipairs(W.fight.dmg[guid] or {}) do
+                list[#list + 1] = { totalAmount = e[2], combatSpellDetails = { unitName = e[1] } }
+            end
+            return { combatSpells = list }
+        end,
+    }
     _G.UnitLevel = function() return 60 end
     _G.IsInRaid = function() return false end
     _G.GetNumSubgroupMembers = function() return 1 end
@@ -1992,10 +2007,19 @@ test("assist points: a little less than the kill, never below 1, nothing for a k
     eq(GK.AssistPoints(60, 60, 0, true), 2, "revenge counts")
 end)
 
-test("assist: a groupmate's kill on the enemy you have targeted in combat is your assist", function()
+--- The fight ends with the meter showing this, and the game says so.
+local function endFight(LIB, dmg)
+    W.fight.combat = false
+    W.fight.dmg[FOE_GUID] = dmg
+    LIB.fire("PLAYER_REGEN_ENABLED")
+    W.advance(1)
+end
+
+test("assist: a groupmate's kill is your assist when the meter shows your damage, after the fight", function()
     local GK, LIB = bootKills()
-    W.fight.target = FOE_GUID
     GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    eq(GK.char.assists, 0, "not while the fight goes on")
+    endFight(LIB, { { "Kari", 900 }, { "Me", 65 } })
     eq(GK.char.assists, 1)
     eq(GK.char.kills, 0, "no kill")
     local f = GK.char.foes[GANK]
@@ -2011,35 +2035,58 @@ test("assist: a groupmate's kill on the enemy you have targeted in combat is you
     assert(GK.char.points >= 1, "points for it")
 end)
 
-test("assist: none for a kill you weren't fighting in, or out of combat, or by a stranger", function()
-    local GK = bootKills()
+test("assist: none when the meter shows only the groupmate's damage", function()
+    local GK, LIB = bootKills()
     GK.OnPartyKill(KARI_GUID, FOE_GUID)
-    eq(GK.char.assists, 0, "never targeted them")
-    W.fight.target, W.fight.combat = FOE_GUID, false
-    GK.OnPartyKill(KARI_GUID, FOE_GUID)
-    eq(GK.char.assists, 0, "out of combat")
-    W.fight.combat = true
-    GK.OnPartyKill("Player-1-STRANGER", FOE_GUID)
-    eq(GK.char.assists, 0, "not in your group")
+    endFight(LIB, { { "Kari", 900 } })
+    eq(GK.char.assists, 0)
+    LIB.fire("PLAYER_REGEN_ENABLED")
+    W.advance(1)
+    eq(GK.char.assists, 0, "settled once, not again")
 end)
 
-test("assist: the enemy you switched away from counts for a while, then not", function()
+test("assist: a kill out of combat settles at once, no event needed", function()
+    local GK = bootKills()
+    W.fight.combat = false
+    W.fight.dmg[FOE_GUID] = { { "Kari", 900 }, { "Me", 65 } }
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    eq(GK.char.assists, 1)
+end)
+
+test("assist: none for a stranger's kill, even with your damage in the meter", function()
     local GK, LIB = bootKills()
-    W.fight.target = FOE_GUID
-    LIB.fire("PLAYER_TARGET_CHANGED")
-    W.advance(20)
-    W.fight.target = nil
-    LIB.fire("PLAYER_TARGET_CHANGED")       -- fought until now
-    W.advance(25)
+    GK.OnPartyKill("Player-1-STRANGER", FOE_GUID)
+    endFight(LIB, { { "Me", 65 } })
+    eq(GK.char.assists, 0)
+end)
+
+test("assist: a secret meter waits for the next end of combat, and is dropped after two minutes", function()
+    local GK, LIB = bootKills()
     GK.OnPartyKill(KARI_GUID, FOE_GUID)
-    eq(GK.char.assists, 1, "25 s after you switched")
-    W.fight.target = FOE_GUID
-    LIB.fire("PLAYER_TARGET_CHANGED")
-    W.fight.target = nil
-    LIB.fire("PLAYER_TARGET_CHANGED")
-    W.advance(31)
-    GK.OnPartyKill(KARI_GUID, FOE_GUID)
-    eq(GK.char.assists, 1, "too long ago")
+    W.fight.secret = true
+    endFight(LIB, { { "Me", 65 } })
+    eq(GK.char.assists, 0, "meter unreadable")
+    W.fight.secret = false
+    W.fight.combat = true
+    LIB.fire("PLAYER_REGEN_ENABLED")
+    W.advance(1)
+    eq(GK.char.assists, 0, "a new fight began")
+    W.fight.combat = false
+    LIB.fire("PLAYER_REGEN_ENABLED")
+    W.advance(1)
+    eq(GK.char.assists, 1, "readable at last")
+
+    local GK2, LIB2 = bootKills()
+    GK2.OnPartyKill(KARI_GUID, FOE_GUID)
+    W.fight.secret = true
+    endFight(LIB2, { { "Me", 65 } })
+    W.advance(125)
+    LIB2.fire("PLAYER_REGEN_ENABLED")
+    W.advance(1)
+    W.fight.secret = false
+    LIB2.fire("PLAYER_REGEN_ENABLED")
+    W.advance(1)
+    eq(GK2.char.assists, 0, "dropped, never counted")
 end)
 
 --- Guild.lua over the plain client: a guildie's message goes through its reader (GK.ReceiveForTest).
@@ -2105,7 +2152,6 @@ end)
 
 test("assist: your own blow is still a kill, not an assist", function()
     local GK = bootKills()
-    W.fight.target = FOE_GUID
     GK.OnPartyKill("Player-1-0000ME", FOE_GUID)
     eq(GK.char.kills, 1)
     eq(GK.char.assists, 0)

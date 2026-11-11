@@ -2,9 +2,10 @@
 -- A kill: PARTY_KILL names the killer and the victim by GUID, for you and anyone in your group. We
 -- count the ones landed by you or your pet, on a player of the other faction, in the open world. The
 -- level comes from having seen them (Sightings.lua): the kill itself carries none.
--- An assist: the same event, the blow landed by someone in your group (or their pet) on an enemy you
--- were fighting. The game keeps the combat log and the damage numbers from us, so "fighting" means you
--- had them as your target or focus while in combat, within the last ASSIST_FOR seconds.
+-- An assist: the same event, the blow landed by someone in your group (or their pet) on an enemy player
+-- you hurt in that fight. The game keeps the combat log from us, but its damage meter says who hit whom
+-- once the fight is over, so the kill waits for the end of combat and the meter is asked then: any
+-- damage of yours on the victim makes it an assist, none and it is not one.
 -- A death: the game's death recap names whoever landed the blow (the "You died" chat line carries its
 -- id), and the damage meter is asked when the recap is empty. It counts as a PvP death only when that
 -- name belongs to an enemy player we saw - a name alone can't tell a rogue from a murloc.
@@ -16,9 +17,8 @@ local recapId          -- the death recap the last "You died" line pointed at
 local deathPending
 local lastDeath = "none this session"
 local lastAssist = "none this session"
-local fought = {}       -- [guid] = GetTime(): enemy players you had as target or focus in combat
-local held = {}         -- [unit] = the guid of the enemy fought there now ("target", "focus")
-local ASSIST_FOR = 30
+local pending = {}      -- [guid] = { v, with, at }: a groupmate's kill waiting for the meter to be readable
+local PENDING_FOR = 120 -- seconds a kill may wait for a readable meter before it is dropped
 
 function GK.LastDeathDebug() return lastDeath end
 function GK.LastAssistDebug() return lastAssist end
@@ -47,33 +47,6 @@ local function Groupmate(guid)
         end
     end
     return nil
-end
-
---- An enemy player you have as target or focus, while you're in combat, counts as fought. The one
---- you switch away from was fought until now.
-local function Engage(unit)
-    local now = GetTime()
-    local old = held[unit]
-    if old and fought[old] then fought[old] = now end
-    held[unit] = nil
-    if not UnitExists(unit) or not UnitAffectingCombat("player") then return end
-    local guid = UnitGUID(unit)
-    if Secret(guid) or type(guid) ~= "string" or not guid:find("^Player%-") then return end
-    local hostile = UnitCanAttack("player", unit)
-    if Secret(hostile) or not hostile then return end
-    fought[guid] = now
-    held[unit] = guid
-end
-
---- Did you fight them lately? Your target or focus right now counts, as the stamp may be old.
-local function Fought(guid)
-    Engage("target")
-    Engage("focus")
-    local now = GetTime()
-    for g, t in pairs(fought) do
-        if now - t > ASSIST_FOR then fought[g] = nil end
-    end
-    return fought[guid] ~= nil
 end
 
 --- Today's hits on this enemy, kills and assists alike, with older ones dropped.
@@ -183,8 +156,57 @@ local function Victim(target)
         r = (s and s.r) or GK.Clean(race, 20), l = level }
 end
 
+--- How much damage we did to this enemy, by the game's damage meter: a number, or nil when the meter
+--- can't be read now (secret in combat), or false when this client has no such meter.
+local function OurDamage(guid)
+    local meter = C_DamageMeter
+    local types, sessions = Enum and Enum.DamageMeterType, Enum and Enum.DamageMeterSessionType
+    if type(meter) ~= "table" or not meter.GetCombatSessionSourceFromType
+        or not (types and types.EnemyDamageTaken and sessions) then return false end
+    local ok, src = pcall(meter.GetCombatSessionSourceFromType, sessions.Current, types.EnemyDamageTaken, guid)
+    if not ok or type(src) ~= "table" or Secret(src) or type(src.combatSpells) ~= "table" then return nil end
+    local me = UnitName("player")
+    if Secret(me) or type(me) ~= "string" then return nil end
+    local total = 0
+    for _, sp in ipairs(src.combatSpells) do
+        local d = type(sp) == "table" and sp.combatSpellDetails
+        if type(d) == "table" and not Secret(d.unitName) and d.unitName == me
+            and not Secret(sp.totalAmount) and type(sp.totalAmount) == "number" then
+            total = total + sp.totalAmount
+        end
+    end
+    return total
+end
+
+--- Ask the meter about every kill waiting. Out of combat only: in a fight the meter is secret, and the
+--- next end of combat tries again. A kill the meter can't be read for in two minutes is dropped.
+local function Settle()
+    if InCombatLockdown() then return end
+    for guid, p in pairs(pending) do
+        local v = p.v
+        local dmg = OurDamage(guid)
+        if dmg == false then
+            pending[guid] = nil
+            lastAssist = "no damage meter on this client: no assist"
+        elseif dmg == nil then
+            if GetTime() - p.at > PENDING_FOR then
+                pending[guid] = nil
+                lastAssist = ("%s: the meter never said"):format(v.key)
+            end
+        else
+            pending[guid] = nil
+            if dmg > 0 then
+                lastAssist = ("%s, with %s (%d damage from you)"):format(v.key, p.with, dmg)
+                GK.RecordAssist(v)
+            else
+                lastAssist = ("%s got %s, but the meter shows no damage from you"):format(p.with, v.key)
+            end
+        end
+    end
+end
+
 --- PARTY_KILL (attacker GUID, victim GUID). A function of its own so the smoke test can call it.
---- Your blow is a kill; a groupmate's, on someone you were fighting, is your assist.
+--- Your blow is a kill; a groupmate's waits for the meter, and is your assist if you hurt the victim.
 function GK.OnPartyKill(attacker, target)
     if Secret(attacker) or Secret(target) or type(target) ~= "string" then return end
     if not target:find("^Player%-") or not GK.InWorld() then return end
@@ -195,19 +217,15 @@ function GK.OnPartyKill(attacker, target)
     end
     local with = Groupmate(attacker)
     if not with then return end
-    if not Fought(target) then
-        lastAssist = ("%s got a kill you weren't fighting in: no assist"):format(with)
-        return
-    end
     local v = Victim(target)
     if not v then
         lastAssist = ("%s got a kill, but not of an enemy player we count"):format(with)
         return
     end
     v.with = with
-    lastAssist = ("%s, with %s"):format(v.key, with)
-    fought[target] = nil
-    GK.RecordAssist(v)
+    pending[target] = { v = v, with = with, at = GetTime() }
+    lastAssist = ("%s, with %s: waiting for the fight to end"):format(v.key, with)
+    if not InCombatLockdown() then Settle() end
 end
 
 -- ---------------------------------------------------------------------------
@@ -377,12 +395,8 @@ end
 
 function GK.StartKills()
     LIB.On("PARTY_KILL", function(attacker, target) GK.OnPartyKill(attacker, target) end)
-    LIB.On("PLAYER_TARGET_CHANGED", function() Engage("target") end)
-    LIB.On("PLAYER_FOCUS_CHANGED", function() Engage("focus") end)
-    LIB.On("PLAYER_REGEN_DISABLED", function()
-        Engage("target")
-        Engage("focus")
-    end)
+    -- The meter may need a moment after the fight ends.
+    LIB.On("PLAYER_REGEN_ENABLED", function() C_Timer.After(1, Settle) end)
     LIB.On("CHAT_MSG_SYSTEM", function(text)
         if type(text) ~= "string" or Secret(text) then return end
         local id = text:match("|Hdeath:(%d+)|h")
