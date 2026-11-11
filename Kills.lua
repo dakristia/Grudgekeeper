@@ -140,6 +140,9 @@ end
 --- the work ("hvis det er mob som dreper så må vi krediteres ... også hvis ... vi har fightet lenge mot han
 --- og noen andre sniper kill", the owner, 2026-11-09). The combat log is closed to addons; this meter is
 --- not, out of combat. Prints only what it can read, and "(secret)" for what it can't.
+--- The last fight ("Current") shows every enemy in it. The whole meter ("Overall") shows only the ones
+--- with a class, the players, as the mobs drown them. For each: whether the name and the GUID are
+--- readable, and who hit them when the GUID is. The first row's fields go first, to learn their names.
 function GK.MeterProbe()
     local meter = C_DamageMeter
     local types, sessions = Enum and Enum.DamageMeterType, Enum and Enum.DamageMeterSessionType
@@ -152,32 +155,56 @@ function GK.MeterProbe()
         return
     end
     local function S(v) if Secret(v) then return "(secret)" end return tostring(v) end
+    local function Readable(v)
+        if v == nil then return "missing" end
+        if Secret(v) then return "secret" end
+        return v == "" and "empty" or "readable"
+    end
+    local function Fields(t)
+        local keys = {}
+        for k, v in pairs(t) do keys[#keys + 1] = tostring(k) .. "=" .. (Secret(v) and "(secret)" or type(v)) end
+        table.sort(keys)
+        return table.concat(keys, " ")
+    end
+    local shownFields
     for _, kind in ipairs({ "Current", "Overall" }) do
         local ok, session = pcall(meter.GetCombatSessionFromType, sessions[kind], types.EnemyDamageTaken)
         if not ok or type(session) ~= "table" or Secret(session) or type(session.combatSources) ~= "table" then
             print(("%s meter, %s: nothing readable (%s)"):format(GK.TAG, kind, ok and S(session) or tostring(session)))
         else
             print(("%s meter, %s: %d enemies took %s"):format(GK.TAG, kind, #session.combatSources, S(session.totalAmount)))
-            for i, src in ipairs(session.combatSources) do
-                if i > 6 then break end
-                print(("  %s, %s %s: took %s, died at %s"):format(S(src.name), S(src.factionGroup), S(src.classFilename),
-                    S(src.totalAmount), S(src.deathTimeSeconds)))
-                local guid = src.sourceGUID
-                if guid and not Secret(guid) and meter.GetCombatSessionSourceFromType then
-                    local ok2, d = pcall(meter.GetCombatSessionSourceFromType, sessions[kind], types.EnemyDamageTaken, guid)
-                    if ok2 and type(d) == "table" and not Secret(d) and type(d.combatSpells) == "table" then
-                        for j, sp in ipairs(d.combatSpells) do
-                            if j > 6 then break end
-                            local u = type(sp.combatSpellDetails) == "table" and sp.combatSpellDetails or {}
-                            print(("    spell %s: %s from %s / %s, mob %s, pet %s, deadly %s"):format(S(sp.spellID),
-                                S(sp.totalAmount), S(sp.creatureName), S(u.unitName), S(u.isMob), S(u.isPet),
-                                S(sp.isDeadly)))
+            local skipped = 0
+            for _, src in ipairs(session.combatSources) do
+                local class = src.classFilename
+                local player = not Secret(class) and type(class) == "string" and class ~= ""
+                if kind == "Overall" and not player then
+                    skipped = skipped + 1
+                else
+                    if not shownFields then
+                        shownFields = true
+                        print("  fields: " .. Fields(src))
+                    end
+                    local guid = src.sourceGUID
+                    print(("  %s (name %s), %s %s: took %s, guid %s%s"):format(S(src.name), Readable(src.name),
+                        S(src.factionGroup), S(class), S(src.totalAmount), Readable(guid),
+                        (guid and not Secret(guid)) and (" " .. guid) or ""))
+                    if guid and not Secret(guid) and meter.GetCombatSessionSourceFromType then
+                        local ok2, d = pcall(meter.GetCombatSessionSourceFromType, sessions[kind], types.EnemyDamageTaken, guid)
+                        if ok2 and type(d) == "table" and not Secret(d) and type(d.combatSpells) == "table" then
+                            for j, sp in ipairs(d.combatSpells) do
+                                if j > 8 then break end
+                                local u = type(sp.combatSpellDetails) == "table" and sp.combatSpellDetails or {}
+                                print(("    spell %s: %s from %s / %s, mob %s, pet %s, deadly %s"):format(S(sp.spellID),
+                                    S(sp.totalAmount), S(sp.creatureName), S(u.unitName), S(u.isMob), S(u.isPet),
+                                    S(sp.isDeadly)))
+                            end
+                        else
+                            print(("    who hit them: nothing readable (%s)"):format(ok2 and S(d) or tostring(d)))
                         end
-                    else
-                        print("    who hit them: nothing readable")
                     end
                 end
             end
+            if skipped > 0 then print(("  and %d without a class (mobs), left out"):format(skipped)) end
         end
     end
 end
