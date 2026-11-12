@@ -550,7 +550,6 @@ end
 -- the SoundKitConstants id); one this client lacks in SOUNDKIT is left out.
 local SOUND_KITS = {
     { "PVP_THROUGH_QUEUE", "Battleground horn" },
-    { "HARDCORE_DUEL", "Duel to the death" },
     { "UI_GARRISON_TOAST_INVASION_ALERT", "Invasion alert" },
     { "RAID_WARNING", "Raid warning" },
     { "RAID_BOSS_EMOTE_WARNING", "Boss emote" },
@@ -569,19 +568,28 @@ local SOUND_KITS = {
     { "IG_PLAYER_INVITE", "Group invite" },
 }
 
---- A pick of a file that left the package (the war horn, the God of War clips) goes back to the default:
---- it would play the chime under a dropdown showing nothing picked. Only our own files: another addon's
+--- Whether a pick is one of ours that left the package: a file (the war horn, the God of War clips) or a
+--- kit taken off the list (HARDCORE_DUEL, which plays nothing on Forever). Only our own: another addon's
 --- sound may simply not be loaded yet at login.
+local function Gone(pick)
+    if type(pick) ~= "string" then return false end
+    local kind, name = pick:match("^(%a+):(.+)$")
+    local list = (kind == "file" and SOUND_FILES) or (kind == "kit" and SOUND_KITS)
+    if not list then return false end
+    for _, s in ipairs(list) do
+        if s[1] == name then return false end
+    end
+    return true
+end
+
+--- A gone pick goes back to the default: it would play the chime, or nothing, under a dropdown showing
+--- nothing picked.
 function GK.ForgetGoneSounds(db)
     for field, default in pairs({ nearSound = defaults.nearSound, shameSound = defaults.shameSound }) do
-        local name = type(db[field]) == "string" and db[field]:match("^file:(.+)$")
-        if name then
-            local known = false
-            for _, s in ipairs(SOUND_FILES) do
-                if s[1] == name then known = true end
-            end
-            if not known then db[field] = default end
-        end
+        if Gone(db[field]) then db[field] = default end
+    end
+    for key, pick in pairs(type(db.spreeSounds) == "table" and db.spreeSounds or {}) do
+        if Gone(pick) then db.spreeSounds[key] = nil end
     end
 end
 

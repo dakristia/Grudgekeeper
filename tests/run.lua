@@ -3175,6 +3175,15 @@ test("announce: toasts stack up to four, and /grudge spree shows a sample of bot
     eq(#A.played, before + 1, "one sound for the pair")
 end)
 
+test("a pick of a sound taken off the list goes back to the default, everywhere it was picked", function()
+    local GK = boot({ me = ME })
+    GK.db.nearSound, GK.db.spreeSounds = "kit:HARDCORE_DUEL", { butcher = "kit:HARDCORE_DUEL", reaper = "kit:RAID_WARNING" }
+    GK.ForgetGoneSounds(GK.db)
+    eq(GK.db.nearSound, "kit:PVP_THROUGH_QUEUE")
+    eq(GK.db.spreeSounds.butcher, nil, "the tier's default plays again")
+    eq(GK.db.spreeSounds.reaper, "kit:RAID_WARNING", "a pick still on the list stays")
+end)
+
 test("announce: a burning splash and a cold one both play through to the end", function()
     local GK, LIB, A = bootAnnounce()
     GK.db.spreeMine, GK.db.spreeEnded = "splash", "splash"
