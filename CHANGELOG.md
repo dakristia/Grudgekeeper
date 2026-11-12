@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.0
+
+- **Assists.** When someone in your group lands the killing blow on an enemy player you hurt in that fight, it counts for you as an assist: the kill's points less one, at least one, and none for a grey or farmed kill. The game's damage meter tells who hit them once the fight is over, so an assist shows a moment after combat ends. Your pet's damage counts as yours. A mob's or a stranger's killing blow is no assist, because the meter only knows you and your group. Assists show in a new A column on the leaderboard, in your grudges, on the cards, in the guild's news and in the minimap button's tooltip. A guildie on an older Grudgekeeper shows "-" there. An assist that takes you to a new title brings its letter, as a kill does.
+- **Old race portraits.** The faces are now drawn from the old character-creation screen in place of today's race icons, whichever skin you use. "Old race portraits" under Portraits in the settings switches back to today's icons. The Skyborne, whom the old screen never had, show their class crest.
+- **Faces for enemies you never met.** A guildie's kill, death or kill order now carries the enemy's race and sex when they saw them, so the enemy's face shows in your ledger too.
+- **Your score follows you to another PC.** Your score is kept on the computer you play on. Logging in on a second one started you from 0 there, and the guild's leaderboard showed 0. Going back to the first put the old score back, without what you did on the second. Now each PC keeps its own part of your score and the guild adds them up. When you log in, a guildie hands you back what your other PC made. This needs a guildie online with this version, and every PC you play on updated. A guildie on an older Grudgekeeper still shows whichever PC spoke last.
+- **Avenging a guildie pays only in a later fight.** Killing or helping to kill an enemy who killed a guildie in the last 15 minutes is still worth a point more, but not in the fight the guildie died in. Leave combat and catch them again, and it counts. Before, one of the group dying first made every kill and assist on their killer a point more for the whole group.
+- **What's new comes as a letter.** After an update the Grudgekeeper writes one short letter about it, to the first character you log in with. A new install gets none, and none comes with letters switched off.
+- **How points are counted, on the leaderboard.** Hover the Points heading for the rules: what a kill is worth by level, the bonuses, the daily limit and what an assist gives.
+- **The settings page and `/grudge help` show the version.** They showed a count of the changes since you logged in.
+- Assists and the old portraits started as a pull request from dakristia.
+
 ## 1.3.0
 
 - **Letters in the Grudgekeeper's own voice.** The small letters now read as the old keeper of the guild's grudges talking to you. A new title greets you by it - "Rise, Bloodhound" - tells you who fell and where, and ends with a word of his own for each title. A death, a bounty paid and a kill order that ran out are told the same way, and a kill order's scroll says they are wanted for crimes against the guild.

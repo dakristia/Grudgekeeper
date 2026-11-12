@@ -54,6 +54,12 @@ local LIST_TOP = 96                                  -- the first row, down from
 -- the page (they ran into each other in the preview)
 local COL1, COL2, COL_WIDE, COL_RIGHT = 232, 266, 196, PAGE_W - 36
 local SCORE_X = COL_RIGHT - 34                       -- the middle of a grudge's score ("0 - 1")
+-- The leaderboard's three counts, K, D and A, a little closer than COL1 and COL2: at 34 apart the third
+-- left a four-figure score no room. The name keeps 116, and a longer one steps down a size first.
+local BOARD_K, BOARD_D, BOARD_A = 210, 240, 270
+-- Heading buttons a page has: the leaderboard's six (#, Name, K, D, A, Points). Five there were, and the A
+-- column pushed Points off the end - its heading went missing (2026-11-12).
+local HEADS = 6
 local SUGGEST = 5            -- with no open order, who killed us most: this many, on the orders page
 -- How far a list runs: its first LIST_MAX rows, about three pages, and under the open kill orders the
 -- CLOSED_MAX closed last. A list ran to every row the store holds - 200 on Most wanted, 500 on the
@@ -303,17 +309,18 @@ end
 
 local function BoardItems()
     local items, listed = {}, {}
-    local function Add(r, p, k, d, rank)
+    local function Add(r, p, k, d, a, rank)
         rank = rank or #items + 1
         listed[r.who] = true
         items[#items + 1] = { key = "b:" .. r.who, rank = rank, seal = rank <= 3 and p > 0,
             name = GK.Show(r.who), sub = GK.Title(r.total), face = { key = r.who, rf = r.rf, sx = r.sx, c = r.c },
-            c1 = tostring(k), c2 = tostring(d), right = tostring(p), mine = r.me,
+            -- a dash for a guildie whose client sends no assists: a 0 would say they had none
+            c1 = tostring(k), c2 = tostring(d), c3 = a and tostring(a) or "-", right = tostring(p), mine = r.me,
             select = { kind = "record", key = r.who } }
     end
     -- the top LIST_MAX, and you under them at your own place if you are further down
     for i, r in ipairs(GK.Board(weekly)) do
-        if i <= LIST_MAX or r.me then Add(r, r.p, r.k, r.d, i) end
+        if i <= LIST_MAX or r.me then Add(r, r.p, r.k, r.d, r.a, i) end
     end
     -- This week a short board fills its first page with the rest of the guild, at nothing yet: three rows
     -- and six empty ones under them looked like a list that hadn't loaded ("vis this week leaderboard folk
@@ -322,7 +329,7 @@ local function BoardItems()
     if weekly and #items < ROWS then
         for _, r in ipairs(GK.Board(false)) do
             if #items >= ROWS then break end
-            if not listed[r.who] then Add(r, 0, 0, 0) end
+            if not listed[r.who] then Add(r, 0, 0, 0, r.a and 0) end
         end
     end
     return items, ""
@@ -365,14 +372,15 @@ local function GrudgeItems()
     end
     local foes = {}
     for k, v in pairs(c.foes) do
-        if (v.k or 0) + (v.d or 0) > 0 then foes[#foes + 1] = { key = k, f = v, name = GK.Show(k) } end
+        if (v.k or 0) + (v.d or 0) + (v.a or 0) > 0 then foes[#foes + 1] = { key = k, f = v, name = GK.Show(k) } end
     end
     local how = GRUDGE_ORDERS[grudgeOrder][1]
     local function Before(a, b, by)
         if by == "recent" then
             if (a.f.last or 0) ~= (b.f.last or 0) then return (a.f.last or 0) > (b.f.last or 0) end
         elseif by == "fought" then
-            local x, y = (a.f.k or 0) + (a.f.d or 0), (b.f.k or 0) + (b.f.d or 0)
+            local x = (a.f.k or 0) + (a.f.d or 0) + (a.f.a or 0)
+            local y = (b.f.k or 0) + (b.f.d or 0) + (b.f.a or 0)
             if x ~= y then return x > y end
         end
         if a.name:lower() ~= b.name:lower() then return a.name:lower() < b.name:lower() end
@@ -396,14 +404,16 @@ local function GrudgeItems()
         local last = lastOf[e.key]
         local sub
         if last then
-            sub = (last.k == "K" and "you killed them " or "killed you ") .. GK.Ago(last.t)
-                .. (last.z and (" \194\183 " .. last.z) or "")
+            local what = { K = "you killed them ", A = "you helped kill them " }
+            sub = (what[last.k] or "killed you ") .. GK.Ago(last.t) .. (last.z and (" \194\183 " .. last.z) or "")
         else
             sub = "last met " .. GK.Ago(e.f.last)
         end
+        -- the score is kills against deaths; assists go first under the name, where they aren't cut
+        if (e.f.a or 0) > 0 then sub = Plural(e.f.a, "assist") .. " \194\183 " .. sub end
         items[#items + 1] = { key = "f:" .. e.key, name = e.name, face = { key = e.key, c = e.f.c },
-            desc = Short(e.f.l, e.f.c, e.f.r), sub = sub, score = { you, they }, select = PosterSpec(e.key, e.f),
-            you = you, they = they, ts = e.f.last, own = true }
+            desc = Short(e.f.l, e.f.c, e.f.r), sub = sub, score = { you, they },
+            select = PosterSpec(e.key, e.f), you = you, they = they, ts = e.f.last, own = true }
     end
     if #c.log > 0 then items[#items + 1] = { header = true, name = "Lately" } end
     for i = 1, math.min(#c.log, LIST_MAX) do                   -- the latest: your log is newest first
@@ -412,6 +422,10 @@ local function GrudgeItems()
             sub = table.concat({ e.z or "", GK.Ago(e.t) }, e.z and " - " or "") }
         if e.k == "K" then
             it.name = "Killed " .. GK.Show(e.n)
+            it.right = (e.p or 0) > 0 and ("+%d"):format(e.p) or "no points"
+        elseif e.k == "A" then
+            it.name = "Helped kill " .. GK.Show(e.n)
+            if e.w then it.sub = it.sub .. " - with " .. e.w end
             it.right = (e.p or 0) > 0 and ("+%d"):format(e.p) or "no points"
         else
             -- the spell at the end of the line under the name, not in the right-hand column: there
@@ -426,7 +440,7 @@ local function GrudgeItems()
 end
 
 -- What the news says, by kind: who, then whom. "AU" is a C whose poster's death posted it.
-local SAID = { K = "%s killed %s", D = "%s fell to %s", F = "%s fulfilled the order on %s",
+local SAID = { K = "%s killed %s", H = "%s helped kill %s", D = "%s fell to %s", F = "%s fulfilled the order on %s",
     C = "%s put a price on %s", AU = "%s death put a price on %s", T = "%s added to the pot on %s" }
 
 --- A name by its first word: the character's own name, without the surname.
@@ -462,7 +476,7 @@ local function NewsItems()
             line = said:format(Who2(GK.Show), GK.Show(e.n))
             short = said:format(Who2(FirstName), FirstName(e.n))
         end
-        if kind == "K" then
+        if kind == "K" or kind == "H" then
             right = (e.p or 0) > 0 and ("+%d"):format(e.p) or nil
         elseif kind == "F" then
             right = (e.p or 0) > 0 and GK.MoneyText(e.p) or nil
@@ -492,14 +506,32 @@ local function ResetText()
     return days and ("-  resets in " .. Plural(days, "day")) or ""
 end
 
+--- How points are counted, for the Points heading's tooltip: from the numbers themselves (Core.lua), so it
+--- can't say what they no longer are. The news letter left the numbers out to read like him talking, and
+--- sends the reader here.
+local function PointsHelp()
+    local P = GK.POINTS
+    return {
+        "How points are counted",
+        ("A kill: green %d, yellow %d, orange %d, red %d, grey %d."):format(P.green, P.yellow, P.orange, P.red,
+            P.grey),
+        ("Revenge +%d. Avenging a guildie +%d, in a later fight than the one they fell in."):format(
+            GK.REVENGE_BONUS, GK.AVENGE_BONUS),
+        ("The target of a kill order +%d."):format(GK.ORDER_BONUS),
+        ("The same player counts %d times a day, then nothing."):format(GK.REPEATS),
+        ("An assist: the kill's points less %d, but at least 1 if the kill gives any."):format(GK.ASSIST_LESS),
+    }
+end
+
 --- The ledger's pages, in tab order; other files add theirs with GK.AddLedgerPage. A page is
 --- { name, items = fn -> items, empty text, headings, sub = fn(items, all) -> text, links = fn -> { { text,
 --- on, click } }, linksTail = fn -> text, sortable, max, side, add, icon, default = fn(items) -> the row chosen
 --- when none is }. max: a sortable page with no section headings lists at most this many rows (GK.SortItems);
 --- all, to sub, is how many there were before it. icon: the texture on its tab folded, down the frame's side.
---- headings: the column headings over the table, { text, x, justify, sort, tip }: a heading with a sort
+--- headings: the column headings over the table, { text, x, justify, sort, tip, help }: a heading with a sort
 --- (an item field: "name", or a number, the biggest first) sorts the page when clicked, and tip finishes
---- "Sort by ..." in its tooltip. sortable: the headings sort and Only mine shows. links: ink links under
+--- "Sort by ..." in its tooltip. help: fn -> lines its tooltip starts with, the first as a title, sorting
+--- or not. At most HEADS headings a page. sortable: the headings sort and Only mine shows. links: ink links under
 --- the title. add: the page's own action, top right - { text, kind } opens the who-picker (Pick.lua) for
 --- that kind. side: "right" puts the tab over the right page in the open book (the friendly lists);
 --- anything else is over the left page. Folded, the page's group hangs down the frame's side. A page with links and a sub
@@ -523,8 +555,8 @@ GK.LedgerPages = {
               Plural(GK.char.points, "point"), rank, of)
       end },
     { name = "Leaderboard", items = BoardItems, icon = MEDIA .. "rank_1",
-      headings = { { "#", 12 }, { "Name", NAME_X_RANKED + 4 }, { "K", COL1, "CENTER" }, { "D", COL2, "CENTER" },
-          { "Points", COL_RIGHT, "RIGHT" } },
+      headings = { { "#", 12 }, { "Name", NAME_X_RANKED + 4 }, { "K", BOARD_K, "CENTER" }, { "D", BOARD_D, "CENTER" },
+          { "A", BOARD_A, "CENTER" }, { "Points", COL_RIGHT, "RIGHT", nil, nil, PointsHelp } },
       links = function()
           return { { text = "This week", on = weekly, click = function() weekly = true end },
                    { text = "All time", on = not weekly, click = function() weekly = false end } }
@@ -767,7 +799,7 @@ local function BuildRow(parent, i)
         else fs:SetPoint("LEFT", row, "LEFT", x - 4, 0) end
         return fs
     end
-    row.c1, row.c2 = Col(COL1, "CENTER"), Col(COL2, "CENTER")
+    row.c1, row.c2, row.c3 = Col(COL1, "CENTER"), Col(COL2, "CENTER"), Col(BOARD_A, "CENTER")
     row.wide, row.right = Col(COL_WIDE), Col(COL_RIGHT, "RIGHT")
     -- A grudge's score, read like a match's: "0 - 1", the leader's number in colour, and under it who
     -- leads. Two bare columns of 0 and 1 under YOU and THEY were "litt dårlig vist" (the owner,
@@ -847,7 +879,7 @@ local function FillRow(row, it, chosen)
         row.mark:Hide()
         row.open:Hide()
         row.rule:Show()
-        row.c1:SetText("") row.c2:SetText("") row.wide:SetText("") row.right:SetText("")
+        row.c1:SetText("") row.c2:SetText("") row.c3:SetText("") row.wide:SetText("") row.right:SetText("")
         row.score:SetText("") row.lead:SetText("")
         row.order:SetText(it.order or "")
         row.cut = false
@@ -889,7 +921,7 @@ local function FillRow(row, it, chosen)
     -- own width, not a fixed 70 kept for "12g 34s": a "+2" in the news cut "Seedkek One" to "Seedke..."
     -- with half the row empty (2026-11-05), and a long sum ran past the fixed stop into the name. Before
     -- a score, short of its "they lead", the widest thing under it.
-    local stop = (it.score and SCORE_X - 32) or (it.c1 and COL1 - 20) or (it.wide and COL_WIDE - 8)
+    local stop = (it.score and SCORE_X - 32) or (it.c3 and BOARD_K - 20) or (it.c1 and COL1 - 20) or (it.wide and COL_WIDE - 8)
         or (it.right and COL_RIGHT - 4 - row.right:GetStringWidth() - 12) or (PAGE_W - 24)
     local room = stop - x0
     -- A line too long for its room steps down a size, then says its short form (first names only, where
@@ -924,8 +956,14 @@ local function FillRow(row, it, chosen)
     row.rank:SetText(it.rank and tostring(it.rank) or "")
     row.face:SetShown(true)
     row.face:Set(it.face or {})
+    -- with a third count (the leaderboard) the first two move closer, to make it room
+    row.c1:ClearAllPoints()
+    row.c1:SetPoint("CENTER", row, "LEFT", (it.c3 and BOARD_K or COL1) - 4, 0)
+    row.c2:ClearAllPoints()
+    row.c2:SetPoint("CENTER", row, "LEFT", (it.c3 and BOARD_D or COL2) - 4, 0)
     row.c1:SetText(it.c1 or "")
     row.c2:SetText(it.c2 or "")
+    row.c3:SetText(it.c3 or "")
     row.wide:SetText(it.wide or "")
     row.mark:SetShown(chosen and not Folded())
     row.open:SetShown(Folded())
@@ -1032,7 +1070,7 @@ local function BuildList(page)
     -- The column headings. One with a sort is a button: a click sorts by it, a second click goes back
     -- to the page's own order; the one in use is in blood and underlined, like a chosen link.
     page.heads = {}
-    for i = 1, 5 do
+    for i = 1, HEADS do
         local b = CreateFrame("Button", nil, page)
         b:SetHeight(14)
         b.text = b:CreateFontString(nil, "ARTWORK")
@@ -1044,15 +1082,19 @@ local function BuildList(page)
         b.line:SetPoint("BOTTOMLEFT", 0, -1)
         b.line:SetPoint("BOTTOMRIGHT", 0, -1)
         b:SetScript("OnClick", function(self)
+            if not self.key then return end            -- a heading with only a tooltip to give
             GK.SortBy(GK.LedgerPages[tab], self.key)
             offset = 0
             Refresh()
         end)
         b:SetScript("OnEnter", function(self)
             GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            for n, line in ipairs(self.help and self.help() or {}) do
+                if n == 1 then GameTooltip:AddLine(line, 1, 1, 1) else GameTooltip:AddLine(line, nil, nil, nil, true) end
+            end
             if self.on then
                 GameTooltip:AddLine("Click again for the page's own order", 1, 1, 1)
-            else
+            elseif self.key then
                 GameTooltip:AddLine("Sort by " .. (self.tip or self.text:GetText():lower()), 1, 1, 1)
             end
             GameTooltip:Show()
@@ -2153,9 +2195,9 @@ Refresh = function()
         b:SetShown(h ~= nil)
         if not h then b.key, b.on = nil, false end
         if h then
-            b.key, b.tip = sortable and h[4] or nil, h[5]
+            b.key, b.tip, b.help = sortable and h[4] or nil, h[5], h[6]
             b.on = b.key ~= nil and b.key == sortKey
-            b:EnableMouse(b.key ~= nil)
+            b:EnableMouse(b.key ~= nil or b.help ~= nil)
             b.text:SetText(h[1]:upper())
             Ink(b.text, b.on and BLOOD or FADED, TEXT_FONT, 10)
             b.line:SetShown(b.on)

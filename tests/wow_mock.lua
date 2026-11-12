@@ -159,7 +159,7 @@ function M.boot(opts)
     env.SlashCmdList = {}
     env.issecretvalue = nil
     env.GuildGrudgeDB = opts.guildGrudge
-    env.GrudgekeeperDB, env.GrudgekeeperCharDB = nil, nil
+    env.GrudgekeeperDB, env.GrudgekeeperCharDB = opts.db, nil     -- opts.db: an account that played before
     M.rankFlags = nil
 
     local GK = {}
@@ -170,9 +170,11 @@ function M.boot(opts)
     -- opts.ui: the ledger's side of the notes (NotesUI.lua), with stand-ins for the files it builds on
     if opts.ui then require("ui_mock").load(M, GK) end
     -- The login handler in Core.lua starts every other part of the addon; none of them is loaded here.
+    -- M.started[name] holds what each was started with.
+    M.started = {}
     for _, name in ipairs({ "StartGuild", "StartSightings", "StartKills", "StartLetters", "StartMail",
             "StartSocial", "StartProfiles", "StartInspect", "StartMapPins", "RegisterOptions" }) do
-        GK[name] = function() end
+        GK[name] = function(...) M.started[name] = { ... } end
     end
     M.changes = 0
     local changed = GK.Changed

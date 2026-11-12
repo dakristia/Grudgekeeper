@@ -9,7 +9,7 @@ leaderboard, and kill orders with a bounty on them.
   someone on Shame**, **Give someone kudos** - and the kill orders page's Marked heading has **mark someone**
   beside it. It asks who: your target, the enemies you met lately, your group and who just left it, or a
   name you type. Click a column heading to sort by it.
-- `/grudge test` puts four sample letters in your pile.
+- `/grudge test` puts five sample letters in your pile.
 - Right-click a player and pick **Grudgekeeper profile**: a wanted poster for an enemy, the record of a
   guildie. On an enemy, **Post a kill order** is right below it, and for an officer **Watch their guild**
   when they are in one: the guild watches one enemy guild at a time, and anyone from it warns whoever
@@ -22,7 +22,7 @@ leaderboard, and kill orders with a bounty on them.
   came from Guild Grudge, by dakristia; `/grudge import` takes over its saved notes.
 
 Forever closes the combat log to addons. Grudgekeeper counts what the client does hand over: your
-killing blows (`PARTY_KILL`), the death recap, and the enemy players you can see (nameplates, target,
-mouseover). Open world only - instances and battlegrounds hide who is who.
+group's killing blows (`PARTY_KILL`), the game's damage meter once a fight is over (for assists), the
+death recap, and the enemy players you can see (nameplates, target, mouseover). Open world only - instances and battlegrounds hide who is who.
 
 Uses LibForever-1.0 (fetched by the packager, see `.pkgmeta`). MIT licence.

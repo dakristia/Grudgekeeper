@@ -27,7 +27,7 @@ local BLOOD = { 0.47, 0.06, 0.04 }
 local W, BODY_H, ROLL_H = 300, 340, 32         -- the scroll
 local NW, NH = 540, 360                         -- the note: the frame's own 3:2, so it isn't stretched
 local UNROLL, ROLLUP = 0.45, 0.2
-local NOTE = { kill = true, slain = true, paid = true, expired = true }
+local NOTE = { kill = true, slain = true, paid = true, expired = true, news = true }
 
 -- The badge the notice scroll wears for the newest unread letter: the sealed scroll, or the bloodied
 -- letter when someone killed you.
@@ -38,6 +38,7 @@ GK.LETTER_ICON = {
     expired = MEDIA .. "notice",
     kill = MEDIA .. "notice",
     slain = MEDIA .. "notice_death",
+    news = MEDIA .. "notice",
 }
 
 -- ---------------------------------------------------------------------------
@@ -281,7 +282,26 @@ function GK.SampleLetters()
     Add("kill", S({ n = "Gærd Balle", c = "HUNTER", r = horde and "Night Elf" or "Troll", l = 27,
         z = "Hillsbrad Foothills", title = "Bloodhound", rank = 4, of = 12, total = 31 }))
     Add("slain", S({ times = 24, z = "Hillsbrad Foothills", spell = "Ambush" }))
-    print(GK.TAG .. ": four sample letters are in your pile - click the scroll to read them.")
+    Add("news", { sample = true })                 -- about no one: no enemy's class on it
+    print(GK.TAG .. ": five sample letters are in your pile - click the scroll to read them.")
+end
+
+-- What's new: one small letter after an update with something worth a word. Once per account, to the
+-- first character in after it, and never on a first install, where nothing is new to anyone. Letters
+-- off skips it as it skips every letter. "en bitteliten 'what's new' vindu som forklarer nye endringene
+-- med assists og kalkuleringer" (the owner, 2026-11-12) - a letter, as all his news is, never a window
+-- of its own. The next one: a new NEWS, and new words in NoteContent.
+local NEWS = "1.4.0"
+
+function GK.DeliverNews(fresh)
+    if fresh then GK.db.newsSeen = NEWS end
+    if GK.db.newsSeen == NEWS then return end
+    -- a moment after login, so it lands with the rest of the UI rather than under the loading screen
+    C_Timer.After(5, function()
+        if GK.db.newsSeen == NEWS then return end
+        GK.db.newsSeen = NEWS
+        Add("news", { news = NEWS }, true)
+    end)
 end
 
 -- ---------------------------------------------------------------------------
@@ -487,6 +507,18 @@ local function NoteContent(L)
     local action
     local function PostOn() GK.OpenPost({ key = L.n, guid = L.guid, c = L.c, r = L.r, l = L.l }) end
     local closing = CLOSING[L.kind]
+    if L.kind == "news" then
+        -- What's new (GK.DeliverNews): him talking, two short paragraphs with air between, and no numbers -
+        -- those are on the leaderboard's tooltip (Window.lua). The first one listed the rules with their
+        -- numbers, three paragraphs in a block, and read as a manual: "nei, dette synes jeg ikke er et bra
+        -- brev" (the owner, 2026-11-12).
+        p[1] = "I've started writing down assists. Help a groupmate bring someone down, and part of the blood"
+            .. " is yours."
+        p[2] = ""
+        p[3] = "Avenging a fallen guildie pays when you come back for the killer - not in the fight where they fell."
+        action = { "Leaderboard", function() GK.OpenWindow(2) end }
+        return "A word from the keeper", p, nil, "seal_red", false, action
+    end
     if L.kind == "kill" then
         -- A kill gets a letter only for a new title (Kills.lua), and it says three things: the title, the kill
         -- that got it, where you stand. Seven lines - the kill, its points, a streak, "and 1 more", the total
@@ -874,13 +906,39 @@ end
 -- token; Undead is "Scourge" to the client and "undead" to the atlas.
 local RACE_ATLAS = { Scourge = "undead" }
 
+-- The old character-creation sheet (file 131152, in the live build's manifest, 70888): 8 columns by 4
+-- rows, the male faces in rows 0 and 1 and the female ones two rows lower (dakristia's PR,
+-- vBaustad/Grudgekeeper#2, 2026-11-11). A race added after the sheet was made is not on it and keeps
+-- today's icon.
+local RACE_SHEET = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Races"
+local RACE_TILES = {
+    Human = { 0, 0 }, Dwarf = { 1, 0 }, Gnome = { 2, 0 }, NightElf = { 3, 0 },
+    Draenei = { 4, 0 }, Worgen = { 5, 0 }, Pandaren = { 6, 0 },
+    Tauren = { 0, 1 }, Scourge = { 1, 1 }, Troll = { 2, 1 }, Orc = { 3, 1 },
+    BloodElf = { 4, 1 }, Goblin = { 5, 1 },
+}
+
+--- A race's tile on the sheet, 8% in on every side so the tile's own frame stays outside the round
+--- mask: left, right, top, bottom.
+local function SheetCoords(rf, sx)
+    local col, row = RACE_TILES[rf][1], RACE_TILES[rf][2] + (sx == 3 and 2 or 0)
+    local w, h = 1 / 8, 1 / 4
+    return col * w + w * 0.08, (col + 1) * w - w * 0.08, row * h + h * 0.08, (row + 1) * h - h * 0.08
+end
+
 --- Dress a portrait texture for a player: their race's face when we know race and sex, else their
 --- class crest, else the Grudgekeeper's red seal. info = { rf (race file token), sx (2 male, 3
 --- female), c (class) }. Returns "race", "class" or "seal", so the caller knows whether the class
---- still needs showing (as a badge) beside a face.
+--- still needs showing (as a badge) beside a face. With "Old race portraits" on, a race the old sheet
+--- has gets its face from there.
 function GK.SetPortrait(tex, info)
     info = info or {}
     local rf, sx = info.rf, info.sx
+    if GK.db and GK.db.oldPortraits and type(rf) == "string" and (sx == 2 or sx == 3) and RACE_TILES[rf] then
+        tex:SetTexture(RACE_SHEET)
+        tex:SetTexCoord(SheetCoords(rf, sx))
+        return "race"
+    end
     if type(rf) == "string" and (sx == 2 or sx == 3) and tex.SetAtlas then
         local atlas = ("raceicon128-%s-%s"):format(RACE_ATLAS[rf] or rf:lower(), sx == 3 and "female" or "male")
         local known = not (C_Texture and C_Texture.GetAtlasInfo) or C_Texture.GetAtlasInfo(atlas)
@@ -1546,7 +1604,9 @@ function GK.CloseLetters()
     if scroll and scroll:IsShown() then Roll(-1, function() scroll:Hide() end) end
 end
 
-function GK.StartLetters()
+--- fresh: the account's saved table was missing at login - a first install, with nothing new to anyone.
+function GK.StartLetters(fresh)
+    GK.DeliverNews(fresh)
     Prune()
     -- what waited unread since last time is news again from this login, and fades as a new one does
     for _, L in ipairs(GK.char.letters) do

@@ -50,7 +50,7 @@ local function Build(panel)
     head:SetText("Grudgekeeper")
     local version = f:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
     version:SetPoint("BOTTOMLEFT", head, "BOTTOMRIGHT", 8, 1)
-    version:SetText("v" .. GK.version)
+    version:SetText("v" .. GK.addonVersion)
     local sub = Note(f, "Open the ledger with |cffffd100/grudge|r or the minimap button. Hover the (i) to see "
         .. "what a setting does.")
     sub:SetPoint("TOPLEFT", head, "BOTTOMLEFT", 0, -8)
@@ -185,8 +185,14 @@ local function Build(panel)
     end
     local parchment = SkinChoice(hSkin, "parchment", "Parchment", "The Grudgekeeper's own ledger, on parchment.")
     local classic = SkinChoice(parchment, "classic", "Classic", "The game's own dark panels, in gold and white.")
+    -- A section of its own: the faces go with neither skin ("classic portraits no matter what ... en egen
+    -- settings uavhengig av classic/parchment settings", the owner, 2026-11-11), and they are the default.
+    local hFaces = Section(classic, "Portraits")
+    local faces = Check(hFaces, "Old race portraits", "oldPortraits",
+        "The faces from the old character-creation screen. Off, today's race icons. Races added later always "
+        .. "have today's.")
 
-    local bottom = classic
+    local bottom = faces
     local helpers = { Section = Section, Check = Check, Box = Box, Note = Note, Info = Info }
     for _, fn in ipairs(GK.OptionSections) do bottom = fn(f, bottom, helpers) or bottom end
 

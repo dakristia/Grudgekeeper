@@ -128,7 +128,7 @@ local function LastSeen(key, o, live)
     if o and o.seen and o.seen.t then Take(o.seen.t, o.seen.z) end
     if live and live.t and GetTime then Take(time() - math.floor(GetTime() - live.t), live.z) end
     for _, e in ipairs(GK.Store().feed) do
-        if (e.kind == "K" or e.kind == "D") and e.n and (e.n == key or GK.SameName(e.n, key)) then
+        if (e.kind == "K" or e.kind == "H" or e.kind == "D") and e.n and (e.n == key or GK.SameName(e.n, key)) then
             Take(e.t, e.z)
             break                                   -- the feed is newest first
         end
@@ -235,9 +235,10 @@ function GK.PosterCard(t, inLedger)
     local killedUs, weKilled = 0, 0
     local history = {}             -- the rich card's History: you, then whom they killed, then who got them
     local nemesis = f ~= nil and fkey ~= nil and GK.Nemesis() == fkey
-    if f and (f.k or 0) + (f.d or 0) > 0 then
+    if f and (f.k or 0) + (f.d or 0) + (f.a or 0) > 0 then
         local said = {}
         if (f.k or 0) > 0 then said[#said + 1] = "killed them " .. Times(f.k) end
+        if (f.a or 0) > 0 then said[#said + 1] = "helped kill them " .. Times(f.a) end
         if (f.d or 0) > 0 then said[#said + 1] = "died to them " .. Times(f.d) end
         history[1] = { "You", table.concat(said, ", ") }
     end
@@ -258,8 +259,9 @@ function GK.PosterCard(t, inLedger)
         local others, _, n = Names(e.by, Count, youSaid)
         if n > 0 then history[#history + 1] = { "Killed by", others } end
     end
-    if f and (f.k or 0) + (f.d or 0) > 0 then
-        lines[#lines + 1] = ("You: %s, %s%s"):format(Plural(f.k or 0, "kill"), Plural(f.d or 0, "death"),
+    if f and (f.k or 0) + (f.d or 0) + (f.a or 0) > 0 then
+        lines[#lines + 1] = ("You: %s, %s%s%s"):format(Plural(f.k or 0, "kill"),
+            Plural(f.a or 0, "assist") .. ", ", Plural(f.d or 0, "death"),
             nemesis and " - your nemesis." or ".")
     end
     -- The rich card's numbers are THEIR score against the guild, read as a scoreboard: "7 KILLS on
@@ -335,7 +337,7 @@ function GK.PosterCard(t, inLedger)
     end
     -- A grudge of yours can be forgotten (GK.ForgetGrudge, Guild.lua): a wrong one stayed for good before.
     -- It asks twice - the first click readies it for a few seconds and the button says so.
-    if f and fkey and (f.k or 0) + (f.d or 0) > 0 then
+    if f and fkey and (f.k or 0) + (f.d or 0) + (f.a or 0) > 0 then
         local armed = forgetArmed == fkey and GetTime() < forgetUntil
         d.buttons[#d.buttons + 1] = { armed and "Really forget?" or "Forget grudge", function()
             if forgetArmed == fkey and GetTime() < forgetUntil then
@@ -368,7 +370,7 @@ function GK.PosterCard(t, inLedger)
 end
 
 -- What a guildie did, as the rich card's Lately says it; the right-hand column is what it was worth.
-local DID = { K = "Killed %s", D = "Fell to %s", F = "Fulfilled the kill order on %s", C = "Put a price on %s",
+local DID = { K = "Killed %s", H = "Helped kill %s", D = "Fell to %s", F = "Fulfilled the kill order on %s", C = "Put a price on %s",
     T = "Added to the pot on %s" }
 
 --- The last few things the news says a guildie did, newest first: { c, text, under, right }.
@@ -379,7 +381,7 @@ local function Lately(key, me, most)
         -- an own order's target got by its poster closed it; on the card it is the kill, not a fulfilment
         if DID[e.kind] and not (e.kind == "F" and e.own) and (e.who == key or (me and LIB.IsMyStoredName(e.who))) then
             local right
-            if e.kind == "K" then
+            if e.kind == "K" or e.kind == "H" then
                 right = (e.p or 0) > 0 and ("+%d"):format(e.p) or nil
             elseif e.kind == "C" then
                 right = (e.p or 0) > 0 and GK.Coins(e.p) or "honour"
@@ -413,6 +415,8 @@ local function Latest(key, me)
             local when = GK.Ago(e.t)
             if e.kind == "K" then
                 return ("Lately: killed %s%s, %s."):format(target, (e.p or 0) > 0 and (" (+%d)"):format(e.p) or "", when)
+            elseif e.kind == "H" then
+                return ("Lately: helped kill %s%s, %s."):format(target, (e.p or 0) > 0 and (" (+%d)"):format(e.p) or "", when)
             elseif e.kind == "D" then
                 return ("Lately: fell to %s, %s."):format(target, when)
             elseif e.kind == "F" then
@@ -436,7 +440,8 @@ function GK.RecordCard(key, unit)
         local _, raceFile = UnitRace("player")
         r = { p = c.points, k = c.kills, d = c.deaths, wp = w.p, wk = w.k, wd = w.d, wid = w.id,
             st = c.streak, bs = c.bestStreak, od = c.done, ow = c.won, nm = nemesis, nt = nf and nf.d,
-            c = class, l = UnitLevel("player"), t = time(), rf = raceFile, sx = UnitSex("player") }
+            c = class, l = UnitLevel("player"), t = time(), rf = raceFile, sx = UnitSex("player"),
+            a = c.assists or 0, wa = w.a or 0 }
         key = LIB.Me() or key
     else
         r, key = Find(GK.Store().board, key)
@@ -466,11 +471,13 @@ function GK.RecordCard(key, unit)
     end
     d.info = where
     local lines = d.lines
-    lines[#lines + 1] = ("All time: %s, %s."):format(Plural(r.k or 0, "kill"), Plural(r.d or 0, "death"))
+    -- assists from a client that sends them, 0 included; the released one sends none, and then nothing is said
+    local function Assists(n) return n and (Plural(n, "assist") .. ", ") or "" end
+    lines[#lines + 1] = ("All time: %s, %s%s."):format(Plural(r.k or 0, "kill"), Assists(r.a), Plural(r.d or 0, "death"))
     local thisWeek = r.wid == GK.WeekId()
-    if thisWeek and ((r.wk or 0) + (r.wd or 0) + (r.wp or 0)) > 0 then
-        lines[#lines + 1] = ("This week: %s, %s, %s."):format(Plural(r.wk or 0, "kill"), Plural(r.wd or 0, "death"),
-            Plural(r.wp or 0, "point"))
+    if thisWeek and ((r.wk or 0) + (r.wd or 0) + (r.wp or 0) + (r.wa or 0)) > 0 then
+        lines[#lines + 1] = ("This week: %s, %s%s, %s."):format(Plural(r.wk or 0, "kill"), Assists(r.wa),
+            Plural(r.wd or 0, "death"), Plural(r.wp or 0, "point"))
     else
         lines[#lines + 1] = "Nothing yet this week."
     end
@@ -496,6 +503,7 @@ function GK.RecordCard(key, unit)
     -- new player, and made the rest hard to find (the owner, 2026-11-06). The bounties go with the orders
     -- they were won on.
     local highlights = {}
+    if r.a then highlights[#highlights + 1] = { "Assists", tostring(r.a), Week(r.wa) } end
     if best > 0 then
         highlights[#highlights + 1] = { "Kill streak", tostring(streak),
             best > streak and ("best ever %d"):format(best) or (me and "your best yet" or "their best yet") }

@@ -1938,5 +1938,638 @@ test("the settings: defaults for every new setting, and a section for them", fun
     eq(#GK.OptionSections, 1)
 end)
 
+-- ---------------------------------------------------------------------------
+-- Assists (Kills.lua): a groupmate's blow on an enemy you were fighting
+-- ---------------------------------------------------------------------------
+local FOE_GUID, KARI_GUID = "Player-1-0000FOE", "Player-1-000KARI"
+
+--- Kills.lua over a fake group: Kari in party1, an Orc rogue to fight. W.fight.combat is whether you are
+--- in combat, W.fight.dmg[guid] the meter's list of { attacker name, amount } on that enemy, and
+--- W.fight.secret whether the meter is unreadable.
+local function bootKills()
+    local GK, LIB = boot({ me = ME })
+    W.fight = { combat = true, dmg = {} }
+    _G.InCombatLockdown = function() return W.fight.combat end
+    _G.UnitGUID = function(unit)
+        if unit == "player" then return "Player-1-0000ME" end
+        if unit == "party1" then return KARI_GUID end
+        return nil
+    end
+    _G.UnitExists = function(unit) return _G.UnitGUID(unit) ~= nil end
+    _G.UnitName = function(unit)
+        if unit == "player" then return "Me" end
+        return unit == "party1" and "Kari" or nil
+    end
+    _G.Enum = _G.Enum or {}
+    _G.Enum.DamageMeterType = { EnemyDamageTaken = 2 }
+    _G.Enum.DamageMeterSessionType = { Current = 1 }
+    _G.C_DamageMeter = {
+        GetCombatSessionSourceFromType = function(session, kind, guid)
+            if W.fight.secret then return nil end
+            local list = {}
+            for _, e in ipairs(W.fight.dmg[guid] or {}) do
+                list[#list + 1] = { totalAmount = e[2], combatSpellDetails = { unitName = e[1] } }
+            end
+            return { combatSpells = list }
+        end,
+    }
+    _G.UnitLevel = function() return 60 end
+    _G.IsInRaid = function() return false end
+    _G.GetNumSubgroupMembers = function() return 1 end
+    _G.GetNumGroupMembers = function() return 2 end
+    _G.GetPlayerInfoByGUID = function(guid)
+        if guid == FOE_GUID then return "Rogue", "ROGUE", "Orc", "Orc", 2, "Gank Master", "Realm" end
+    end
+    _G.IsInInstance = function() return false end
+    _G.GetRealZoneText = function() return "Hillsbrad" end
+    GK.sentKills, GK.sentAssists = {}, {}
+    function GK.Seen() return nil end
+    function GK.KeepLooks() end
+    function GK.OrdersOn() return {} end
+    function GK.Avenged() return nil end
+    function GK.SendKill(v, zone, points) table.insert(GK.sentKills, { v = v, p = points }) end
+    function GK.SendAssist(v, zone, points) table.insert(GK.sentAssists, { v = v, p = points }) end
+    function GK.SendBoard() end
+    function GK.KillLetter() end
+    assert(loadfile(W.dir .. "Kills.lua"))("Grudgekeeper", GK)
+    GK.StartKills()
+    return GK, LIB
+end
+
+test("assist points: a little less than the kill, never below 1, nothing for a kill worth nothing", function()
+    local GK = boot()
+    eq(GK.AssistPoints(60, 65), 3, "red: 4 for the kill")
+    eq(GK.AssistPoints(60, 60), 1, "yellow: 2 for the kill")
+    eq(GK.AssistPoints(60, 55), 1, "green: 1 for the kill, still 1")
+    eq(GK.AssistPoints(60, nil), 1, "a level we never saw")
+    eq(GK.AssistPoints(60, 20), 0, "grey")
+    eq(GK.AssistPoints(60, 65, 2), 0, "farmed today")
+    eq(GK.AssistPoints(60, 60, 0, true), 2, "revenge counts")
+end)
+
+--- The fight ends with the meter showing this, and the game says so.
+local function endFight(LIB, dmg)
+    W.fight.combat = false
+    W.fight.dmg[FOE_GUID] = dmg
+    LIB.fire("PLAYER_REGEN_ENABLED")
+    W.advance(1)
+end
+
+test("assist: a groupmate's kill is your assist when the meter shows your damage, after the fight", function()
+    local GK, LIB = bootKills()
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    eq(GK.char.assists, 0, "not while the fight goes on")
+    endFight(LIB, { { "Kari", 900 }, { "Me", 65 } })
+    eq(GK.char.assists, 1)
+    eq(GK.char.kills, 0, "no kill")
+    local f = GK.char.foes[GANK]
+    assert(f, "a grudge with them")
+    eq(f.a, 1)
+    eq(f.k, 0)
+    eq(GK.char.log[1].k, "A")
+    eq(GK.char.log[1].w, "Kari")
+    eq(GK.Week().a, 1)
+    eq(#GK.sentAssists, 1)
+    eq(#GK.sentKills, 0)
+    eq(GK.char.points, GK.sentAssists[1].p)
+    assert(GK.char.points >= 1, "points for it")
+end)
+
+test("assist: none when the meter shows only the groupmate's damage", function()
+    local GK, LIB = bootKills()
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    endFight(LIB, { { "Kari", 900 } })
+    eq(GK.char.assists, 0)
+    LIB.fire("PLAYER_REGEN_ENABLED")
+    W.advance(1)
+    eq(GK.char.assists, 0, "settled once, not again")
+end)
+
+test("assist: a kill out of combat settles a moment later, no event needed", function()
+    local GK = bootKills()
+    W.fight.combat = false
+    W.fight.dmg[FOE_GUID] = { { "Kari", 900 }, { "Me", 65 } }
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    eq(GK.char.assists, 0, "the meter gets a moment first")
+    W.advance(1)
+    eq(GK.char.assists, 1)
+end)
+
+test("assist: a meter that won't say at the end of the fight is asked again a few seconds on", function()
+    local GK, LIB = bootKills()
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    W.fight.secret = true
+    endFight(LIB, { { "Me", 65 } })
+    eq(GK.char.assists, 0, "secret at 1 s")
+    W.fight.secret = false
+    W.advance(2)
+    eq(GK.char.assists, 1, "read at 3 s")
+end)
+
+test("assist: none for a stranger's kill, even with your damage in the meter", function()
+    local GK, LIB = bootKills()
+    GK.OnPartyKill("Player-1-STRANGER", FOE_GUID)
+    endFight(LIB, { { "Me", 65 } })
+    eq(GK.char.assists, 0)
+end)
+
+test("assist: a secret meter waits for the next end of combat, and is dropped after two minutes", function()
+    local GK, LIB = bootKills()
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    W.fight.secret = true
+    endFight(LIB, { { "Me", 65 } })
+    eq(GK.char.assists, 0, "meter unreadable")
+    W.fight.secret = false
+    W.fight.combat = true
+    LIB.fire("PLAYER_REGEN_ENABLED")
+    W.advance(1)
+    eq(GK.char.assists, 0, "a new fight began")
+    W.fight.combat = false
+    LIB.fire("PLAYER_REGEN_ENABLED")
+    W.advance(1)
+    eq(GK.char.assists, 1, "readable at last")
+
+    local GK2, LIB2 = bootKills()
+    GK2.OnPartyKill(KARI_GUID, FOE_GUID)
+    W.fight.secret = true
+    endFight(LIB2, { { "Me", 65 } })
+    W.advance(125)
+    LIB2.fire("PLAYER_REGEN_ENABLED")
+    W.advance(1)
+    W.fight.secret = false
+    LIB2.fire("PLAYER_REGEN_ENABLED")
+    W.advance(1)
+    eq(GK2.char.assists, 0, "dropped, never counted")
+end)
+
+--- Guild.lua over the plain client: a guildie's message goes through its reader (GK.ReceiveForTest).
+local function bootGuild()
+    local GK = boot({ me = ME })
+    assert(loadfile(W.dir .. "Guild.lua"))("Grudgekeeper", GK)
+    return GK
+end
+
+test("assists on the wire: B carries them at 20-21, R after heard, H is news, and older clients' rows have none", function()
+    local GK = bootGuild()
+    local week = GK.WeekId()
+    GK.ReceiveForTest("Grudgekeeper", msg("B", 1, 10, 2, 1, 60, "ROGUE", 5, 1, 0, week, 1, 2, 0, 0, "", "", "Orc", 2, 4, 3),
+        "GUILD", KARI)
+    local r = GK.Store().board[KARI]
+    eq(r.a, 4)
+    eq(r.wa, 3)
+    eq(r.sx, 2, "the fields before are where they were")
+    -- an older client's B: no assists
+    GK.ReceiveForTest("Grudgekeeper", msg("B", 1, 10, 2, 1, 60, "ROGUE", 5, 1, 0, week, 1, 2, 0, 0, "", "", "Orc", 2),
+        "GUILD", KARI)
+    eq(GK.Store().board[KARI].a, nil)
+    -- R: B's fields to sex, heard, then the assists - so an older client still finds heard at 21
+    local heard = time() - 100
+    GK.ReceiveForTest("Grudgekeeper", msg("R", 1, EDVARD, 10, 2, 1, 60, "ROGUE", 5, 1, 0, week, 1, 2, 0, 0, "", "",
+        "Orc", 2, heard, 6, 1), "GUILD", KARI)
+    local e = GK.Store().board[EDVARD]
+    eq(e.t, heard)
+    eq(e.a, 6)
+    eq(e.wa, 1)
+    -- H: the news, and nothing in the guild's tally of kills
+    GK.ReceiveForTest("Grudgekeeper", msg("H", 1, GANK, "ROGUE", "Orc", 60, "Hillsbrad", 2), "GUILD", KARI)
+    local n = GK.Store().feed[1]
+    eq(n.kind, "H")
+    eq(n.who, KARI)
+    eq(n.p, 2)
+    eq(GK.Store().slain[GANK], nil)
+end)
+
+test("assists on the board: yours from 0, a guildie's as sent, none for a client that sends none", function()
+    local GK = bootGuild()
+    _G.UnitClass = _G.UnitClass or function() return "Rogue", "ROGUE" end
+    _G.UnitRace = _G.UnitRace or function() return "Human", "Human" end
+    _G.UnitLevel = _G.UnitLevel or function() return 60 end
+    _G.UnitSex = _G.UnitSex or function() return 2 end
+    local week = GK.WeekId()
+    GK.ReceiveForTest("Grudgekeeper", msg("B", 1, 10, 2, 1, 60, "ROGUE", 5, 1, 0, week, 1, 2, 0, 0, "", "", "Orc", 2, 4, 3),
+        "GUILD", KARI)
+    GK.ReceiveForTest("Grudgekeeper", msg("B", 1, 8, 2, 1, 60, "ROGUE", 5, 1, 0, week, 1, 2, 0, 0, "", "", "Orc", 2),
+        "GUILD", EDVARD)
+    local function AssistsOnBoard(weekly)
+        local out = {}
+        for _, e in ipairs(GK.Board(weekly)) do out[e.me and "me" or e.who] = e.a == nil and "none" or e.a end
+        return out
+    end
+    local all, now = AssistsOnBoard(false), AssistsOnBoard(true)
+    eq(all.me, 0)
+    eq(all[KARI], 4)
+    eq(all[EDVARD], "none")
+    eq(now[KARI], 3)
+    eq(now[EDVARD], "none")
+end)
+
+test("assist: your own blow is still a kill, not an assist", function()
+    local GK = bootKills()
+    GK.OnPartyKill("Player-1-0000ME", FOE_GUID)
+    eq(GK.char.kills, 1)
+    eq(GK.char.assists, 0)
+    eq(#GK.sentKills, 1)
+end)
+
+-- The meter writes you "First Surname" ("Critical Mango", /grudge debug meter, 2026-11-11) while UnitName
+-- gives the two apart (DECISIONS.md, 2026-09-26). The PR's test said "Me" on both sides and could not see
+-- that its match on the first name alone never found you.
+test("assist: the meter names you first name and surname, as the game does", function()
+    local GK, LIB = bootKills()
+    _G.UnitName = function(unit)
+        if unit == "player" then return "Me", "Surname" end
+        return unit == "party1" and "Kari" or nil
+    end
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    endFight(LIB, { { "Kari Dottir", 900 }, { "Me Surname", 65 } })
+    eq(GK.char.assists, 1, "your 65, under the name the meter gives you")
+end)
+
+test("assist: your pet's damage is yours, as its blow is", function()
+    local GK, LIB = bootKills()
+    local guid, name = _G.UnitGUID, _G.UnitName
+    _G.UnitGUID = function(unit) if unit == "pet" then return "Pet-0-WOLF" end return guid(unit) end
+    _G.UnitExists = function(unit) return _G.UnitGUID(unit) ~= nil end
+    _G.UnitName = function(unit) if unit == "pet" then return "Wolfie" end return name(unit) end
+    _G.C_DamageMeter.GetCombatSessionSourceFromType = function()
+        return { combatSpells = {
+            { totalAmount = 900, combatSpellDetails = { unitName = "Kari" } },
+            { totalAmount = 300, combatSpellDetails = { unitName = "Wolfie", isPet = true } } } }
+    end
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    endFight(LIB, {})
+    eq(GK.char.assists, 1, "the wolf's 300")
+end)
+
+test("assist: a fight begun before the meter was read hides ours in Current, so the fights before are asked", function()
+    local GK, LIB = bootKills()
+    local m = _G.C_DamageMeter
+    m.GetCombatSessionSourceFromType = function() return { combatSpells = {} } end   -- the new fight: not them
+    m.GetAvailableCombatSessions = function() return { { sessionID = 7 }, { sessionID = 9 }, { sessionID = 8 } } end
+    local asked = {}
+    m.GetCombatSessionSourceFromID = function(id, kind, guid)
+        asked[#asked + 1] = id
+        if id == 8 and guid == FOE_GUID then
+            return { combatSpells = { { totalAmount = 65, combatSpellDetails = { unitName = "Me" } } } }
+        end
+        return { combatSpells = {} }
+    end
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    endFight(LIB, {})
+    eq(GK.char.assists, 1, "found in the fight before")
+    eq(table.concat(asked, ","), "9,8", "newest first, and no further than it had to")
+end)
+
+test("assist: the points of an assist that cross a title bring the title's letter", function()
+    local GK, LIB = bootKills()
+    local letters = {}
+    function GK.KillLetter(v, zone, title) letters[#letters + 1] = title end
+    GK.db.myLetters = true
+    GK.char.points = 9
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)
+    endFight(LIB, { { "Me", 65 } })
+    eq(GK.char.points, 10)
+    eq(letters[1], "Cutthroat", "the letter, as a kill's")
+end)
+
+test("old race portraits: the face from the old sheet, today's icon for a race it lacks, no face guessed", function()
+    local GK = bootSheets({ me = ME })
+    local tex = {}
+    function tex:SetAtlas(atlas) self.atlas, self.file = atlas, nil end
+    function tex:SetTexture(file) self.file, self.atlas = file, nil end
+    function tex:SetTexCoord(...) self.coords = { ... } end
+    eq(GK.db.oldPortraits, true, "on by default, whichever skin")
+    eq(GK.SetPortrait(tex, { rf = "Orc", sx = 3 }), "race")
+    eq(tex.file, "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Races", "the old sheet, out of the box")
+    GK.db.look = "classic"
+    eq(GK.SetPortrait(tex, { rf = "Orc", sx = 3 }), "race")
+    eq(tex.file, "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Races", "the Classic skin as well")
+    GK.db.look = nil
+    GK.db.oldPortraits = true
+    eq(GK.SetPortrait(tex, { rf = "Orc", sx = 3 }), "race")
+    eq(tex.file, "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Races", "the old sheet")
+    eq(math.floor(tex.coords[1] * 1000 + 0.5), 385, "Orc: the fourth column")
+    eq(math.floor(tex.coords[3] * 1000 + 0.5), 770, "female: the fourth row")
+    eq(GK.SetPortrait(tex, { rf = "Vulpera", sx = 2 }), "race")
+    eq(tex.atlas, "raceicon128-vulpera-male", "not on the sheet: today's icon")
+    local old = CLASS_ICON_TCOORDS
+    CLASS_ICON_TCOORDS = { MAGE = { 0, 1, 0, 1 } }
+    eq(GK.SetPortrait(tex, { rf = "Orc", c = "MAGE" }), "class", "no sex known: the crest, never a guessed face")
+    CLASS_ICON_TCOORDS = old
+    GK.db.oldPortraits = false
+    eq(GK.SetPortrait(tex, { rf = "Orc", sx = 3 }), "race")
+    eq(tex.atlas, "raceicon128-orc-female", "the setting off: today's icon")
+end)
+
+-- ---------------------------------------------------------------------------
+-- One character, more than one PC (Guild.lua): Happy Idiot logged in on a second PC, started from 0
+-- there, and its first B wrote 0 over his row on every board (2026-11-11)
+-- ---------------------------------------------------------------------------
+--- A part as a B or an R says it: mark:u:points:kills:deaths:assists:week:wPoints:wKills:wDeaths:wAssists
+local function part(id, u, p, k, d, w, wp, wk)
+    return table.concat({ id, u and "1" or "", p, k, d, 0, w or "", w and wp or "", w and wk or "",
+        w and 0 or "", w and 0 or "" }, ":")
+end
+
+local function bootPCs()
+    local GK = bootGuild()
+    W.LIB.Debounce = function(_, _, fn) fn() end
+    _G.UnitClass = _G.UnitClass or function() return "Rogue", "ROGUE" end
+    _G.UnitRace = _G.UnitRace or function() return "Human", "Human" end
+    _G.UnitLevel = _G.UnitLevel or function() return 60 end
+    _G.UnitSex = _G.UnitSex or function() return 2 end
+    local function hear(sender, text) GK.ReceiveForTest("Grudgekeeper", text, "GUILD", sender) end
+    -- a guildie's own B, with parts (or none, as an older client sends it)
+    local function HearB(sender, p, k, d, parts)
+        local w = GK.WeekId()
+        if parts == nil then
+            hear(sender, msg("B", 1, p, k, d, 60, "ROGUE", 0, 0, 0, w, 0, 0, 0, 0, "", "", "Orc", 2, 0, 0))
+        else
+            hear(sender, msg("B", 1, p, k, d, 60, "ROGUE", 0, 0, 0, w, 0, 0, 0, 0, "", "", "Orc", 2, 0, 0, parts))
+        end
+    end
+    -- a row passed on by `sender`: field 24 is the parts; parts == nil leaves it off, as an older client does
+    local function HearR(sender, who, p, k, d, parts)
+        local w = GK.WeekId()
+        if parts == nil then
+            hear(sender, msg("R", 1, who, p, k, d, 60, "ROGUE", 0, 0, 0, w, 0, 0, 0, 0, "", "", "Orc", 2, time(), 0, 0))
+        else
+            hear(sender, msg("R", 1, who, p, k, d, 60, "ROGUE", 0, 0, 0, w, 0, 0, 0, 0, "", "", "Orc", 2, time(), 0, 0,
+                parts))
+        end
+    end
+    return GK, HearB, HearR
+end
+
+local function ScoreOf(r) return ("%d/%d/%d"):format(r.p or r.points, r.k or r.kills, r.d or r.deaths) end
+
+test("two PCs of one guildie: the board adds up their parts, whichever spoke last", function()
+    local GK, B = bootPCs()
+    B(KARI, 26, 21, 4, part("aaaaaa", true, 26, 21, 4))
+    B(KARI, 0, 5, 0, part("bbbbbb", true, 0, 5, 0))
+    local r = GK.Store().board[KARI]
+    eq(ScoreOf(r), "26/26/4", "the second PC's B is added, not written over the first")
+    B(KARI, 27, 22, 4, part("aaaaaa", true, 27, 22, 4))
+    eq(ScoreOf(r), "27/27/4", "the first PC again, one kill on")
+    B(KARI, 20, 15, 4, part("aaaaaa", true, 20, 15, 4))
+    eq(ScoreOf(r), "27/27/4", "an older copy of a part takes nothing away")
+end)
+
+test("a row from before parts is kept as '?' until parts from before marks add up to as much", function()
+    local GK, B, R = bootPCs()
+    local board = GK.Store().board
+    -- Happy Idiot's own shape: the board last heard the new PC (an older client, 0 points, 5 kills); the old
+    -- PC, updated, sends its whole score from before marks
+    B(KARI, 0, 5, 0)
+    B(KARI, 26, 21, 4, part("aaaaaa", true, 26, 21, 4))
+    eq(ScoreOf(board[KARI]), "26/21/4", "the old PC's score is back, and the 5 kills it holds are not counted twice")
+    eq(board[KARI].parts["?"], nil)
+    -- the board last heard a PC that played a lot: the old PC's part doesn't hold that, so both count
+    B(EDVARD, 10, 30, 2)
+    B(EDVARD, 26, 21, 4, part("aaaaaa", true, 26, 21, 4))
+    eq(ScoreOf(board[EDVARD]), "36/51/6", "kept as '?' and added")
+    B(EDVARD, 36, 51, 6, part("aaaaaa", true, 26, 21, 4) .. "," .. part("bbbbbb", true, 10, 30, 2))
+    eq(ScoreOf(board[EDVARD]), "36/51/6", "once that PC sends its own part, '?' goes and nothing counts twice")
+    eq(board[EDVARD].parts["?"], nil)
+    -- the bug itself: a brand-new PC's first B, 0 of everything, over a row from before parts
+    B(GANK, 26, 21, 4)
+    B(GANK, 0, 0, 0, part("nnnnnn", false, 0, 0, 0))
+    eq(ScoreOf(board[GANK]), "26/21/4", "a new PC's 0 is added to the row, never written over it")
+    B(GANK, 30, 30, 5, part("nnnnnn", false, 30, 30, 5))
+    eq(ScoreOf(board[GANK]), "56/51/9", "however far a new PC gets, it began at 0: the old row is not in it")
+    -- a row an older client passed on may be a copy of one with parts, all of them in one: not kept
+    R(KARI, NICE, 26, 21, 4)
+    B(NICE, 0, 0, 0, part("nnnnnn", false, 0, 0, 0))
+    eq(ScoreOf(board[NICE]), "0/0/0", "a relayed row without the parts field is not counted as another PC")
+end)
+
+test("Happy Idiot updates and logs in on the old PC first: nothing is lost", function()
+    local GK, _, R = bootPCs()
+    local c = GK.char
+    c.points, c.kills, c.deaths = 26, 21, 4
+    c.pc = nil
+    GK.ClaimPC(c)                   -- the old PC's first load with marks: its score is from before them
+    eq(c.u, true)
+    R(KARI, ME, 0, 5, 0)            -- an older client passes our row back, no parts: nothing taken from it
+    eq(ScoreOf(c), "26/21/4")
+    -- the guild's old row of us (the new PC's 0/5/0), and a part under our own mark that says far more
+    R(KARI, ME, 999, 999, 999, part("?", false, 0, 5, 0) .. "," .. part(c.pc, true, 999, 999, 999))
+    eq(ScoreOf(c), "26/21/4", "our own part is ours to say, and the old row is held in our score from before marks")
+    eq(c.parts["?"], nil)
+    -- the new PC is updated too: its part reaches us, and is added
+    R(KARI, ME, 26, 26, 4, part("bbbbbb", true, 0, 5, 0))
+    eq(ScoreOf(c), "26/26/4")
+    R(EDVARD, ME, 26, 26, 4, part("bbbbbb", true, 0, 5, 0))
+    eq(ScoreOf(c), "26/26/4", "the same part again adds nothing")
+    -- and our B says both parts, ours first by its mark's share
+    W.takeSent()
+    GK.SendBoard(true)
+    local sent = W.takeSent()
+    local text = sent[1] and sent[1].text or ""
+    local f = {}
+    for x in (text .. ";"):gmatch("([^;]*);") do f[#f + 1] = x end
+    eq(f[1], "B")
+    eq(f[3], "26", "the score is the sum")
+    local parts = f[22] or ""
+    assert(parts:find(c.pc .. ":1:26:21:4:", 1, true), "our own part is what we made: " .. parts)
+    assert(parts:find("bbbbbb:1:0:5:0:", 1, true), "the other PC's part goes with it: " .. parts)
+end)
+
+test("a brand-new PC takes the guild's parts of it, and its own kills go on top", function()
+    local GK, _, R = bootPCs()
+    local c = GK.char
+    eq(c.u, nil, "a record that starts here held nothing from before marks")
+    R(KARI, ME, 26, 21, 4, part("?", false, 26, 21, 4))     -- the guild's row of us, from before parts
+    eq(ScoreOf(c), "26/21/4")
+    c.points, c.kills = c.points + 2, c.kills + 1               -- a kill on this PC
+    -- the old PC updated and killed once more: its part holds the old row, so the old row goes
+    R(KARI, ME, 30, 23, 4, part("?", false, 26, 21, 4) .. "," .. part("aaaaaa", true, 28, 22, 4))
+    eq(ScoreOf(c), "30/23/4", "this PC's kill, plus the old PC's whole part, and the old row only once")
+    eq(c.parts["?"], nil)
+end)
+
+test("synced, one more kill on one PC, then the other logs in: the kill counts once", function()
+    local GK, B, R = bootPCs()
+    local c, week = GK.char, GK.WeekId()
+    c.pc, c.u, c.parts = "bbbbbb", true, {}
+    c.points, c.kills, c.deaths = 0, 5, 0
+    -- synced: the old PC's part has reached this one
+    R(KARI, ME, 26, 26, 4, part("aaaaaa", true, 26, 21, 4, week, 0, 0) .. "," .. part("bbbbbb", true, 0, 5, 0))
+    eq(ScoreOf(c), "26/26/4")
+    local wk = GK.Week().k
+    -- one more kill on the old PC; this one logs in and a guildie hands the row back
+    R(KARI, ME, 28, 27, 4, part("aaaaaa", true, 28, 22, 4, week, 2, 1) .. "," .. part("bbbbbb", true, 0, 5, 0))
+    eq(ScoreOf(c), "28/27/4", "the one kill, not the old PC's whole score again")
+    eq(GK.Week().k, wk + 1, "and once in this week")
+    -- every guildie online answers, and a late one still has the row from before the kill
+    R(EDVARD, ME, 28, 27, 4, part("aaaaaa", true, 28, 22, 4, week, 2, 1))
+    R(GANK, ME, 26, 26, 4, part("aaaaaa", true, 26, 21, 4, week, 0, 0))
+    eq(ScoreOf(c), "28/27/4", "the same part again, or an older copy of it, changes nothing")
+    eq(GK.Week().k, wk + 1)
+    -- a kill on this PC: our part grows by that kill alone
+    c.points, c.kills = c.points + 2, c.kills + 1
+    W.takeSent()
+    GK.SendBoard(true)
+    local sent = W.takeSent()
+    local text = sent[1] and sent[1].text or ""
+    local f = {}
+    for x in (text .. ";"):gmatch("([^;]*);") do f[#f + 1] = x end
+    local parts = f[22] or ""
+    assert(parts:find("bbbbbb:1:2:6:0:", 1, true), "our part is our 5 kills and this one: " .. text)
+    assert(parts:find("aaaaaa:1:28:22:4:", 1, true), "the old PC's part as it was handed to us: " .. text)
+    -- a guildie's board hears that B, then the old PC's from before it heard of this kill
+    B(GANK, 30, 28, 4, parts)
+    B(GANK, 28, 27, 4, part("aaaaaa", true, 28, 22, 4) .. "," .. part("bbbbbb", true, 0, 5, 0))
+    eq(ScoreOf(GK.Store().board[GANK]), "30/28/4", "each kill once on the board too, whichever PC spoke last")
+end)
+
+test("another PC's week counts in this week only", function()
+    local GK, _, R = bootPCs()
+    local week = GK.WeekId()
+    R(KARI, ME, 16, 8, 1, part("aaaaaa", true, 10, 5, 1, week, 4, 2) .. "," .. part("bbbbbb", true, 6, 3, 0, week - 1, 6, 3))
+    eq(GK.char.points, 16)
+    eq(GK.Week().p, 4, "last week's part is in the score, not in this week's")
+    eq(GK.Week().k, 2)
+end)
+
+test("a broken part is not read, a mark must be one, and six parts at most", function()
+    local GK, _, R = bootPCs()
+    local list = { "zz:1:5:5:5:0:::::", "aaaaaa:1:-5:1:1:0:::::", "AAAAAA:1:5:5:5:0:::::", "aaaaaa:1:5:5:5" }
+    for i = 1, 8 do list[#list + 1] = part("c0000" .. i, true, 1, 1, 0) end
+    R(KARI, ME, 0, 0, 0, table.concat(list, ","))
+    eq(GK.char.kills, 6, "six good parts, the rest left out")
+end)
+
+test("the answer gives whoever asked their own row back, once", function()
+    local GK, B, R = bootPCs()
+    B(KARI, 26, 21, 4, part("aaaaaa", true, 26, 21, 4))
+    W.takeSent()
+    GK.ReceiveForTest("Grudgekeeper", msg("Q", 1), "GUILD", KARI)
+    W.advance(10)
+    local mine, all = nil, {}
+    for _, m in ipairs(W.takeSent()) do
+        all[#all + 1] = m.text
+        if m.text:sub(1, #("R;1;" .. KARI)) == "R;1;" .. KARI then mine = mine or m.text end
+    end
+    assert(mine, "Kari's own row went back to her; sent: " .. table.concat(all, " | "))
+    assert(mine:sub(-#";aaaaaa:1:26:21:4:0:::::") == ";aaaaaa:1:26:21:4:0:::::", "with its parts last: " .. mine)
+    -- she asks again, and another guildie passes her row on before we would: we don't say it twice
+    GK.ReceiveForTest("Grudgekeeper", msg("Q", 1), "GUILD", KARI)
+    R(EDVARD, KARI, 26, 21, 4, part("aaaaaa", true, 26, 21, 4))
+    W.advance(40)
+    for _, m in ipairs(W.takeSent()) do
+        assert(m.text:sub(1, #("R;1;" .. KARI)) ~= "R;1;" .. KARI, "said again: " .. m.text)
+    end
+end)
+
+-- ---------------------------------------------------------------------------
+-- Avenging only in a later fight (Guild.lua GK.Avenged, Kills.lua): "trenger en combat reset i mellom"
+-- (the owner, 2026-11-12) - one of the group dying first was a point more for everyone on their killer
+-- ---------------------------------------------------------------------------
+test("avenge: a guildie who fell before this fight began, not one who fell in it", function()
+    local GK = bootGuild()
+    function GK.KeepLooks() end                    -- Sightings.lua's: the face a death brings
+    GK.ReceiveForTest("Grudgekeeper", msg("D", 1, GANK, "ROGUE", "Orc", 60, "Hillsbrad", 1, "Orc", 2), "GUILD", KARI)
+    local fell = time()
+    W.advance(30)
+    eq(GK.Avenged(GANK, time(), fell - 20), nil, "the fight was on when she fell: the same fight")
+    eq(GK.Avenged(GANK, time(), fell), nil, "a fight begun the second she fell: the same fight")
+    eq(GK.Avenged(GANK, time(), fell + 10), KARI, "a fight begun after she fell")
+    eq(GK.Avenged(GANK, time()), KARI, "asked without a fight, as before")
+    W.advance(GK.AVENGE_FOR)
+    eq(GK.Avenged(GANK, time(), time() - 1), nil, "fifteen minutes on, not at all")
+end)
+
+test("avenge: a kill asks about the fight it is in, an assist about the fight it came from", function()
+    local GK, LIB = bootKills()
+    local asked = {}
+    function GK.Avenged(_, _, before) asked[#asked + 1] = before end
+    W.advance(100)
+    LIB.fire("PLAYER_REGEN_DISABLED")
+    local first = time()
+    W.advance(5)
+    GK.OnPartyKill(KARI_GUID, FOE_GUID)            -- Kari's blow: our assist, once the meter says
+    W.fight.secret = true
+    endFight(LIB, { { "Me", 65 } })                -- and it can't be read yet
+    W.advance(20)
+    eq(#asked, 0, "nothing settled")
+    W.fight.combat = true
+    LIB.fire("PLAYER_REGEN_DISABLED")              -- the next fight
+    local second = time()
+    W.advance(5)
+    GK.OnPartyKill("Player-1-0000ME", FOE_GUID)    -- our own blow in it
+    eq(asked[1], second, "our kill: the fight it is in")
+    W.fight.secret = false
+    endFight(LIB, { { "Me", 65 } })
+    eq(GK.char.assists, 1)
+    eq(asked[2], first, "the assist: the fight Kari's blow was in, not the one it was read after")
+end)
+
+-- ---------------------------------------------------------------------------
+-- What's new (Letters.lua GK.DeliverNews): a small letter once per account after an update, never on a
+-- first install (the owner, 2026-11-12)
+-- ---------------------------------------------------------------------------
+test("what's new: login says whether the account is new", function()
+    boot({ me = ME })
+    eq(W.started.StartLetters[1], true, "no saved table: a first install")
+    boot({ me = ME, db = { share = true } })
+    eq(W.started.StartLetters[1], false, "a saved table from before")
+end)
+
+test("what's new: one letter to an account that played before, none on a first install or with letters off", function()
+    local GK = bootSheets({ me = ME })
+    function GK.NoticeUpdate() end
+    GK.db.newsSeen = nil
+    GK.DeliverNews(false)
+    eq(#GK.char.letters, 0, "a moment after login, not under the loading screen")
+    W.advance(6)
+    eq(#GK.char.letters, 1)
+    eq(GK.char.letters[1].kind, "news")
+    eq(GK.db.newsSeen, "1.4.0")
+    GK.DeliverNews(false)                          -- the next login
+    W.advance(6)
+    eq(#GK.char.letters, 1, "once")
+
+    local GK2 = bootSheets({ me = ME })
+    function GK2.NoticeUpdate() end
+    GK2.DeliverNews(true)
+    W.advance(6)
+    eq(#GK2.char.letters, 0, "a first install: nothing is new")
+    eq(GK2.db.newsSeen, "1.4.0", "and not later either")
+
+    local GK3 = bootSheets({ me = ME })
+    function GK3.NoticeUpdate() end
+    GK3.db.anyLetters = false
+    GK3.DeliverNews(false)
+    W.advance(6)
+    eq(#GK3.char.letters, 0, "letters off: none")
+    eq(GK3.db.newsSeen, "1.4.0")
+end)
+
+-- "nei, dette synes jeg ikke er et bra brev" (the owner, 2026-11-12, of three paragraphs of rules with
+-- their numbers, in a block): him talking, two short paragraphs with air between, no numbers.
+test("what's new: a short note from him about no one, with the leaderboard a click away", function()
+    local GK = bootSheets({ me = ME })
+    local d = GK.LetterContent({ id = 1, kind = "news" })
+    eq(d.note, true)
+    eq(d.title, "A word from the keeper")
+    eq(d.c, nil, "no class badge: it is about no one")
+    eq(#d.lines, 3, "two paragraphs and the line between, no closing line")
+    eq(d.lines[2], "", "air between them")
+    assert(d.lines[1]:find("assists", 1, true), d.lines[1])
+    assert(d.lines[3]:find("not in the fight where they fell", 1, true), d.lines[3])
+    assert(not table.concat(d.lines, " "):find("%d"), "no numbers: those are on the leaderboard's Points heading")
+    eq(d.buttons[1][1], "Leaderboard")
+end)
+
+test("the settings page and the help say the release, not how many changes there have been", function()
+    local GK = boot({ me = ME })
+    GK.Changed()
+    GK.Changed()
+    W.printed = {}
+    SlashCmdList.GRUDGEKEEPER("help")
+    assert((W.printed[1] or ""):find("v0.0.0-test commands", 1, true), tostring(W.printed[1]))
+end)
+
 say(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

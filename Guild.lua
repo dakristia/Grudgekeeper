@@ -5,16 +5,26 @@
 -- Messages, fields separated by ';' (every text field goes through GK.Clean on the way in). A field
 -- added later goes on the END, so an older client reads what it knows and ignores the rest:
 --   B;1;points;kills;deaths;level;class;weekPoints;weekKills;weekDeaths;weekId;streak;bestStreak;
---       ordersDone;bountyWon;nemesis;nemesisTimes;race;sex     my score, my profile's numbers, and
+--       ordersDone;bountyWon;nemesis;nemesisTimes;race;sex;assists;weekAssists;parts
+--                                                              my score, my profile's numbers, and
 --                                                              my race (file token) and sex (2 or 3),
---                                                              for my portrait in the ledger
+--                                                              for my portrait in the ledger; parts:
+--                                                              what each of my PCs made of the score
+--                                                              ("One character, more than one PC")
 --   Q;1                                                        tell me everything (at login)
---   K;1;name;class;race;level;zone;points;avenged;times        I killed someone (avenging a guildie;
---                                                              times: how often I have, in all)
---   D;1;name;class;race;level;zone;times                       someone killed me (times in all)
---   C;1;id;name;class;race;level;guid;reward;created;expires;state;doneBy;note;auto
+--   K;1;name;class;race;level;zone;points;avenged;times;raceFile;sex
+--                                                              I killed someone (avenging a guildie;
+--                                                              times: how often I have, in all; raceFile
+--                                                              and sex: the target's, for their race's face)
+--   D;1;name;class;race;level;zone;times;raceFile;sex          someone killed me (times in all; raceFile
+--                                                              and sex: the killer's, for their race's face)
+--   H;1;name;class;race;level;zone;points                      I helped a groupmate kill someone
+--                                                              (the news only: the kill is theirs)
+--   C;1;id;name;class;race;level;guid;reward;created;expires;state;doneBy;note;auto;raceFile;sex
 --                                                              an order of mine, as it stands (auto:
---                                                              r or c when my death posted it, below)
+--                                                              r or c when my death posted it, below;
+--                                                              raceFile and sex: the target's, for their
+--                                                              race's face)
 --   (A;1;poster;id;on, I took or dropped an order: retired 2026-11-07. Nobody takes an order any more -
 --   "hey, we put out an order, kill this one" is the whole of it, the owner. What older clients send is
 --   ignored.)
@@ -23,8 +33,11 @@
 --                                                              they are away (answering a Q)
 --   P;1;poster;id;backer;copper                                a guildie's share of an open order's
 --                                                              pot, passed on likewise
---   R;1;guildie;<B's fields from points on>;heard              a guildie's board row, passed on
+--   R;1;guildie;<B's fields from points on to sex>;heard;assists;weekAssists;parts
+--                                                              a guildie's board row, passed on
 --                                                              likewise, and when I last heard them
+--                                                              (B's later fields go after heard); the
+--                                                              row of whoever asked goes back to them
 --   S;1;poster;id;zone;level;map;x;y                           I saw an order's target, standing here
 --                                                              (x and y in thousandths of the map)
 --   T;1;poster;id;copper                                       my share of an order's pot is this
@@ -35,7 +48,7 @@
 -- The pot: the poster's own reward, plus what anyone else puts in (T). Each backer owns their share,
 -- owes it to whoever fulfils the order, and says when they paid it (Y); the poster's own part is
 -- paid with the order's state (p), as before the pot existed.
--- Worst case a guild can make us keep: 150 orders (10 open per poster), 500 board rows, 200 wanted,
+-- Worst case a guild can make us keep: 150 orders (10 open per poster), 500 board rows (6 parts each), 200 wanted,
 -- 200 wanted (50 guildies each), 200 slain (enemies the guild has killed, 20 killers each), 40 feed
 -- lines and 20 backers per order (a share passed on, P, counts against the same 20). Every sender is
 -- also held to LibForever's 30 messages / 10 s.
@@ -104,6 +117,14 @@ local function Msg(...)
     return table.concat(parts, ";")
 end
 
+-- The race file token and sex to send for a player, so a client that never saw them can still draw
+-- their face. LookOf takes the ones the caller already has when both are set, because they are fresher.
+local function LookOf(key, rf, sx)
+    if rf and sx then return rf, sx end
+    local face = GK.FaceOf(key)
+    return face.rf, face.sx
+end
+
 local function Send(text)
     -- The test panel (Debug.lua) is open: what its buttons do stays on this client.
     if GK.testMode or not IsInGuild() then return false end
@@ -126,6 +147,173 @@ local function AddFeed(e)
     local feed = GK.Store().feed
     table.insert(feed, 1, e)
     for i = #feed, MAX_FEED + 1, -1 do feed[i] = nil end
+end
+
+-- ---------------------------------------------------------------------------
+-- One character, more than one PC
+-- ---------------------------------------------------------------------------
+-- A character's record lives in the saved file of the PC it was played on, and nothing moves it to
+-- another. A guildie who logged in on a second PC started there from 0, and that PC's first B wrote 0
+-- over their row on every board; back on the first PC, its B wrote the old score back, and what the
+-- second PC made was gone (Happy Idiot, 2026-11-11). So each PC keeps its own part of the score under a
+-- mark of its own (GK.ClaimPC), and a B names every part its sender knows of:
+--   mark:u:points:kills:deaths:assists:weekId:weekPoints:weekKills:weekDeaths:weekAssists, joined by ','
+-- u is 1 for a part that holds the score from before marks existed. A part only grows, so two copies of
+-- one join by taking the larger of each number, and a row is the sum of its parts - on a guildie's board,
+-- and in the player's own record when the guild passes their row back after they log in. Whichever PC
+-- spoke last, the sum is the same.
+-- A row from before marks has no parts. When a B with parts comes over one, the old row is kept as the
+-- part "?" - it may be another PC's whole score - until the parts that held a score from before marks (u)
+-- add up to as much, and then it goes, as counted in them. A brand-new PC's part (no u) never covers it:
+-- that PC began at 0, so whatever "?" holds, it did not make.
+local MAX_PARTS = 6                     -- the old row "?" included; a seventh PC is not heard of
+local PART_NUMS = { "p", "k", "d", "a" }
+local WEEK_NUMS = { "wp", "wk", "wd", "wa" }
+
+--- The parts a B or an R names, by mark; nil when it names none (an older client, or a row without).
+local function ReadParts(text)
+    if type(text) ~= "string" or text == "" or #text > 500 then return nil end
+    local out, n = {}, 0
+    for token in text:gmatch("[^,]+") do
+        local id, u, p, k, d, a, w, wp, wk, wd, wa = token:match(
+            "^([^:]*):([^:]*):([^:]*):([^:]*):([^:]*):([^:]*):([^:]*):([^:]*):([^:]*):([^:]*):([^:]*)$")
+        local mark = id == "?" or (id and id:match("^[0-9a-z][0-9a-z][0-9a-z][0-9a-z][0-9a-z][0-9a-z]$"))
+        if mark and not out[id] then
+            local part = { u = (u == "1" and id ~= "?") or nil, p = Int(p, 0, 1e7), k = Int(k, 0, 1e6),
+                d = Int(d, 0, 1e6), a = Int(a, 0, 1e6) or 0, w = Int(w, 0, 2 ^ 31) }
+            if part.p and part.k and part.d then
+                if part.w then
+                    part.wp, part.wk = Int(wp, 0, 1e7) or 0, Int(wk, 0, 1e6) or 0
+                    part.wd, part.wa = Int(wd, 0, 1e6) or 0, Int(wa, 0, 1e6) or 0
+                end
+                out[id] = part
+                n = n + 1
+                if n >= MAX_PARTS then break end
+            end
+        end
+    end
+    return n > 0 and out or nil
+end
+
+local function PartsText(parts)
+    if not parts then return nil end
+    local ids = {}
+    for id in pairs(parts) do ids[#ids + 1] = id end
+    table.sort(ids)
+    local out = {}
+    for i = 1, math.min(#ids, MAX_PARTS) do
+        local x = parts[ids[i]]
+        out[i] = table.concat({ ids[i], x.u and "1" or "", x.p or 0, x.k or 0, x.d or 0, x.a or 0, x.w or "",
+            x.w and (x.wp or 0) or "", x.w and (x.wk or 0) or "", x.w and (x.wd or 0) or "",
+            x.w and (x.wa or 0) or "" }, ":")
+    end
+    return #out > 0 and table.concat(out, ",") or nil
+end
+
+--- One part into a set of them: the larger of each number, this week's numbers from the latest week.
+local function MergePart(set, id, x)
+    local have = set[id]
+    if not have then
+        if Count(set) >= MAX_PARTS then return end
+        have = {}
+        set[id] = have
+    end
+    for _, f in ipairs(PART_NUMS) do have[f] = math.max(have[f] or 0, x[f] or 0) end
+    have.u = have.u or x.u
+    if x.w and (not have.w or x.w > have.w) then
+        have.w = x.w
+        for _, f in ipairs(WEEK_NUMS) do have[f] = x[f] or 0 end
+    elseif x.w and x.w == have.w then
+        for _, f in ipairs(WEEK_NUMS) do have[f] = math.max(have[f] or 0, x[f] or 0) end
+    end
+end
+
+--- The old row "?" goes once the parts holding a score from before marks add up to at least as much.
+--- extra: our own part, which is not in the set.
+local function DropCovered(set, extra)
+    local old = set["?"]
+    if not old then return end
+    local sum, any = { p = 0, k = 0, d = 0, a = 0 }, false
+    local function Add(x)
+        if not (x and x.u) then return end
+        any = true
+        for _, f in ipairs(PART_NUMS) do sum[f] = sum[f] + (x[f] or 0) end
+    end
+    for id, x in pairs(set) do
+        if id ~= "?" then Add(x) end
+    end
+    Add(extra)
+    if not any then return end
+    for _, f in ipairs(PART_NUMS) do
+        if sum[f] < (old[f] or 0) then return end
+    end
+    set["?"] = nil
+end
+
+--- The sum of a set of parts; this week's numbers only from the parts made in week `wid`.
+local function SumParts(set, wid)
+    local s = { p = 0, k = 0, d = 0, a = 0, wp = 0, wk = 0, wd = 0, wa = 0 }
+    for _, x in pairs(set) do
+        for _, f in ipairs(PART_NUMS) do s[f] = s[f] + (x[f] or 0) end
+        if wid and x.w == wid then
+            for _, f in ipairs(WEEK_NUMS) do s[f] = s[f] + (x[f] or 0) end
+        end
+    end
+    return s
+end
+
+--- A row's score is the sum of its parts.
+local function Total(r)
+    local s = SumParts(r.parts, r.wid)
+    r.p, r.k, r.d, r.a = s.p, s.k, s.d, s.a
+    if r.wid then r.wp, r.wk, r.wd, r.wa = s.wp, s.wk, s.wd, s.wa end
+end
+
+--- Our own part: the record less what the other PCs made. Every number in the record only grows, and the
+--- record grew by exactly what each other part brought (GK.MergeMine), so none of these goes below 0.
+local function OwnPart(c, w, others)
+    local s = SumParts(others, w.id)
+    local function Left(have, less) return math.max(0, (have or 0) - less) end
+    return { u = c.u, p = Left(c.points, s.p), k = Left(c.kills, s.k), d = Left(c.deaths, s.d),
+        a = Left(c.assists, s.a), w = w.id, wp = Left(w.p, s.wp), wk = Left(w.k, s.wk), wd = Left(w.d, s.wd),
+        wa = Left(w.a, s.wa) }
+end
+
+--- Every part this PC knows of, its own among them, as a B says them.
+function GK.MyPartsText()
+    local c, w = GK.char, GK.Week()
+    GK.ClaimPC(c)
+    local all = { [c.pc] = OwnPart(c, w, c.parts) }
+    for id, x in pairs(c.parts) do all[id] = x end
+    return PartsText(all)
+end
+
+--- Our own row, passed back by a guildie (R, after we asked at login): the parts other PCs made, and the
+--- old row "?", join the record, and the record grows by what they bring. Our own part we know better
+--- than anyone, so a part under our own mark is never taken. Returns whether anything changed.
+function GK.MergeMine(parts)
+    local c, w = GK.char, GK.Week()
+    GK.ClaimPC(c)
+    local set = c.parts
+    local before = SumParts(set, w.id)
+    local own = OwnPart(c, w, set)
+    for id, x in pairs(parts) do
+        if id ~= c.pc then MergePart(set, id, x) end
+    end
+    DropCovered(set, own)
+    local after = SumParts(set, w.id)
+    local changed = false
+    for f, v in pairs(after) do
+        if v ~= before[f] then changed = true end
+    end
+    if not changed then return false end
+    c.points = c.points + after.p - before.p
+    c.kills = c.kills + after.k - before.k
+    c.deaths = c.deaths + after.d - before.d
+    c.assists = (c.assists or 0) + after.a - before.a
+    w.p, w.k = w.p + after.wp - before.wp, w.k + after.wk - before.wk
+    w.d, w.a = w.d + after.wd - before.wd, (w.a or 0) + after.wa - before.wa
+    return true
 end
 
 -- ---------------------------------------------------------------------------
@@ -430,7 +618,9 @@ function GK.Contribute(o, copper)
 end
 
 local function OrderText(o)
-    return Msg("C", PROTO, o.id, o.n, o.c, o.r, o.l, o.guid, o.reward, o.t, o.exp, o.state, o.doneBy, o.note, o.auto)
+    local rf, sx = LookOf(o.n)
+    return Msg("C", PROTO, o.id, o.n, o.c, o.r, o.l, o.guid, o.reward, o.t, o.exp, o.state, o.doneBy, o.note, o.auto,
+        rf, sx)
 end
 
 local function SendOrder(o) Send(OrderText(o)) end
@@ -646,17 +836,21 @@ function GK.SendSighting(o)
     Send(Msg("S", PROTO, o.by, o.id, s.z, s.l, s.m, s.x, s.y))
 end
 
-function GK.SendBoard()
+local function SendBoardNow()
     if not GK.db.share then return end
-    LIB.Debounce("GrudgekeeperBoard", 2, function()
-        local _, class = UnitClass("player")
-        local w, c = GK.Week(), GK.char
-        local nemesis, f = GK.Nemesis()
-        local _, raceFile = UnitRace("player")
-        Send(Msg("B", PROTO, c.points, c.kills, c.deaths, UnitLevel("player"), class,
-            w.p, w.k, w.d, w.id, c.streak or 0, c.bestStreak or 0, c.done or 0, c.won or 0,
-            nemesis, f and f.d or nil, raceFile, UnitSex("player")))
-    end)
+    local _, class = UnitClass("player")
+    local w, c = GK.Week(), GK.char
+    local nemesis, f = GK.Nemesis()
+    local _, raceFile = UnitRace("player")
+    Send(Msg("B", PROTO, c.points, c.kills, c.deaths, UnitLevel("player"), class,
+        w.p, w.k, w.d, w.id, c.streak or 0, c.bestStreak or 0, c.done or 0, c.won or 0,
+        nemesis, f and f.d or nil, raceFile, UnitSex("player"), c.assists or 0, w.a or 0, GK.MyPartsText()))
+end
+
+--- Our row, a moment after the last change - or at once (now), as the login's does, ahead of its Q.
+function GK.SendBoard(now)
+    if not GK.db.share then return end
+    if now then SendBoardNow() else LIB.Debounce("GrudgekeeperBoard", 2, SendBoardNow) end
 end
 
 --- The guild's tally of one enemy: who of us has killed them, and how often. Each killer reports
@@ -686,16 +880,28 @@ function GK.SendKill(v, zone, points, avenged, times)
     AddFeed({ t = time(), who = me, kind = "K", n = v.key, c = v.c, l = v.l, p = points, z = zone, av = avenged })
     GK.NoteSlain(me, v.key, v.c, v.r, v.l, times)
     if not GK.db.share then return end
-    Send(Msg("K", PROTO, v.key, v.c, v.r, v.l, zone, points, avenged, times))
+    local rf, sx = LookOf(v.key, v.rf, v.sx)
+    Send(Msg("K", PROTO, v.key, v.c, v.r, v.l, zone, points, avenged, times, rf, sx))
+end
+
+--- Our assist: the news only. The guild's tally of who killed whom stays with the killer's K.
+function GK.SendAssist(v, zone, points)
+    AddFeed({ t = time(), who = LIB.Me(), kind = "H", n = v.key, c = v.c, l = v.l, p = points, z = zone })
+    if not GK.db.share then return end
+    Send(Msg("H", PROTO, v.key, v.c, v.r, v.l, zone, points))
 end
 
 --- A guildie this player killed within the last few minutes (by the guild's feed): we'd be avenging
---- them. Their key, or nil.
-function GK.Avenged(key, now)
+--- them. Their key, or nil. before: when the fight we got them in began (Kills.lua). A guildie heard
+--- falling at or after it fell in that same fight, and is avenged in a later one only - one of the group
+--- dying first is no point more for everyone who then kills or helps kill their killer.
+function GK.Avenged(key, now, before)
     local me = LIB.Me()
     for _, e in ipairs(GK.Store().feed) do
         if now - (e.t or 0) > GK.AVENGE_FOR then break end           -- the feed is newest first
-        if e.kind == "D" and e.who ~= me and GK.SameName(e.n, key) then return e.who end
+        if e.kind == "D" and e.who ~= me and (not before or (e.t or 0) < before) and GK.SameName(e.n, key) then
+            return e.who
+        end
     end
     return nil
 end
@@ -705,7 +911,8 @@ function GK.SendDeath(v, zone, times)
     -- Our own deaths count in the guild's wanted list too.
     GK.NoteWanted(LIB.Me(), v.key, v.c, v.r, v.l, times)
     if not GK.db.share then return end
-    Send(Msg("D", PROTO, v.key, v.c, v.r, v.l, zone, times))
+    local rf, sx = LookOf(v.key, v.rf, v.sx)
+    Send(Msg("D", PROTO, v.key, v.c, v.r, v.l, zone, times, rf, sx))
 end
 
 -- ---------------------------------------------------------------------------
@@ -745,7 +952,7 @@ local function ForgetIn(who, key)
     local feed = s.feed
     for i = #feed, 1, -1 do
         local n = feed[i]
-        if n.who == who and n.n == key and (n.kind == "K" or n.kind == "D") then table.remove(feed, i) end
+        if n.who == who and n.n == key and (n.kind == "K" or n.kind == "D" or n.kind == "H") then table.remove(feed, i) end
     end
 end
 
@@ -893,6 +1100,19 @@ local function GuildieKey(full)
     return name .. "-" .. LIB.Realm()
 end
 
+--- A race's file token (letters only, as the client's are) and a sex the game knows (2 male, 3 female),
+--- each nil when it is anything else.
+local function ReadLook(rf, sx)
+    return (type(rf) == "string" and #rf <= 20 and rf:match("^%a+$")) and rf or nil, Int(sx, 2, 3)
+end
+
+--- Keeps what a message says a player looks like, so their face shows even if we never saw them. Only
+--- when it names both, because a half is no face.
+local function KeepLook(name, rf, sx)
+    rf, sx = ReadLook(rf, sx)
+    if rf and sx then GK.KeepLooks(name, { rf = rf, sx = sx }) end
+end
+
 --- The helpers an F names, in our spelling: at most MAX_HELPERS, each once, never the killer.
 local function ReadHelpers(field, sender)
     if type(field) ~= "string" or field == "" then return nil end
@@ -934,29 +1154,71 @@ local function ApplyBoard(who, f, base)
     r.od, r.ow = Int(Field(14), 0, 1e6), Int(Field(15), 0, 1e12)
     r.nm = GK.Clean(Field(16), 64)
     r.nt = r.nm and Int(Field(17), 1, 1e6) or nil
-    -- For their portrait: a race's file token (letters only, as the client's are) and a sex the game
-    -- knows (2 male, 3 female). Anything else is dropped, and the ledger shows their class instead.
-    local rf = Field(18)
-    r.rf = (type(rf) == "string" and #rf <= 20 and rf:match("^%a+$")) and rf or nil
-    r.sx = Int(Field(19), 2, 3)
+    -- For their portrait. Anything ReadLook drops leaves the ledger showing their class instead.
+    r.rf, r.sx = ReadLook(Field(18), Field(19))
     return r
 end
 
+--- Assists came after B's last field and R's heard: in B at 20-21, in R at 22-23. An older client
+--- sends none.
+local function ApplyAssists(r, a, wa)
+    if not r then return end
+    r.a, r.wa = Int(a, 0, 1e6), Int(wa, 0, 1e6)
+end
+
+--- A guildie's own B. With parts, they join the parts we have of their row and the row is the sum; a row we
+--- had from before parts stays as the part "?" ("One character, more than one PC"). Without parts - an
+--- older client - the row is what it says, as before parts.
 local function OnBoard(sender, f)
     heard["b:" .. sender] = GetTime()
-    ApplyBoard(sender, f, 0)
+    local was = GK.Store().board[sender]
+    local had, old = was and was.parts, nil
+    -- only a row the guildie told us themselves: one an older client passed on may be a copy of a row with
+    -- parts that lost them on the way, all the PCs' score in one, and kept as "?" it would count twice
+    if was and not had and not was.via then
+        old = { p = was.p or 0, k = was.k or 0, d = was.d or 0, a = was.a or 0, w = was.wid,
+            wp = was.wp or 0, wk = was.wk or 0, wd = was.wd or 0, wa = was.wa or 0 }
+    end
+    local r = ApplyBoard(sender, f, 0)
+    ApplyAssists(r, f[20], f[21])
+    if not r then return end
+    r.via = nil
+    local parts = ReadParts(f[22])
+    if not parts then
+        r.parts = nil
+        return
+    end
+    local set = had or {}
+    if old and old.p + old.k + old.d + old.a > 0 then set["?"] = old end
+    for id, x in pairs(parts) do MergePart(set, id, x) end
+    DropCovered(set)
+    r.parts = set
+    Total(r)
 end
 
 --- A guildie's row, passed on by another while they are away (R). Only a row we have none of: never over
 --- what we have, which is the guildie's own word or a copy as good. When it was last heard of its owner
 --- comes with it, so a row passed round and round still leaves the board after BOARD_STALE.
+--- Our own row, passed back to us after we asked: what our other PCs made joins our record (GK.MergeMine).
 local function OnRelayedBoard(sender, f)
     local who = GuildieKey(GK.Clean(f[3], 64))
-    if not who or who == sender or LIB.IsMyStoredName(who) then return end
+    if not who or who == sender then return end
+    heard["r:" .. who] = GetTime()
+    if LIB.IsMyStoredName(who) then
+        local parts = ReadParts(f[24])
+        if parts and GK.MergeMine(parts) then GK.SendBoard() end
+        return
+    end
     heard["b:" .. who] = GetTime()
     if GK.Store().board[who] then return end
     local r = ApplyBoard(who, f, 1)
-    if r then r.t = math.min(time(), Int(f[21], 0, 2 ^ 31) or time()) end
+    if not r then return end
+    r.t = math.min(time(), Int(f[21], 0, 2 ^ 31) or time())
+    ApplyAssists(r, f[22], f[23])
+    -- field 24: the row's parts; empty for a row without, as its owner told it; "~" for one that came to
+    -- the relayer by way of an older client; missing when the relayer is an older client
+    r.parts = ReadParts(f[24])
+    if r.parts then Total(r) else r.via = (f[24] == nil or f[24] == "~") or nil end
 end
 
 local function OnKill(sender, f)
@@ -966,6 +1228,14 @@ local function OnKill(sender, f)
     AddFeed({ t = time(), who = sender, kind = "K", n = name, c = c, l = l,
         z = GK.Clean(f[7], 40), p = Int(f[8], 0, 100), av = GK.LocalKey(GK.Clean(f[9], 64)) })
     GK.NoteSlain(sender, name, c, r, l, Int(f[10], 1, 1e6))
+    KeepLook(name, f[11], f[12])
+end
+
+local function OnAssist(sender, f)
+    local name = GK.PlayerKey(GK.Clean(f[3], 64))
+    if not name then return end
+    AddFeed({ t = time(), who = sender, kind = "H", n = name, c = GK.ValidClass(f[4]), l = GK.ValidLevel(f[6]),
+        z = GK.Clean(f[7], 40), p = Int(f[8], 0, 100) })
 end
 
 local function OnDeath(sender, f)
@@ -975,6 +1245,7 @@ local function OnDeath(sender, f)
     local c, l = GK.ValidClass(f[4]), GK.ValidLevel(f[6])
     GK.NoteWanted(sender, name, c, GK.Clean(f[5], 20), l, times)
     AddFeed({ t = time(), who = sender, kind = "D", n = name, c = c, l = l, z = GK.Clean(f[7], 40) })
+    KeepLook(name, f[9], f[10])
 end
 
 --- An order as its poster sends it (C, base 0), or as another guildie passes it on while the poster is
@@ -987,6 +1258,7 @@ local function ApplyOrder(by, f, base, relayed)
     local name = GK.PlayerKey(GK.Clean(Field(4), 64))
     local state = STATES[Field(12)] and Field(12) or nil
     if not (id and name and state) then return end
+    KeepLook(name, Field(16), Field(17))
     local s, now = GK.Store(), time()
     local key = by .. "#" .. id
     heard[key] = GetTime()
@@ -1227,10 +1499,30 @@ local function Shuffle(list)
 end
 
 local askedAt, replyAfter, replyDue = 0, 0, false
+local askers = {}               -- who asked since the last answer: each gets their own row back, first
+
+local function RowText(who, r)
+    return Msg("R", PROTO, who, r.p, r.k, r.d, r.l, r.c, r.wp, r.wk, r.wd, r.wid, r.st, r.bs, r.od, r.ow,
+        r.nm, r.nt, r.rf, r.sx, r.t, r.a, r.wa, PartsText(r.parts) or (r.via and "~" or ""))
+end
 
 local function Answer()
     local me, now, s, since = LIB.Me(), time(), GK.Store(), askedAt
     GK.SendBoard()
+    -- whoever asked, their own row with its parts: what their other PCs made, which this PC of theirs may
+    -- never have heard ("One character, more than one PC"). Once, by whoever answers first.
+    local asking = askers
+    askers = {}
+    for who in pairs(asking) do
+        local r = s.board[who]
+        if r and r.parts and who ~= me then
+            Paced(function()
+                local passed = heard["r:" .. who]
+                if (passed and passed >= since) or GK.Store().board[who] ~= r then return nil end
+                return RowText(who, r)
+            end)
+        end
+    end
     -- ours: the orders we posted, and what we put in others' pots and whether we've paid it
     for _, o in pairs(s.orders) do
         local recent = o.state == "o" or now - (o.doneAt or o.t or 0) < ORDER_DAYS * GK.DAY
@@ -1268,8 +1560,9 @@ local function Answer()
         local o = orders[i]
         Paced(function()
             if (heard[o.key] or 0) >= since or GK.Store().orders[o.key] ~= o then return nil end
+            local rf, sx = LookOf(o.n)
             return Msg("O", PROTO, o.by, o.id, o.n, o.c, o.r, o.l, o.guid, o.reward, o.t, o.exp, o.state,
-                o.doneBy, o.note, o.auto)
+                o.doneBy, o.note, o.auto, rf, sx)
         end)
     end
     -- what others put in the open orders' pots, ours too: after the orders, so whoever asked has the order
@@ -1298,7 +1591,7 @@ local function Answer()
     -- others' rows on the board: this week's scorers first, then the best of all time - what a page shows
     local week, rows = GK.WeekId(), {}
     for who, r in pairs(s.board) do
-        if who ~= me and now - (r.t or 0) < BOARD_STALE then rows[#rows + 1] = { who = who, r = r } end
+        if who ~= me and not asking[who] and now - (r.t or 0) < BOARD_STALE then rows[#rows + 1] = { who = who, r = r } end
     end
     local function ThisWeek(r) return r.wid == week and (r.wp or 0) or -1 end
     table.sort(rows, function(a, b)
@@ -1310,17 +1603,17 @@ local function Answer()
         local who, r = rows[i].who, rows[i].r
         Paced(function()
             if (heard["b:" .. who] or 0) >= since or GK.Store().board[who] ~= r then return nil end
-            return Msg("R", PROTO, who, r.p, r.k, r.d, r.l, r.c, r.wp, r.wk, r.wd, r.wid, r.st, r.bs, r.od, r.ow,
-                r.nm, r.nt, r.rf, r.sx, r.t)
+            return RowText(who, r)
         end)
     end
 end
 
-local function OnAsk()
+local function OnAsk(sender)
     -- Everyone logging in at once asks at once: one answer, a few seconds later. An ask inside the gap
     -- after an answer waits for the gap to end; it used to get no answer at all, so a guildie who logged
     -- in half a minute after another heard nothing.
     askedAt = GetTime()
+    if Count(askers) < 50 then askers[sender] = true end
     if replyDue then return end
     replyDue = true
     C_Timer.After(math.max(0, replyAfter - GetTime()) + 2 + math.random() * 4, function()
@@ -1330,7 +1623,7 @@ local function OnAsk()
     end)
 end
 
-local HANDLERS = { B = OnBoard, Q = OnAsk, K = OnKill, D = OnDeath, C = OnOrder, F = OnFulfil,
+local HANDLERS = { B = OnBoard, Q = OnAsk, K = OnKill, H = OnAssist, D = OnDeath, C = OnOrder, F = OnFulfil,
     S = OnSighting, T = OnPot, Y = OnSharePaid, O = OnRelayedOrder, P = OnRelayedPot, R = OnRelayedBoard,
     U = OnForget }
 
@@ -1383,8 +1676,10 @@ local asked = false
 local function Ask()
     if asked or not IsInGuild() then return end
     asked = true
+    -- our row first, then the ask: a guildie who answers has our parts by then, joined to the ones they
+    -- had, and passes the whole back to us
+    GK.SendBoard(true)
     Send(Msg("Q", PROTO))
-    GK.SendBoard()
 end
 
 function GK.StartGuild()

@@ -11,7 +11,9 @@
 local ADDON, GK = ...
 local LIB = LibStub("LibForever-1.0")
 
-GK.version = C_AddOns.GetAddOnMetadata(ADDON, "Version") or "?"
+-- The release, from the TOC. Its own name: GK.version is the count of changes (GK.Changed), and was
+-- this until 1.4.0 - the settings page and the help said "v" and that count.
+GK.addonVersion = C_AddOns.GetAddOnMetadata(ADDON, "Version") or "?"
 GK.TAG = "|cffc8281eGrudgekeeper|r"
 local TAG = GK.TAG
 
@@ -31,6 +33,8 @@ local defaults = {
     share = true,            -- tell the guild your kills, deaths and score, and where targets are seen
     autoOrders = true,       -- your death to someone on a rampage or camping you posts a kill order (Guild.lua)
     sound = true,
+    oldPortraits = true,     -- race faces from the old character-creation screen, not today's race icons (GK.SetPortrait);
+                             -- on by default, whichever skin (the owner, 2026-11-11)
     tooltip = true,          -- one line on an enemy player's tooltip: your history with them
     guildButton = true,      -- a small Grudgekeeper badge beside the guild window
     minimap = {},            -- LibDBIcon's own record: where the button sits, whether it is hidden
@@ -51,14 +55,16 @@ local defaults = {
 }
 -- This character's own record.
 local charDefaults = {
-    points = 0, kills = 0, deaths = 0,
+    points = 0, kills = 0, deaths = 0, assists = 0,
     streak = 0, bestStreak = 0,  -- kills since you last died to an enemy player, and the most ever
     done = 0, won = 0,           -- kill orders you fulfilled, and the bounties on them (copper)
-    -- week = { id, p, k, d }: this week's score, made by GK.Week and started over at the weekly reset
-    log = {},                -- newest first: { k = "K" or "D", t, n, c, r, l, z, p, o }
-    foes = {},               -- [key] = { n, c, r, l, k, d, last, lastKill, lastDeath, hits = { time, ... } }
+    -- week = { id, p, k, d, a }: this week's score, made by GK.Week and started over at the weekly reset
+    log = {},                -- newest first: { k = "K", "A" or "D", t, n, c, r, l, z, p, o, w (an assist's killer) }
+    foes = {},               -- [key] = { n, c, r, l, k, d, a, last, lastKill, lastAssist, lastDeath, hits = { time, ... } }
     letters = {},            -- oldest first (Letters.lua)
     letterId = 0,
+    -- pc, u, parts: this PC's mark on the record, whether it held a score before marks existed, and the
+    -- other PCs' parts of the score (GK.ClaimPC, and Guild.lua's "One character, more than one PC")
 }
 
 -- ---------------------------------------------------------------------------
@@ -140,9 +146,10 @@ GK.POINTS = { grey = 0, green = 1, yellow = 2, orange = 3, red = 4 }
 GK.UNKNOWN_POINTS = 1    -- a level we never saw: the least a real kill is worth
 GK.ORDER_BONUS = 3       -- on top, for the kill that fulfils a kill order
 GK.REVENGE_BONUS = 1     -- they killed you since you last killed them
-GK.AVENGE_BONUS = 1      -- they killed a guildie in the last AVENGE_FOR seconds
+GK.AVENGE_BONUS = 1      -- they killed a guildie in the last AVENGE_FOR seconds, before this fight began
 GK.AVENGE_FOR = 15 * 60
 GK.REPEATS = 2           -- the same player is worth points this many times a day, then nothing
+GK.ASSIST_LESS = 1       -- an assist is worth this much less than the kill, and still at least 1
 GK.DAY = 24 * 3600
 
 --- Points for one kill: by their level beside yours, plus revenge and avenging a guildie - nothing at
@@ -159,6 +166,14 @@ function GK.Points(mine, theirs, killedToday, order, revenge, avenged)
     end
     if order then p = p + GK.ORDER_BONUS end
     return p, con
+end
+
+--- Points for one assist: the kill's, with no order bonus (the killer fulfils it), a little less. A
+--- kill worth nothing (grey, or farmed) is an assist worth nothing.
+function GK.AssistPoints(mine, theirs, killedToday, revenge, avenged)
+    local p = GK.Points(mine, theirs, killedToday, false, revenge, avenged)
+    if p > 0 then p = math.max(p - GK.ASSIST_LESS, 1) end
+    return p
 end
 
 -- Titles by all-time points: our own words, so nobody takes them for the game's honour ranks.
@@ -193,10 +208,28 @@ function GK.Week()
     local id = GK.WeekId()
     local w = GK.char.week
     if type(w) ~= "table" or w.id ~= id then
-        w = { id = id, p = 0, k = 0, d = 0 }
+        w = { id = id, p = 0, k = 0, d = 0, a = 0 }
         GK.char.week = w
     end
     return w
+end
+
+--- This PC's mark on the character's record, made the first time it is loaded here. The record lives in
+--- this PC's saved file only, so a second PC has a record - and a mark - of its own, and the guild adds
+--- the two up (Guild.lua). u: the record held a score already when it got its mark, the score from before
+--- marks existed - which an older client may have told the guild as a row of its own.
+local MARK = "0123456789abcdefghijklmnopqrstuvwxyz"
+function GK.ClaimPC(c)
+    if type(c.parts) ~= "table" then c.parts = {} end
+    if type(c.pc) == "string" and c.pc:match("^[0-9a-z][0-9a-z][0-9a-z][0-9a-z][0-9a-z][0-9a-z]$") then return end
+    local id = {}
+    for i = 1, 6 do
+        local n = math.random(#MARK)
+        id[i] = MARK:sub(n, n)
+    end
+    c.pc = table.concat(id)
+    c.u = ((c.points or 0) + (c.kills or 0) + (c.deaths or 0) + (c.assists or 0) > 0) or nil
+    c.parts = {}
 end
 
 -- ---------------------------------------------------------------------------
@@ -668,7 +701,8 @@ function GK.Nemesis()
     return bestKey, best
 end
 
---- The guild's leaderboard with you in it, best first: { { who, p, k, d, l, c, total, me } }.
+--- The guild's leaderboard with you in it, best first: { { who, p, k, d, a, l, c, total, me } }. a is
+--- nil for a guildie whose client sends no assists (the released one).
 --- weekly: this week's score; a guildie whose last word was from another week has none this week,
 --- and one with nothing this week isn't listed. total is all-time points either way (for the title).
 -- Guildies under this level are left off the board: alts parked in a starting zone filled it with rows of
@@ -680,12 +714,13 @@ function GK.Board(weekly)
     local list, me, week = {}, LIB.Me(), GK.WeekId()
     for who, r in pairs(GK.Store().board) do
         if who ~= me and (r.l or BOARD_MIN_LEVEL) >= BOARD_MIN_LEVEL then
-            local p, k, d = r.p or 0, r.k or 0, r.d or 0
+            local p, k, d, a = r.p or 0, r.k or 0, r.d or 0, r.a
             if weekly then
-                if r.wid == week then p, k, d = r.wp or 0, r.wk or 0, r.wd or 0 else p, k, d = 0, 0, 0 end
+                if r.wid == week then p, k, d, a = r.wp or 0, r.wk or 0, r.wd or 0, r.wa
+                else p, k, d, a = 0, 0, 0, r.a and 0 end
             end
-            if not weekly or p > 0 or k > 0 or d > 0 then
-                list[#list + 1] = { who = who, p = p, k = k, d = d, l = r.l, c = r.c, total = r.p or 0,
+            if not weekly or p > 0 or k > 0 or d > 0 or (a or 0) > 0 then
+                list[#list + 1] = { who = who, p = p, k = k, d = d, a = a, l = r.l, c = r.c, total = r.p or 0,
                     rf = r.rf, sx = r.sx }
             end
         end
@@ -694,7 +729,7 @@ function GK.Board(weekly)
     local _, raceFile = UnitRace("player")
     local c, w = GK.char, GK.Week()
     list[#list + 1] = { who = me or "?", p = weekly and w.p or c.points, k = weekly and w.k or c.kills,
-        d = weekly and w.d or c.deaths, l = UnitLevel("player"), c = class, total = c.points, me = true,
+        d = weekly and w.d or c.deaths, a = weekly and (w.a or 0) or (c.assists or 0), l = UnitLevel("player"), c = class, total = c.points, me = true,
         rf = raceFile, sx = UnitSex("player") }
     table.sort(list, function(a, b)
         if a.p ~= b.p then return a.p > b.p end
@@ -723,7 +758,8 @@ end
 local function TooltipLines(add)
     add(TAG)
     local rank, of = GK.MyRank()
-    add(("%d points - %d kills, %d deaths"):format(GK.char.points, GK.char.kills, GK.char.deaths), 1, 1, 1)
+    add(("%d points - %d kills, %d assists, %d deaths"):format(GK.char.points, GK.char.kills, GK.char.assists or 0,
+        GK.char.deaths), 1, 1, 1)
     if of > 1 then add(("#%d of %d in the guild"):format(rank, of), 1, 0.82, 0) end
     local open = GK.OpenOrders and #GK.OpenOrders() or 0
     if open > 0 then add(("%d open kill order%s"):format(open, open == 1 and "" or "s"), 1, 0.5, 0.4) end
@@ -761,7 +797,7 @@ function GK.SetMinimapShown(on)
 end
 
 local function Help()
-    print(TAG .. " v" .. GK.version .. " commands:")
+    print(TAG .. " v" .. GK.addonVersion .. " commands:")
     print("  /grudge  - open the window: kill orders, the guild's leaderboard, your grudges")
     print("  /grudge post  - write a kill order on your target (no enemy targeted: it asks who)")
     print("  /grudge letters  - read your letters")
@@ -818,6 +854,9 @@ function GK.Debug()
     end
     if GK.SeenCount then print(("  enemy players seen this session: %d"):format(GK.SeenCount())) end
     if GK.LastDeathDebug then print("  last death: " .. GK.LastDeathDebug()) end
+    if GK.LastAssistDebug then print("  last assist: " .. GK.LastAssistDebug()) end
+    -- each PC's part of the score, this one's first by its mark (Guild.lua's "One character, more than one PC")
+    if GK.MyPartsText then print(("  this PC %s; parts: %s"):format(tostring(GK.char.pc), GK.MyPartsText() or "none")) end
     local s = GK.Store()
     local n = 0
     for _ in pairs(s.board) do n = n + 1 end
@@ -983,6 +1022,7 @@ end
 -- Startup
 -- ---------------------------------------------------------------------------
 LIB.On("PLAYER_LOGIN", function()
+    local fresh = GrudgekeeperDB == nil             -- a first install: no "what's new" (GK.DeliverNews)
     GK.db = LIB.PrepareDB(GrudgekeeperDB, defaults, nil, 1)
     GrudgekeeperDB = GK.db
     GK.UseLook(GK.db.look)
@@ -991,13 +1031,14 @@ LIB.On("PLAYER_LOGIN", function()
     -- Retired 2026-11-07, when taking an order went: the orders you took, and the warning for every
     -- order beside the one for yours (every order warns now). Gone from the saved files too.
     GK.char.accepted, GK.db.alertAll = nil, nil
+    GK.ClaimPC(GK.char)
     GK.ForgetGoneSounds(GK.db)
     GK.RekeyStores()
     RegisterMinimap()
     GK.StartGuild()
     GK.StartSightings()
     GK.StartKills()
-    GK.StartLetters()
+    GK.StartLetters(fresh)
     GK.StartMail()
     GK.StartSocial()
     GK.StartProfiles()

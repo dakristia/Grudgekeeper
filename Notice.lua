@@ -188,6 +188,7 @@ function GK.LetterLine(L)
     if L.kind == "expired" then return "Order expired: " .. who end
     if L.kind == "kill" then return L.title and ("A new title: " .. L.title) or ("You killed " .. who) end
     if L.kind == "slain" then return "Slain by " .. who end
+    if L.kind == "news" then return "News from the Grudgekeeper" end
     return who
 end
 
