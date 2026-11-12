@@ -2841,6 +2841,16 @@ test("a guildie's milestone is told once: a kill worth nothing at 5 does not tel
     eq(heard[4][1], "GK_SPREE")
 end)
 
+test("a guildie's spree that started over on a D we missed tells its milestones again", function()
+    local _, K, _, heard = bootHeard()
+    K(KARI, 7)
+    eq(#heard, 1)
+    K(KARI, 3)
+    eq(#heard, 2, "3 after 7 with no D: they died and we missed it")
+    eq(heard[2][1], "GK_SPREE")
+    eq(heard[2][3], 3)
+end)
+
 test("a K from an older version has no field 13 and fires nothing; a bad one reads as none", function()
     local GK, K, _, heard = bootHeard()
     GK.ReceiveForTest("Grudgekeeper", msg("K", 1, GANK, "ROGUE", "Orc", 60, "Hillsbrad", 2, "", 5, "Orc", 2), "GUILD", KARI)

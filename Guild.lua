@@ -1244,9 +1244,10 @@ local function OnKill(sender, f)
     if spree and (lastSpree[sender] or Count(lastSpree) < MAX_SPREES) then
         local before = lastSpree[sender] or 0
         lastSpree[sender] = spree
-        -- only a spree that grew: a kill worth nothing sends the same number again
+        -- only a spree that moved: a kill worth nothing sends the same number again. A lower one started
+        -- over on a death whose D we missed, and its milestones count again.
         local tier, key = GK.SpreeTier(spree)
-        if tier and spree > before then LIB.Fire("GK_SPREE", sender, spree, tier, false, key) end
+        if tier and spree ~= before then LIB.Fire("GK_SPREE", sender, spree, tier, false, key) end
     end
     local tormented = GK.TormentorEnded(name)
     if tormented then LIB.Fire("GK_TORMENTOR", sender, GK.Show(name), tormented, false) end
