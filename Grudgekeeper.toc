@@ -36,6 +36,7 @@ Notes.lua
 Import.lua
 Letters.lua
 Notice.lua
+Announce.lua
 Window.lua
 Post.lua
 Mail.lua

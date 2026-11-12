@@ -179,6 +179,9 @@ local function Build()
     Place()
 end
 
+--- The letter icon's frame, for what sits under it (Announce.lua's toasts). nil until it has been built.
+function GK.NoticeFrame() return btn end
+
 --- One line about a letter, for the tooltip.
 function GK.LetterLine(L)
     local who = GK.Show(L.n)

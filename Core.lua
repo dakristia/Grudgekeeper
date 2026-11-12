@@ -51,6 +51,13 @@ local defaults = {
     kudosGroup = false,      -- one friendly chat line when a Kudos player joins your group (chat: off, the owner doesn't read it)
     plateNotes = true,       -- a small dim mark on the nameplate of a player you have notes on
     guilds = {},             -- [guild key] = { board, orders, wanted, slain, feed, nextId } (Guild.lua)
+    spreeMine = "splash",    -- your spree milestone: "off", "toast" or "splash" (Announce.lua)
+    spreeGuild = "toast",    -- a guildie's spree milestone
+    spreeEnded = "toast",    -- a spree of ours or a guildie's that an enemy ended
+    tormentor = "toast",     -- one of the guild put an end to a tormentor
+    announceWhenMine = "always",       -- when yours may come: "always", "noCombat", "noCombatInInstance" or "noInstance"
+    announceWhenGuild = "noCombat",    -- the same for a guildie's; one held back waits, then comes in order
+    spreeSounds = {},        -- [tier key, "ended" or "tormentor"] = a sound (GK.SoundChoices); none picked: Announce.lua's own
     looks = {},              -- [player key] = race file and sex, "Scourge3": their race's face on cards (Sightings.lua)
 }
 -- This character's own record.
@@ -869,6 +876,7 @@ local function Help()
     print("  /grudge letters  - read your letters")
     print("  /grudge test  - four sample letters, to see what they look like")
     print("  /grudge notice  - show the letter icon to drag it where you want it (notice reset: back to start)")
+    print("  /grudge spree  - show a sample spree splash and toast")
     print("  /grudge options  - open the settings")
     print("  /grudge guild  - officers: put an enemy guild on watch by its name")
 end
@@ -891,6 +899,8 @@ SlashCmdList.GRUDGEKEEPER = function(msg)
         GK.SampleLetters()
     elseif cmd == "notice" or cmd == "notice reset" then
         GK.PlaceNotice(cmd == "notice reset")
+    elseif cmd == "spree" then
+        GK.AnnounceSample()           -- a sample splash and toast (Announce.lua)
     elseif cmd == "options" or cmd == "settings" then
         GK.OpenOptions()
     elseif cmd == "guild" then

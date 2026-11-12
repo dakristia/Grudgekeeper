@@ -2901,5 +2901,232 @@ test("tormentor: our own death counts with the guild's, and a K from an older cl
     eq(heard[1][1], "GK_TORMENTOR")
 end)
 
+-- ---------------------------------------------------------------------------
+-- Announcements (Announce.lua): a splash or a toast, held while the when-setting says no
+-- ---------------------------------------------------------------------------
+--- Announce.lua over frames that do nothing but remember: A.tex has every texture it was given (a seal and a
+--- ribbon for each announcement, "nil" for no ribbon; not the glow), A.txt every line, A.played every sound.
+local function bootAnnounce()
+    local GK, LIB = boot({ me = ME })
+    local A = { tex = {}, txt = {}, played = {}, combat = false, instance = false, lockdown = false }
+    local object = {}
+    object.__index = function(_, method)
+        if method == "SetTexture" then    -- the glow is set once, when the splash is built: not an announcement's
+            return function(_, path)
+                if tostring(path):find("glow$") then return end
+                table.insert(A.tex, tostring(path))
+            end
+        end
+        if method == "SetText" then return function(_, text) table.insert(A.txt, text) end end
+        if method:find("^Create") then return function() return setmetatable({}, object) end end
+        return function() end
+    end
+    _G.CreateFrame = function() return setmetatable({}, object) end
+    _G.UIParent = setmetatable({}, object)
+    _G.InCombatLockdown = function() return A.lockdown end
+    _G.UnitAffectingCombat = function() return A.combat end
+    _G.IsInInstance = function() return A.instance end
+    _G.SOUNDKIT = { IG_PVP_UPDATE = 1, RAID_WARNING = 2, PVP_THROUGH_QUEUE = 3, HARDCORE_DUEL = 4,
+        UI_PVP_HONOR_PRESTIGE_RANK_UP = 5, UI_RAID_BOSS_DEFEATED = 6, UI_GARRISON_TOAST_INVASION_ALERT = 7,
+        RAID_WARNING_2 = 8 }
+    _G.PlaySound = function(id) table.insert(A.played, id) end
+    LIB.fire("PLAYER_ENTERING_WORLD")
+    assert(loadfile("Announce.lua"))("Grudgekeeper", GK)
+    return GK, LIB, A
+end
+local MEDIA = "Interface\\AddOns\\Grudgekeeper\\Media\\"
+
+--- The nth announcement shown: its seal, its ribbon ("nil" for none) and its line.
+local function shownAt(A, n) return A.tex[2 * n - 1], A.tex[2 * n], A.txt[n] end
+
+test("announce when: always, noCombat, noCombatInInstance and noInstance", function()
+    local GK = bootAnnounce()
+    for _, c in ipairs({ true, false }) do
+        for _, i in ipairs({ true, false }) do
+            eq(GK.AnnounceAllowed("always", c, i), true)
+            eq(GK.AnnounceAllowed("noCombat", c, i), not c)
+            eq(GK.AnnounceAllowed("noCombatInInstance", c, i), not (c and i))
+            eq(GK.AnnounceAllowed("noInstance", c, i), not i)
+        end
+    end
+end)
+
+test("announce: the settings start as asked", function()
+    local GK = bootAnnounce()
+    eq(GK.db.spreeMine, "splash")
+    eq(GK.db.spreeGuild, "toast")
+    eq(GK.db.spreeEnded, "toast")
+    eq(GK.db.tormentor, "toast")
+    eq(GK.db.announceWhenMine, "always")
+    eq(GK.db.announceWhenGuild, "noCombat")
+    eq(next(GK.db.spreeSounds), nil)
+end)
+
+test("announce: a guildie's spree in a fight is held, and shown with the next one when it ends", function()
+    local GK, LIB, A = bootAnnounce()
+    A.combat = true
+    LIB.Fire("GK_SPREE", KARI, 5, "Merciless", false)
+    LIB.Fire("GK_SPREE", EDVARD, 3, "Bloodied", false)
+    eq(#A.txt, 0)
+    eq(#A.played, 0, "no sound while it is held")
+    A.combat = false
+    LIB.fire("PLAYER_REGEN_ENABLED")
+    eq(#A.txt, 2)
+    eq(A.txt[1], "Kari: 5 kills in a row")
+    eq(A.txt[2], "Edvard: 3 kills in a row")
+    eq(A.played[1], 2, "Merciless: the raid warning")
+    eq(A.played[2], 1)
+    LIB.fire("PLAYER_REGEN_ENABLED")
+    eq(#A.txt, 2, "nothing twice")
+end)
+
+test("announce: a held splash waits for the one before it, one after another", function()
+    local GK, LIB, A = bootAnnounce()
+    GK.db.spreeGuild = "splash"
+    A.combat = true
+    LIB.Fire("GK_SPREE", KARI, 5, "Merciless", false)
+    LIB.Fire("GK_SPREE", EDVARD, 7, "Butcher", false)
+    A.combat = false
+    LIB.fire("PLAYER_REGEN_ENABLED")
+    eq(#A.txt, 1)
+    eq(A.txt[1], "Kari: 5 kills in a row")
+    W.advance(3)
+    eq(#A.txt, 1, "still the first one's time")
+    W.advance(1)
+    eq(#A.txt, 2)
+    eq(A.txt[2], "Edvard: 7 kills in a row")
+end)
+
+test("announce: held ones are released when the area changes, if it allows them", function()
+    local GK, LIB, A = bootAnnounce()
+    GK.db.announceWhenGuild = "noInstance"
+    A.instance = true
+    LIB.fire("PLAYER_ENTERING_WORLD")
+    LIB.Fire("GK_SPREE", KARI, 3, "Bloodied", false)
+    eq(#A.txt, 0)
+    LIB.fire("ZONE_CHANGED_NEW_AREA")
+    eq(#A.txt, 0, "still inside")
+    A.instance = false
+    LIB.fire("ZONE_CHANGED_NEW_AREA")
+    eq(#A.txt, 1)
+end)
+
+test("announce: your own spree comes in a fight with the setting at always, and the game's own combat state counts", function()
+    local GK, LIB, A = bootAnnounce()
+    A.lockdown = true
+    LIB.Fire("GK_SPREE", ME, 7, "Butcher", true)
+    eq(#A.txt, 1)
+    GK.db.announceWhenMine = "noCombat"
+    LIB.Fire("GK_SPREE", ME, 10, "Reaper", true)
+    eq(#A.txt, 1, "held in the lockdown")
+    A.lockdown = false
+    A.combat = true
+    LIB.Fire("GK_SPREE", ME, 15, "Grudgebound", true)
+    eq(#A.txt, 1, "held in combat without the lockdown")
+end)
+
+test("announce: no more than 30 are held, the oldest goes", function()
+    local GK, LIB, A = bootAnnounce()
+    A.combat = true
+    for i = 1, 31 do LIB.Fire("GK_SPREE", "P" .. i .. "-Realm", 3, "Bloodied", false) end
+    A.combat = false
+    LIB.fire("PLAYER_REGEN_ENABLED")
+    eq(#A.txt, 30)
+    eq(A.txt[1], "P2: 3 kills in a row")
+    eq(A.txt[30], "P31: 3 kills in a row")
+end)
+
+test("announce: a kind set to off shows nothing at all, not even later", function()
+    local GK, LIB, A = bootAnnounce()
+    GK.db.spreeMine, GK.db.spreeGuild, GK.db.spreeEnded, GK.db.tormentor = "off", "off", "off", "off"
+    A.combat = true
+    LIB.Fire("GK_SPREE", ME, 7, "Butcher", true)
+    LIB.Fire("GK_SPREE", KARI, 7, "Butcher", false)
+    LIB.Fire("GK_SPREE_ENDED", KARI, 8, "Gankalot", false)
+    LIB.Fire("GK_TORMENTOR", ME, "Gankalot", 6, true)
+    A.combat = false
+    LIB.fire("PLAYER_REGEN_ENABLED")
+    eq(#A.txt, 0)
+    eq(#A.tex, 0)
+    eq(#A.played, 0)
+end)
+
+test("announce: the sound is the one picked, else the tier's own, and none when sounds are off", function()
+    local GK, LIB, A = bootAnnounce()
+    LIB.Fire("GK_SPREE", ME, 7, "Butcher", true)
+    eq(A.played[1], 3, "Butcher's own: PVP_THROUGH_QUEUE")
+    GK.db.spreeSounds.butcher = "kit:RAID_WARNING_2"
+    LIB.Fire("GK_SPREE", ME, 7, "Butcher", true)
+    eq(A.played[2], 8, "the pick")
+    GK.db.spreeSounds.butcher = "off"
+    LIB.Fire("GK_SPREE", ME, 7, "Butcher", true)
+    eq(#A.played, 2, "None picked")
+    GK.db.spreeSounds.butcher = nil
+    LIB.Fire("GK_SPREE_ENDED", ME, 5, "Gankalot", true)
+    LIB.Fire("GK_TORMENTOR", ME, "Gankalot", 4, true)
+    eq(A.played[3], 6)
+    eq(A.played[4], 7)
+    GK.db.sound = false
+    LIB.Fire("GK_SPREE", ME, 7, "Butcher", true)
+    LIB.Fire("GK_SPREE_ENDED", ME, 5, "Gankalot", true)
+    eq(#A.played, 4, "Sounds off mutes them")
+    eq(#A.txt, 7, "the announcement still comes")
+end)
+
+test("announce: the art of a tier, of a spree ended and of a tormentor", function()
+    local GK, LIB, A = bootAnnounce()
+    LIB.Fire("GK_SPREE", ME, 7, "Butcher", true)
+    local seal, ribbon = shownAt(A, 1)
+    eq(seal, MEDIA .. "spree_butcher")
+    eq(ribbon, MEDIA .. "spree_butcher_name")
+    LIB.Fire("GK_SPREE", KARI, 20, "Grudgebound", false)
+    seal, ribbon = shownAt(A, 2)
+    eq(seal, MEDIA .. "spree_grudgebound", "Grudgebound again at 20")
+    eq(ribbon, MEDIA .. "spree_grudgebound_name")
+    LIB.Fire("GK_SPREE_ENDED", ME, 12, "Gankalot", true)
+    seal, ribbon = shownAt(A, 3)
+    eq(seal, MEDIA .. "seal_broken")
+    eq(ribbon, "nil", "no ribbon")
+    LIB.Fire("GK_TORMENTOR", KARI, "Gankalot", 6, false)
+    seal, ribbon = shownAt(A, 4)
+    eq(seal, MEDIA .. "seal_black")
+    eq(ribbon, "nil", "no ribbon")
+end)
+
+test("announce: the lines", function()
+    local GK, LIB, A = bootAnnounce()
+    LIB.Fire("GK_SPREE", ME, 7, "Butcher", true)
+    LIB.Fire("GK_SPREE", KARI, 7, "Butcher", false)
+    LIB.Fire("GK_SPREE", ME, 25, "Grudgebound", true)
+    LIB.Fire("GK_SPREE_ENDED", ME, 12, "Gankalot", true)
+    LIB.Fire("GK_SPREE_ENDED", KARI, 12, "Gankalot", false)
+    LIB.Fire("GK_TORMENTOR", ME, "Gankalot", 6, true)
+    LIB.Fire("GK_TORMENTOR", KARI, "Gankalot", 6, false)
+    local want = { "7 kills in a row", "Kari: 7 kills in a row", "25 kills in a row",
+        "Your 12-kill spree ended (Gankalot)", "Kari's 12-kill spree ended (Gankalot)",
+        "You put an end to Gankalot, who had killed 6 of us", "Kari put an end to Gankalot, who had killed 6 of us" }
+    for i, line in ipairs(want) do eq(A.txt[i], line, "line " .. i) end
+    eq(#A.txt, #want)
+    local seal3 = shownAt(A, 3)
+    eq(seal3, MEDIA .. "spree_grudgebound")
+end)
+
+test("announce: toasts stack up to four, and /grudge spree shows a sample of both", function()
+    local GK, LIB, A = bootAnnounce()
+    for i = 1, 6 do LIB.Fire("GK_SPREE", KARI, 3, "Bloodied", false) end
+    eq(#A.txt, 6)
+    GK.AnnounceSample()
+    eq(#A.txt, 8)
+    eq(A.txt[7], "7 kills in a row")
+    local seal7 = shownAt(A, 7)
+    eq(seal7, MEDIA .. "spree_butcher")
+    eq(A.txt[8], "Glue Enjoyer: 7 kills in a row")
+    A.combat = true
+    local before = #A.played
+    GK.AnnounceSample()
+    eq(#A.txt, 10, "the sample ignores the when-rules")
+    eq(#A.played, before + 1, "one sound for the pair")
+end)
+
 say(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)
