@@ -29,3 +29,6 @@ group's killing blows (`PARTY_KILL`), the game's damage meter once a fight is ov
 death recap, and the enemy players you can see (nameplates, target, mouseover). Open world only - instances and battlegrounds hide who is who.
 
 Uses LibForever-1.0 (fetched by the packager, see `.pkgmeta`). MIT licence.
+
+The Grudgekeeper's voice calling out each kill spree tier (`Media/voice_*.mp3`) was made with
+[ElevenLabs](https://elevenlabs.io).
