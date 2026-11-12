@@ -12,7 +12,9 @@ local MEDIA = "Interface\\AddOns\\Grudgekeeper\\Media\\"
 local SPLASH_GAP = 3.5           -- a held splash waits this long after the one before it
 local SPLASH_HOLD, SPLASH_FADE, SPLASH_POP = 2.5, 0.6, 0.25
 local TOAST_HOLD, TOAST_FADE, MAX_TOASTS = 5, 0.6, 4
-local MAX_HELD = 30              -- a long raid can't build a backlog without end: the oldest goes
+-- Held announcements are capped: after a long raid in a fight-only setting, a backlog would otherwise all
+-- replay at once, long after it mattered. The oldest goes.
+local MAX_HELD = 30
 
 -- The sound of each kind until one is picked (GK.db.spreeSounds), rising with the tier.
 local DEFAULT_SOUNDS = {
@@ -41,7 +43,9 @@ end
 --- Whether an item may come now. leftCombat: the fight just ended, whatever the game still says.
 local function Allowed(item, leftCombat)
     local when = item.mine and GK.db.announceWhenMine or GK.db.announceWhenGuild
-    return GK.AnnounceAllowed(when, not leftCombat and InCombat(), not GK.InWorld())
+    -- IsInInstance() itself, not GK.InWorld(): that one is cached and cleared by Core when the area changes,
+    -- and this must not depend on whether Core's handler ran before ours
+    return GK.AnnounceAllowed(when, not leftCombat and InCombat(), (IsInInstance()) and true or false)
 end
 
 -- ---------------------------------------------------------------------------
@@ -105,14 +109,16 @@ end
 local active, pool = {}, {}       -- the toasts showing, oldest first, and the frames not in use
 
 local function Relayout()
-    local notice = GK.NoticeFrame and GK.NoticeFrame()
+    local notice = GK.NoticeFrame()
     for i, t in ipairs(active) do
         t:ClearAllPoints()
         if i == 1 then
             if notice then
                 t:SetPoint("TOPRIGHT", notice, "BOTTOMRIGHT", 0, -26)
             else
-                t:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -300, -300)
+                -- the letter is not built until one comes: where it will be
+                local rel, x, y = GK.NoticeCorner()
+                t:SetPoint("TOPRIGHT", UIParent, rel, x, y - 26)
             end
         else
             t:SetPoint("TOPRIGHT", active[i - 1], "BOTTOMRIGHT", 0, -4)
@@ -133,12 +139,12 @@ local function BuildToast()
     local t = CreateFrame("Frame", nil, UIParent)
     t:SetFrameStrata("HIGH")
     t:EnableMouse(false)
-    t:SetSize(244, 66)
+    t:SetSize(324, 84)
     t.seal = t:CreateTexture(nil, "ARTWORK")
-    t.seal:SetSize(48, 48)
+    t.seal:SetSize(64, 64)
     t.seal:SetPoint("TOPLEFT", t, "TOPLEFT", 0, 0)
     t.ribbon = t:CreateTexture(nil, "ARTWORK")
-    t.ribbon:SetSize(192, 48)
+    t.ribbon:SetSize(256, 64)
     t.ribbon:SetPoint("TOPLEFT", t.seal, "TOPRIGHT", 4, 0)
     t.line = t:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     t.line:SetJustifyH("LEFT")
@@ -165,11 +171,11 @@ local function ShowToast(item)
     -- under its ribbon; with no ribbon, beside the seal
     t.line:ClearAllPoints()
     if item.ribbon then
-        t.line:SetPoint("TOPLEFT", t, "TOPLEFT", 0, -50)
-        t.line:SetWidth(244)
+        t.line:SetPoint("TOPLEFT", t, "TOPLEFT", 0, -68)
+        t.line:SetWidth(324)
     else
         t.line:SetPoint("LEFT", t.seal, "RIGHT", 4, 0)
-        t.line:SetWidth(192)
+        t.line:SetWidth(256)
     end
     t.age = 0
     t:SetAlpha(1)
@@ -192,23 +198,26 @@ local function Show(item)
     end
 end
 
---- Show what is ready, in order: a toast at once, a splash when the one before it has had its time.
+--- Show what is ready: the toasts at once, the splashes in their own order, each when the one before it has
+--- had its time. A toast never waits for a splash.
 local function Drain()
-    while ready[1] do
-        local item = ready[1]
+    local waiting = {}
+    for _, item in ipairs(ready) do
         local wait = splashBusyUntil - GetTime()
-        if item.style == "splash" and wait > 0 then
-            if not drainTimer then
-                drainTimer = true
-                C_Timer.After(wait + 0.05, function()
-                    drainTimer = false
-                    Drain()
-                end)
-            end
-            return
+        if item.style == "splash" and (wait > 0 or #waiting > 0) then
+            waiting[#waiting + 1] = item
+        else
+            Show(item)
         end
-        table.remove(ready, 1)
-        Show(item)
+    end
+    ready = waiting
+    local wait = splashBusyUntil - GetTime()
+    if waiting[1] and wait > 0 and not drainTimer then
+        drainTimer = true
+        C_Timer.After(wait + 0.05, function()
+            drainTimer = false
+            Drain()
+        end)
     end
 end
 
@@ -224,7 +233,8 @@ end
 
 local function Tell(item)
     if Allowed(item) then
-        if #ready == 0 then Show(item) else ready[#ready + 1] = item Drain() end
+        ready[#ready + 1] = item
+        Drain()
     else
         held[#held + 1] = item
         if #held > MAX_HELD then table.remove(held, 1) end
@@ -238,11 +248,13 @@ LIB.On("ZONE_CHANGED_NEW_AREA", function() if #held > 0 then ReleaseHeld(false) 
 -- ---------------------------------------------------------------------------
 -- What is told
 -- ---------------------------------------------------------------------------
-local function Name(key)
-    local name = GK.Show(key)
+--- A name as it may be printed: a question mark when the game hides it.
+local function Hide(name)
     if GK.Secret(name) then return "?" end
     return name
 end
+
+local function Name(key) return Hide(GK.Show(key)) end
 
 --- setting: the kind's own (off, toast, splash). nil for anything else, which shows nothing.
 local function Style(setting)
@@ -258,8 +270,7 @@ local function Add(setting, mine, item)
     Tell(item)
 end
 
-LIB.Listen("GK_SPREE", function(who, spree, tierName, mine)
-    local _, key = GK.SpreeTierOf(spree)
+LIB.Listen("GK_SPREE", function(who, spree, tierName, mine, key)
     if not key then return end
     local line = ("%d kills in a row"):format(spree)
     if not mine then line = Name(who) .. ": " .. line end
@@ -270,16 +281,16 @@ end)
 LIB.Listen("GK_SPREE_ENDED", function(who, spree, killerName, mine)
     local line
     if mine then
-        line = ("Your %d-kill spree ended (%s)"):format(spree, killerName)
+        line = ("Your %d-kill spree ended (%s)"):format(spree, Hide(killerName))
     else
-        line = ("%s's %d-kill spree ended (%s)"):format(Name(who), spree, killerName)
+        line = ("%s's %d-kill spree ended (%s)"):format(Name(who), spree, Hide(killerName))
     end
     Add("spreeEnded", mine, { seal = MEDIA .. "seal_broken", line = line, sound = "ended" })
 end)
 
 LIB.Listen("GK_TORMENTOR", function(who, enemyName, count, mine)
-    local line = ("%s put an end to %s, who had killed %d of us"):format(mine and "You" or Name(who), enemyName, count)
-    Add("tormentor", mine, { seal = MEDIA .. "seal_black", line = line, sound = "tormentor" })
+    local line = ("%s put an end to %s, who had killed %d of us"):format(mine and "You" or Name(who), Hide(enemyName), count)
+    Add("spreeTormentor", mine, { seal = MEDIA .. "seal_black", line = line, sound = "tormentor" })
 end)
 
 --- /grudge spree: a sample splash and a sample toast, whatever the settings and the when-rules say.

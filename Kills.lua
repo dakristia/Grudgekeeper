@@ -109,8 +109,8 @@ function GK.RecordKill(v)
     -- What the kill made of it, for whatever shows it (GK_SPREE, GK_TORMENTOR). Only after the send: the
     -- guild hears the kill first.
     if points > 0 then
-        local tier = GK.SpreeTier(c.spree)
-        if tier then LIB.Fire("GK_SPREE", LIB.Me(), c.spree, tier, true) end
+        local tier, key = GK.SpreeTier(c.spree)
+        if tier then LIB.Fire("GK_SPREE", LIB.Me(), c.spree, tier, true, key) end
     end
     local tormented = GK.TormentorEnded(v.key)
     if tormented then LIB.Fire("GK_TORMENTOR", LIB.Me(), GK.Show(v.key), tormented, true) end
@@ -430,7 +430,7 @@ function GK.RecordDeath(v)
     local spree = GK.char.spree or 0
     GK.char.spree = 0
     GK.TormentorGrew(v.key)
-    if spree >= 3 then LIB.Fire("GK_SPREE_ENDED", LIB.Me(), spree, GK.Show(v.key), true) end
+    if spree >= GK.SPREE_MIN then LIB.Fire("GK_SPREE_ENDED", LIB.Me(), spree, GK.Show(v.key), true) end
     local week = GK.Week()
     week.d = week.d + 1
     local zone = GK.Zone()

@@ -193,7 +193,7 @@ local function Build(panel)
     local sMine = Choice(sprNote, "My sprees", "spreeMine", "splash", KINDS)
     local sGuild = Choice(sMine, "Guildies' sprees", "spreeGuild", "toast", KINDS)
     local sEnded = Choice(sGuild, "A spree ended", "spreeEnded", "toast", KINDS)
-    local sTorm = Choice(sEnded, "A tormentor put down", "tormentor", "toast", KINDS)
+    local sTorm = Choice(sEnded, "A tormentor put down", "spreeTormentor", "toast", KINDS)
     local wMine = Choice(sTorm, "Show mine", "announceWhenMine", "always", WHEN)
     local wGuild = Choice(wMine, "Show guildies'", "announceWhenGuild", "noCombat", WHEN)
     -- One sound for each kind, the tiers rising; the play button is picking (or picking again).

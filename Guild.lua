@@ -64,6 +64,7 @@ local PROTO = 1
 local MAX_OPEN_PER_POSTER = 10
 local MAX_ORDERS = 150
 local MAX_BOARD = 500
+local MAX_SPREES = 500
 local MAX_WANTED = 200
 local MAX_SLAIN = 200
 local MAX_SLAYERS = 20
@@ -1240,10 +1241,12 @@ local function OnKill(sender, f)
     GK.NoteSlain(sender, name, c, r, l, Int(f[10], 1, 1e6))
     KeepLook(name, f[11], f[12])
     local spree = Int(f[13], 0, 1e5)
-    if spree and (lastSpree[sender] or Count(lastSpree) < MAX_BOARD) then
+    if spree and (lastSpree[sender] or Count(lastSpree) < MAX_SPREES) then
+        local before = lastSpree[sender] or 0
         lastSpree[sender] = spree
-        local tier = GK.SpreeTier(spree)
-        if tier then LIB.Fire("GK_SPREE", sender, spree, tier, false) end
+        -- only a spree that grew: a kill worth nothing sends the same number again
+        local tier, key = GK.SpreeTier(spree)
+        if tier and spree > before then LIB.Fire("GK_SPREE", sender, spree, tier, false, key) end
     end
     local tormented = GK.TormentorEnded(name)
     if tormented then LIB.Fire("GK_TORMENTOR", sender, GK.Show(name), tormented, false) end
@@ -1267,7 +1270,7 @@ local function OnDeath(sender, f)
     GK.TormentorGrew(name)
     local spree = lastSpree[sender]
     if spree then
-        if spree >= 3 then LIB.Fire("GK_SPREE_ENDED", sender, spree, GK.Show(name), false) end
+        if spree >= GK.SPREE_MIN then LIB.Fire("GK_SPREE_ENDED", sender, spree, GK.Show(name), false) end
         lastSpree[sender] = 0
     end
 end

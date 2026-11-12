@@ -21,18 +21,33 @@ local function SavePosition(self)
     GK.db.notice = { point = point, relPoint = relPoint, x = x, y = y }
 end
 
-local function Place()
-    btn:ClearAllPoints()
+--- Where the letter icon goes: its own point, the point of UIParent it hangs from, and the offsets. The one
+--- the player saved, else the default.
+local function Position()
     local p = GK.db.notice
     if p and p.point then
-        btn:SetPoint(p.point, UIParent, p.relPoint or p.point, p.x or 0, p.y or 0)
-    else
-        -- By default at the top, left of where the quest tracker sits in a plain UI (the user's pick,
-        -- 2026-11-03): the spot it leaves empty. A fixed place on the screen, NOT tied to the tracker -
-        -- the user asked for that, so it stays put whatever the tracker or another addon does. A little
-        -- below the tracker's top, where Headstart's quest-group eye sits.
-        btn:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -300, -250)
+        return p.point, p.relPoint or p.point, p.x or 0, p.y or 0
     end
+    -- By default at the top, left of where the quest tracker sits in a plain UI (the user's pick,
+    -- 2026-11-03): the spot it leaves empty. A fixed place on the screen, NOT tied to the tracker -
+    -- the user asked for that, so it stays put whatever the tracker or another addon does. A little
+    -- below the tracker's top, where Headstart's quest-group eye sits.
+    return "TOPRIGHT", "TOPRIGHT", -300, -250
+end
+
+local function Place()
+    btn:ClearAllPoints()
+    local point, relPoint, x, y = Position()
+    btn:SetPoint(point, UIParent, relPoint, x, y)
+end
+
+--- Where the icon's bottom right corner is, as a point of UIParent and offsets from it, for what hangs under
+--- the icon before it has been built (Announce.lua's toasts).
+function GK.NoticeCorner()
+    local point, relPoint, x, y = Position()
+    local dx = point:find("RIGHT") and 0 or (point:find("LEFT") and SIZE or SIZE / 2)
+    local dy = point:find("BOTTOM") and 0 or (point:find("TOP") and -SIZE or -SIZE / 2)
+    return relPoint, x + dx, y + dy
 end
 
 local function Tooltip(self)

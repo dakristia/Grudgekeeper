@@ -54,7 +54,7 @@ local defaults = {
     spreeMine = "splash",    -- your spree milestone: "off", "toast" or "splash" (Announce.lua)
     spreeGuild = "toast",    -- a guildie's spree milestone
     spreeEnded = "toast",    -- a spree of ours or a guildie's that an enemy ended
-    tormentor = "toast",     -- one of the guild put an end to a tormentor
+    spreeTormentor = "toast", -- one of the guild put an end to a tormentor
     announceWhenMine = "always",       -- when yours may come: "always", "noCombat", "noCombatInInstance" or "noInstance"
     announceWhenGuild = "noCombat",    -- the same for a guildie's; one held back waits, then comes in order
     spreeSounds = {},        -- [tier key, "ended" or "tormentor"] = a sound (GK.SoundChoices); none picked: Announce.lua's own
@@ -466,26 +466,30 @@ GK.SPREE_TIERS = {
     { n = 15, key = "grudgebound", name = "Grudgebound" },
 }
 
---- The tier a spree of n is in now: its name and key, nil below the first tier.
-function GK.SpreeTierOf(n)
+GK.SPREE_MIN = GK.SPREE_TIERS[1].n       -- the shortest spree that is one: below it nothing is told
+
+--- The tier a spree of n is in (nil below the first), and whether n is the number that begins that tier.
+local function TierFor(n)
     if type(n) ~= "number" then return nil end
     local tier
     for _, t in ipairs(GK.SPREE_TIERS) do
         if n >= t.n then tier = t end
     end
     if not tier then return nil end
-    return tier.name, tier.key
+    local last = GK.SPREE_TIERS[#GK.SPREE_TIERS]
+    return tier, n == tier.n or (tier == last and n % 5 == 0)
+end
+
+--- The tier a spree of n is in now: its name and key, nil below the first tier.
+function GK.SpreeTierOf(n)
+    local tier = TierFor(n)
+    if tier then return tier.name, tier.key end
 end
 
 --- The tier a spree of n begins, when n is a milestone: its name and key. nil for any other number.
 function GK.SpreeTier(n)
-    if type(n) ~= "number" then return nil end
-    local last = GK.SPREE_TIERS[#GK.SPREE_TIERS]
-    for _, t in ipairs(GK.SPREE_TIERS) do
-        if n == t.n then return t.name, t.key end
-    end
-    if n > last.n and n % 5 == 0 then return last.name, last.key end
-    return nil
+    local tier, begins = TierFor(n)
+    if tier and begins then return tier.name, tier.key end
 end
 
 --- "20s", "1g 50s" - for chat and the wire. Letters draw coins with GK.Coins.
@@ -725,8 +729,8 @@ function GK.TormentorGrew(key)
     return t[key]
 end
 
---- The guild killed this enemy: their count goes back to 0. What it was when it was 3 or more - they were
---- a tormentor, and are no more - else nil. A count of 0 is no entry, which keeps the table small.
+--- The count of guildies this enemy killed, when it was 3 or more, so the kill that ends it can be told; nil
+--- otherwise. The count starts over either way (a count of 0 is no entry, which keeps the table small).
 function GK.TormentorEnded(key)
     local t = GK.Store().tormentors
     local n = t[key]
