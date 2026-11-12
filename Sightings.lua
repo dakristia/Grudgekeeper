@@ -18,6 +18,7 @@ local seen, byGuid, count = {}, {}, 0      -- [key] = { key, guid, c, r, rf, l, 
 local alerted, shared = {}, {}             -- [order key] = GetTime() of the last warning / report (and
                                            -- of the last time we noted where we stood)
 local plates = {}                          -- nameplate units on screen
+local trackedAt = {}                       -- [key] = GetTime() of the last "Tracked: ... is near"
 
 function GK.SeenCount() return count end
 
@@ -203,7 +204,15 @@ local function Unmark(unit)
     marked[unit] = nil
 end
 
-local function Mark(unit)
+-- The kill order's own seal, not a bare skull: the raid marker "skull" sits over nameplates too. A
+-- Tracked enemy gets its sister, black wax with an eye (the owner's generated art, 2026-11-12; Blizzard's
+-- Evil Eye icon stood in for it on the first day).
+local SEAL_MARK = "Interface\\AddOns\\Grudgekeeper\\Media\\mark"
+local EYE_MARK = "Interface\\AddOns\\Grudgekeeper\\Media\\eye"
+
+--- The kill order's seal over a plate, or for one of your Tracked the eye in its place (an order on them
+--- wins: the seal says more).
+local function Mark(unit, tracked)
     Unmark(unit)
     if not GK.db.plateMarks then return end
     local plate = PlateOf(unit)
@@ -216,27 +225,118 @@ local function Mark(unit)
         f:SetPoint("BOTTOM", plate, "TOP", 0, -6)
         f.tex = f:CreateTexture(nil, "OVERLAY")
         f.tex:SetAllPoints()
-        -- The kill order's own seal, not a bare skull: the raid marker "skull" sits over nameplates too.
-        f.tex:SetTexture("Interface\\AddOns\\Grudgekeeper\\Media\\mark")
         marks[plate] = f
     end
+    f.tex:SetTexture(tracked and EYE_MARK or SEAL_MARK)
     f:SetFrameLevel((plate:GetFrameLevel() or 1) + 20)
     f:Show()
     marked[unit] = plate
 end
 
--- Every plate on screen looked at again - but only when an order changed or the skulls were switched
--- on or off. It used to run on every change of any kind, a guildie's score included.
-local marksVersion, marksSetting = -1, nil
+-- ---------------------------------------------------------------------------
+-- Tracked: enemies you keep an eye on, yours alone - nothing about them is ever sent. At the top of
+-- your Grudges, an eye over their plate and a warning when they are near: "egen watch list ... øverst på
+-- grudges ... Tracking eller Nemesises eller whatever", with the warning and the plate mark (the owner,
+-- 2026-11-12). Not "Nemesis": the board already names the one who killed you most so.
+-- ---------------------------------------------------------------------------
+local MAX_TRACKED = 25
+local trackVersion = 0                     -- moves at every change, for the plates and the name index
+local trackIndex, trackIndexed = {}, -1    -- [name without realm] = the key it is tracked under
+
+--- The key someone is tracked under, and its record: the same key, else the same name on another of the
+--- server's realms (a name typed in is filed under ours; the plate names theirs). s: the sighting, which
+--- keeps its realm-less name so a plate costs no string work after the first look.
+local function TrackedOf(key, s)
+    local list = GK.char and GK.char.tracked
+    if not (list and type(key) == "string") then return nil end
+    if list[key] then return key, list[key] end
+    if not next(list) then return nil end
+    if trackIndexed ~= trackVersion then
+        wipe(trackIndex)
+        for k in pairs(list) do trackIndex[(k:gsub("%-[^%-]*$", ""))] = k end
+        trackIndexed = trackVersion
+    end
+    local plain = s and s.plain
+    if not plain then
+        plain = key:gsub("%-[^%-]*$", "")
+        if s then s.plain = plain end
+    end
+    local k = trackIndex[plain]
+    return k, k and list[k]
+end
+
+function GK.IsTracked(key) return TrackedOf(key) ~= nil end
+
+--- Track an enemy: t = { key, c, r, l }. False, and why, when it can't be: yourself, a guildie, or a full list.
+function GK.Track(t)
+    if not (GK.char and t and type(t.key) == "string") or LIB.IsMyStoredName(t.key) then return false end
+    if LIB.roster and LIB.roster[t.key] then return false, "guildie" end
+    local list = GK.char.tracked
+    local key = TrackedOf(t.key) or t.key
+    if not list[key] then
+        local n = 0
+        for _ in pairs(list) do n = n + 1 end
+        if n >= MAX_TRACKED then return false, "full" end
+    end
+    local e = list[key] or { t = time() }
+    e.c, e.r, e.l = t.c or e.c, t.r or e.r, t.l or e.l
+    list[key] = e
+    trackVersion = trackVersion + 1
+    GK.Changed()
+    -- Whoever is in sight now is looked at again, so tracking someone in front of you warns at once, as
+    -- their coming into sight would. Only the plates were looked at again before, and the eye came with no
+    -- warning and no sound: "og det lager ingen lyd" (the owner, 2026-11-12).
+    for unit in pairs(plates) do GK.See(unit) end
+    GK.See("target")
+    GK.See("mouseover")
+    return true
+end
+
+--- Track from a click (the picker, the poster, the right-click menu): as GK.Track, and when it can't, one
+--- line saying why - the click must not just do nothing.
+function GK.TrackSaying(t)
+    local ok, why = GK.Track(t)
+    if why == "full" then
+        print(("%s: you track %d already - stop tracking one of them first."):format(GK.TAG, MAX_TRACKED))
+    elseif why == "guildie" then
+        print(GK.TAG .. ": that's a guildie. Tracking is for enemies.")
+    end
+    return ok
+end
+
+function GK.Untrack(key)
+    local k = TrackedOf(key)
+    if not k then return end
+    GK.char.tracked[k] = nil
+    trackedAt[k] = nil
+    trackVersion = trackVersion + 1
+    GK.Changed()
+end
+
+--- A tracked enemy in sight: what they look like now goes on their record, and a warning - at most one in
+--- ALERT_GAP, as a kill order's target. Not asked for in the settings: tracking them was the asking.
+local function TrackedNear(key, e, s)
+    e.c, e.r, e.l = s.c or e.c, s.r or e.r, s.l or e.l
+    local now = GetTime()
+    if trackedAt[key] and now - trackedAt[key] < ALERT_GAP then return end
+    trackedAt[key] = now
+    GK.Warn(("Tracked: %s is near!"):format(GK.Show(key)), true, nil, key, key)
+end
+
+-- Every plate on screen looked at again - but only when an order or the Tracked changed, or the skulls
+-- were switched on or off. It used to run on every change of any kind, a guildie's score included.
+local marksVersion, marksSetting, marksTracked = -1, nil, -1
 local function RefreshMarks()
     local version, on = GK.OrdersVersion(), GK.db.plateMarks
-    if version == marksVersion and on == marksSetting then return end
-    marksVersion, marksSetting = version, on
+    if version == marksVersion and on == marksSetting and trackVersion == marksTracked then return end
+    marksVersion, marksSetting, marksTracked = version, on, trackVersion
     local world = GK.InWorld()
     for unit in pairs(plates) do
         local key, guid
         if world then key, guid = GK.UnitIdentity(unit) end
-        if key and GK.OrderOn(key, guid) then Mark(unit) else Unmark(unit) end
+        if key and GK.OrderOn(key, guid) then Mark(unit)
+        elseif key and TrackedOf(key, seen[key]) then Mark(unit, true)
+        else Unmark(unit) end
     end
 end
 
@@ -388,8 +488,10 @@ function GK.See(unit)
     local f = GK.char.foes[key]
     if f then f.l, f.c, f.r = s.l or f.l, s.c or f.c, s.r or f.r end
     local order = GK.OrderOn(key, s.guid)
+    local trackedKey, tracked
+    if not order then trackedKey, tracked = TrackedOf(key, s) end
     if plates[unit] then
-        if order then Mark(unit) else Unmark(unit) end
+        if order then Mark(unit) elseif tracked then Mark(unit, true) else Unmark(unit) end
     end
     -- Someone the guild has a record of: keep what they look like. Kept again when it changed, so a
     -- barber's new sex is written at the next look; nothing written when it didn't.
@@ -399,7 +501,7 @@ function GK.See(unit)
             s.keptRf, s.keptSx = s.rf, s.sx
         end
     end
-    if order then Spotted(order, s) end
+    if order then Spotted(order, s) elseif tracked then TrackedNear(trackedKey, tracked, s) end
 end
 
 function GK.StartSightings()

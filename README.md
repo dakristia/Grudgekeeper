@@ -9,6 +9,9 @@ leaderboard, and kill orders with a bounty on them.
   someone on Shame**, **Give someone kudos** - and the kill orders page's Marked heading has **mark someone**
   beside it. It asks who: your target, the enemies you met lately, your group and who just left it, or a
   name you type. Click a column heading to sort by it.
+- **Track someone** at the top of your Grudges, or **Track** in the right-click menu on an enemy: your own
+  list of enemies to keep an eye on, never shared. One of them near warns you and wears an eye over their
+  nameplate.
 - `/grudge test` puts five sample letters in your pile.
 - Right-click a player and pick **Grudgekeeper profile**: a wanted poster for an enemy, the record of a
   guildie. On an enemy, **Post a kill order** is right below it, and for an officer **Watch their guild**

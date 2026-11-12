@@ -290,17 +290,52 @@ end
 -- first character in after it, and never on a first install, where nothing is new to anyone. Letters
 -- off skips it as it skips every letter. "en bitteliten 'what's new' vindu som forklarer nye endringene
 -- med assists og kalkuleringer" (the owner, 2026-11-12) - a letter, as all his news is, never a window
--- of its own. The next one: a new NEWS, and new words in NoteContent.
-local NEWS = "1.4.0"
+-- of its own. Someone who skipped a release gets each letter they missed, oldest first: 1.5.0's came the
+-- same day as 1.4.0's (the owner, 2026-11-12: "må vel ha enda en what's new da"). The next one: its id at
+-- the end of NEWS, and its words in NEWS_WORDS.
+local NEWS = { "1.4.0", "1.5.0" }
+local LATEST = NEWS[#NEWS]
+
+-- Each letter in his voice: two short paragraphs with air between and no numbers, and a button to where
+-- it is. The first draft gave rules with their numbers in one block and read as a manual: "nei, dette
+-- synes jeg ikke er et bra brev" (the owner, 2026-11-12). The numbers are on the leaderboard's Points
+-- heading (Window.lua). { title, paragraphs, seal, button, what the button does }
+local NEWS_WORDS = {
+    ["1.4.0"] = { "A word from the keeper", {
+        "I've started writing down assists. Help a groupmate bring someone down, and part of the blood is yours.",
+        "",
+        "Avenging a fallen guildie pays when you come back for the killer - not in the fight where they fell.",
+    }, "seal_red", "Leaderboard", function() GK.OpenWindow(2) end },
+    ["1.5.0"] = { "Eyes on them", {
+        "Track an enemy, and I'll tell you when they come near. You'll know them by the eye over their head.",
+        "",
+        "They wait at the top of your Grudges, and nobody else reads that page.",
+    }, "seal_black", "Grudges", function() GK.OpenLedgerPage("Grudges") end },
+}
+
+--- The news letters not seen yet, oldest first: all of them when none was, those after the one seen last,
+--- and none for an id we don't know (one from a newer Grudgekeeper, back on this one).
+local function Unseen(seen)
+    if seen == nil then return NEWS end
+    for i = #NEWS, 1, -1 do
+        if NEWS[i] == seen then
+            local out = {}
+            for j = i + 1, #NEWS do out[#out + 1] = NEWS[j] end
+            return out
+        end
+    end
+    return nil
+end
 
 function GK.DeliverNews(fresh)
-    if fresh then GK.db.newsSeen = NEWS end
-    if GK.db.newsSeen == NEWS then return end
+    if fresh then GK.db.newsSeen = LATEST end
+    if GK.db.newsSeen == LATEST then return end
     -- a moment after login, so it lands with the rest of the UI rather than under the loading screen
     C_Timer.After(5, function()
-        if GK.db.newsSeen == NEWS then return end
-        GK.db.newsSeen = NEWS
-        Add("news", { news = NEWS }, true)
+        local due = Unseen(GK.db.newsSeen)
+        if not due then return end
+        GK.db.newsSeen = LATEST
+        for _, id in ipairs(due) do Add("news", { news = id }, true) end
     end)
 end
 
@@ -508,16 +543,10 @@ local function NoteContent(L)
     local function PostOn() GK.OpenPost({ key = L.n, guid = L.guid, c = L.c, r = L.r, l = L.l }) end
     local closing = CLOSING[L.kind]
     if L.kind == "news" then
-        -- What's new (GK.DeliverNews): him talking, two short paragraphs with air between, and no numbers -
-        -- those are on the leaderboard's tooltip (Window.lua). The first one listed the rules with their
-        -- numbers, three paragraphs in a block, and read as a manual: "nei, dette synes jeg ikke er et bra
-        -- brev" (the owner, 2026-11-12).
-        p[1] = "I've started writing down assists. Help a groupmate bring someone down, and part of the blood"
-            .. " is yours."
-        p[2] = ""
-        p[3] = "Avenging a fallen guildie pays when you come back for the killer - not in the fight where they fell."
-        action = { "Leaderboard", function() GK.OpenWindow(2) end }
-        return "A word from the keeper", p, nil, "seal_red", false, action
+        -- What's new (GK.DeliverNews, NEWS_WORDS); a sample has no id and says the latest
+        local w = NEWS_WORDS[L.news] or NEWS_WORDS[LATEST]
+        for i, line in ipairs(w[2]) do p[i] = line end
+        return w[1], p, nil, w[3], false, { w[4], w[5] }
     end
     if L.kind == "kill" then
         -- A kill gets a letter only for a new title (Kills.lua), and it says three things: the title, the kill

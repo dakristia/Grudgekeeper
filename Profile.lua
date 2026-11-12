@@ -335,9 +335,14 @@ function GK.PosterCard(t, inLedger)
             GK.OpenPost({ key = key, guid = guid, c = c, r = r, l = l })
         end }
     end
+    -- The second button, beside the kill order's (two fit): Stop tracking for one you track (Sightings.lua);
+    -- else Forget grudge for a grudge of yours; else Track. Track someone you have a grudge with from the
+    -- top of your Grudges or the right-click menu.
     -- A grudge of yours can be forgotten (GK.ForgetGrudge, Guild.lua): a wrong one stayed for good before.
     -- It asks twice - the first click readies it for a few seconds and the button says so.
-    if f and fkey and (f.k or 0) + (f.d or 0) + (f.a or 0) > 0 then
+    if GK.IsTracked and GK.IsTracked(key) then
+        d.buttons[#d.buttons + 1] = { "Stop tracking", function() GK.Untrack(key) end }
+    elseif f and fkey and (f.k or 0) + (f.d or 0) + (f.a or 0) > 0 then
         local armed = forgetArmed == fkey and GetTime() < forgetUntil
         d.buttons[#d.buttons + 1] = { armed and "Really forget?" or "Forget grudge", function()
             if forgetArmed == fkey and GetTime() < forgetUntil then
@@ -349,6 +354,8 @@ function GK.PosterCard(t, inLedger)
             C_Timer.After(FORGET_ARMED_FOR + 0.1, GK.Changed)        -- back to Forget grudge
             GK.Changed()
         end }
+    elseif GK.TrackSaying then
+        d.buttons[#d.buttons + 1] = { "Track", function() GK.TrackSaying({ key = key, c = c, r = r, l = l }) end }
     end
     if not d.big and killedUs > 0 then d.big, d.caption = tostring(killedUs), "killed us" end
     if o then
@@ -736,6 +743,13 @@ local function OnEnemyMenu(_, root, ctx)
     -- and the kill order itself, one click from the enemy: opening the ledger to post one was too much
     -- work (the owner, 2026-11-05). The label says which of the sheet's three cases it will open.
     AddLine(root, function() GK.ShowPoster(t) end, GK.PostLabel(t), function() GK.OpenPost(t) end)
+    -- Tracked (Sightings.lua): yours alone, one line that says which way it goes
+    if GK.IsTracked then
+        local on = GK.IsTracked(t.key)
+        root:CreateButton(on and "Stop tracking" or "Track", function()
+            if on then GK.Untrack(t.key) else GK.TrackSaying(t) end
+        end)
+    end
     -- Their guild on watch, or off it, for an officer (Notes.lua): the right spelling comes from the game,
     -- which typing one wouldn't. One guild at a time, so the line says which it replaces.
     local ok, guild = pcall(GetGuildInfo, unit)

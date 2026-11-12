@@ -140,7 +140,7 @@ local function Build(panel)
         function(key) GK.db.nearSound = key end)
     nearSound.which = "near"
     local marks = Check(nearSound, "Skull over targets' nameplates", "plateMarks",
-        "Over anyone with an open order on them. Needs enemy nameplates on (V).")
+        "Over anyone with an open order on them, and the eye over those you track. Needs enemy nameplates on (V).")
     local pins = Check(marks, "Last seen on the map", "mapPins",
         "Where a guildie saw an order's target, for 15 minutes. Click it for the poster.")
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.0
+
+- **Tracked.** Your own list of enemies to keep an eye on. Use **Track someone** at the top of your Grudges, or **Track** in the right-click menu on an enemy. They sit at the top of your Grudges, the one seen latest first. When one of them is near, you get the same warning as for a kill order's target, and an eye over their nameplate. **Stop tracking** is on their poster and in the same menu. Nobody else sees the list. You can track 25 at most.
+
 ## 1.4.0
 
 - **Assists.** When someone in your group lands the killing blow on an enemy player you hurt in that fight, it counts for you as an assist: the kill's points less one, at least one, and none for a grey or farmed kill. The game's damage meter tells who hit them once the fight is over, so an assist shows a moment after combat ends. Your pet's damage counts as yours. A mob's or a stranger's killing blow is no assist, because the meter only knows you and your group. Assists show in a new A column on the leaderboard, in your grudges, on the cards, in the guild's news and in the minimap button's tooltip. A guildie on an older Grudgekeeper shows "-" there. An assist that takes you to a new title brings its letter, as a kill does.

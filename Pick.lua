@@ -25,6 +25,7 @@ local MAX_RECENT = 40           -- and at most this many of them are remembered
 local KINDS = {
     order = { title = "Who gets the kill order?", enemy = true },
     kos = { title = "Who do you mark?", enemy = true, list = "kos" },
+    track = { title = "Who do you track?", enemy = true },
     watch = { title = "Who goes on Shame?", list = "watch" },
     kudos = { title = "Who gets kudos?", list = "kudos" },
     guild = { title = "Which guild goes on watch?", guild = true, hint = "Type the guild's name",
@@ -109,7 +110,8 @@ local function Suggestions(kind)
         out[#out + 1] = { t = t, why = why }
     end
     -- your target: an enemy for a kill order, any player for the lists
-    local target = (kind == "order") and GK.ReadUnit("target") or (GK.ReadPlayer and GK.ReadPlayer("target"))
+    local target = (kind == "order" or kind == "track") and GK.ReadUnit("target")
+        or (GK.ReadPlayer and GK.ReadPlayer("target"))
     if target then
         Add(target, GK.Describe(target.l, target.c, target.r), "Your target")
     end
@@ -263,6 +265,8 @@ local function Pick(r)
         else print(GK.TAG .. ": only an officer or the guild master can put a guild on watch.") end
     elseif kind == "order" then
         GK.OpenPost(r.t)
+    elseif kind == "track" then
+        GK.TrackSaying(r.t)
     else
         GK.OpenNoteSheet(r.t, KINDS[kind].list)
     end

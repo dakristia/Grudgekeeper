@@ -61,6 +61,7 @@ local charDefaults = {
     -- week = { id, p, k, d, a }: this week's score, made by GK.Week and started over at the weekly reset
     log = {},                -- newest first: { k = "K", "A" or "D", t, n, c, r, l, z, p, o, w (an assist's killer) }
     foes = {},               -- [key] = { n, c, r, l, k, d, a, last, lastKill, lastAssist, lastDeath, hits = { time, ... } }
+    tracked = {},            -- [key] = { t, c, r, l }: enemies you track, yours alone (Sightings.lua, GK.Track)
     letters = {},            -- oldest first (Letters.lua)
     letterId = 0,
     -- pc, u, parts: this PC's mark on the record, whether it held a score before marks existed, and the

@@ -2516,26 +2516,35 @@ test("what's new: login says whether the account is new", function()
     eq(W.started.StartLetters[1], false, "a saved table from before")
 end)
 
-test("what's new: one letter to an account that played before, none on a first install or with letters off", function()
+test("what's new: every letter missed, oldest first, once; none on a first install or with letters off", function()
     local GK = bootSheets({ me = ME })
     function GK.NoticeUpdate() end
-    GK.db.newsSeen = nil
+    GK.db.newsSeen = nil                           -- on 1.3.0, which had no letters: both
     GK.DeliverNews(false)
     eq(#GK.char.letters, 0, "a moment after login, not under the loading screen")
     W.advance(6)
-    eq(#GK.char.letters, 1)
-    eq(GK.char.letters[1].kind, "news")
-    eq(GK.db.newsSeen, "1.4.0")
+    eq(#GK.char.letters, 2)
+    eq(GK.char.letters[1].news, "1.4.0", "the oldest first")
+    eq(GK.char.letters[2].news, "1.5.0")
+    eq(GK.db.newsSeen, "1.5.0")
     GK.DeliverNews(false)                          -- the next login
     W.advance(6)
-    eq(#GK.char.letters, 1, "once")
+    eq(#GK.char.letters, 2, "once")
+
+    local GK1 = bootSheets({ me = ME })
+    function GK1.NoticeUpdate() end
+    GK1.db.newsSeen = "1.4.0"                      -- on 1.4.0: its letter came then
+    GK1.DeliverNews(false)
+    W.advance(6)
+    eq(#GK1.char.letters, 1)
+    eq(GK1.char.letters[1].news, "1.5.0", "only the one after it")
 
     local GK2 = bootSheets({ me = ME })
     function GK2.NoticeUpdate() end
     GK2.DeliverNews(true)
     W.advance(6)
     eq(#GK2.char.letters, 0, "a first install: nothing is new")
-    eq(GK2.db.newsSeen, "1.4.0", "and not later either")
+    eq(GK2.db.newsSeen, "1.5.0", "and not later either")
 
     local GK3 = bootSheets({ me = ME })
     function GK3.NoticeUpdate() end
@@ -2543,23 +2552,35 @@ test("what's new: one letter to an account that played before, none on a first i
     GK3.DeliverNews(false)
     W.advance(6)
     eq(#GK3.char.letters, 0, "letters off: none")
-    eq(GK3.db.newsSeen, "1.4.0")
+    eq(GK3.db.newsSeen, "1.5.0")
+
+    local GK4 = bootSheets({ me = ME })
+    function GK4.NoticeUpdate() end
+    GK4.db.newsSeen = "9.0.0"                      -- a newer Grudgekeeper's, back on this one
+    GK4.DeliverNews(false)
+    W.advance(6)
+    eq(#GK4.char.letters, 0, "a letter from a newer version: none of these")
+    eq(GK4.db.newsSeen, "9.0.0", "and its id kept")
 end)
 
 -- "nei, dette synes jeg ikke er et bra brev" (the owner, 2026-11-12, of three paragraphs of rules with
 -- their numbers, in a block): him talking, two short paragraphs with air between, no numbers.
-test("what's new: a short note from him about no one, with the leaderboard a click away", function()
+test("what's new: short notes from him about no one, each with a button to where it is", function()
     local GK = bootSheets({ me = ME })
-    local d = GK.LetterContent({ id = 1, kind = "news" })
-    eq(d.note, true)
-    eq(d.title, "A word from the keeper")
-    eq(d.c, nil, "no class badge: it is about no one")
-    eq(#d.lines, 3, "two paragraphs and the line between, no closing line")
-    eq(d.lines[2], "", "air between them")
-    assert(d.lines[1]:find("assists", 1, true), d.lines[1])
-    assert(d.lines[3]:find("not in the fight where they fell", 1, true), d.lines[3])
-    assert(not table.concat(d.lines, " "):find("%d"), "no numbers: those are on the leaderboard's Points heading")
-    eq(d.buttons[1][1], "Leaderboard")
+    local want = { ["1.4.0"] = { "A word from the keeper", "assists", "Leaderboard" },
+        ["1.5.0"] = { "Eyes on them", "Track an enemy", "Grudges" } }
+    for id, w in pairs(want) do
+        local d = GK.LetterContent({ id = 1, kind = "news", news = id })
+        eq(d.note, true, id)
+        eq(d.title, w[1], id)
+        eq(d.c, nil, id .. ": no class badge, it is about no one")
+        eq(#d.lines, 3, id .. ": two paragraphs and the line between, no closing line")
+        eq(d.lines[2], "", id .. ": air between them")
+        assert(d.lines[1]:find(w[2], 1, true), d.lines[1])
+        assert(not table.concat(d.lines, " "):find("%d"), id .. ": no numbers, those are on the Points heading")
+        eq(d.buttons[1][1], w[3], id)
+    end
+    eq(GK.LetterContent({ id = 1, kind = "news", sample = true }).title, "Eyes on them", "a sample: the latest")
 end)
 
 test("the settings page and the help say the release, not how many changes there have been", function()

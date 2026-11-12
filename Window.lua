@@ -363,8 +363,45 @@ local grudgeOrder = 1
 --- The order the Grudges page is in now, by its word: "fought", "recent" or "name".
 function GK.GrudgeOrder() return GRUDGE_ORDERS[grudgeOrder][1] end
 
+--- The Tracked section at the top of Grudges: the enemies you keep an eye on (Sightings.lua, GK.Track),
+--- whoever was seen latest first - a warning names them, and here is where to find them after it.
+local function TrackedItems(items, c)
+    local tracked = {}
+    for key, t in pairs(c.tracked or {}) do
+        tracked[#tracked + 1] = { key = key, t = t, s = GK.Seen and GK.Seen(key), name = GK.Show(key) }
+    end
+    if #tracked == 0 then return end
+    table.sort(tracked, function(a, b)
+        local x, y = a.s and a.s.t or -1, b.s and b.s.t or -1
+        if x ~= y then return x > y end
+        if a.name:lower() ~= b.name:lower() then return a.name:lower() < b.name:lower() end
+        return a.key < b.key
+    end)
+    items[#items + 1] = { header = true, name = "Tracked", order = "track someone",
+        clickTip = "Track an enemy: a warning when they are near, and an eye over their plate",
+        click = function() GK.OpenPicker("track") end }
+    local clock, wall = GetTime(), time()
+    for _, e in ipairs(tracked) do
+        local f = c.foes[e.key]
+        local sub
+        if e.s then
+            sub = "seen " .. GK.Ago(wall - (clock - e.s.t)) .. (e.s.z and (" \194\183 " .. e.s.z) or "")
+        elseif f and f.last then
+            sub = "last met " .. GK.Ago(f.last)
+        else
+            sub = "tracked since " .. GK.Ago(e.t.t)
+        end
+        local look = f or e.t
+        local you, they = f and (f.k or 0), f and (f.d or 0)
+        items[#items + 1] = { key = "t:" .. e.key, name = e.name, face = { key = e.key, c = look.c },
+            desc = Short(look.l, look.c, look.r), sub = sub, score = f and { you, they } or nil,
+            select = PosterSpec(e.key, look), you = you, they = they, ts = f and f.last or e.t.t, own = true }
+    end
+end
+
 local function GrudgeItems()
     local items, c = {}, GK.char
+    TrackedItems(items, c)
     -- the last thing that happened with each of them: your log is newest first
     local lastOf = {}
     for _, e in ipairs(c.log) do
@@ -576,6 +613,7 @@ GK.LedgerPages = {
       sub = function() return "Who has killed the guild most" end },
     -- no heading row: each grudge says its own score, and the order is a word on the section's line
     { name = "Grudges", items = GrudgeItems, headings = {}, icon = ICONS .. "Ability_DualWield",
+      add = { text = "Track someone", kind = "track" },
       sub = function() return "Who you have a history with" end,       -- not everyone: LIST_MAX of them
       default = function() return { key = "me", select = { kind = "record", key = LIB.Me() } } end },
     { name = "News", items = NewsItems, sortable = true, max = LIST_MAX, icon = ICONS .. "INV_Scroll_03",
@@ -2256,6 +2294,14 @@ function GK.OpenWindow(page)
     win:Show()
     win:Raise()
     Refresh()
+end
+
+--- A page by its name ("Grudges"): past the first two, a page's number can move (GK.AddLedgerPage).
+function GK.OpenLedgerPage(name)
+    for i, def in ipairs(GK.LedgerPages) do
+        if def.name == name then return GK.OpenWindow(i) end
+    end
+    GK.OpenWindow(1)
 end
 
 --- The kill orders page, on this order (by its key) when it has a row there; else the page as it was.
