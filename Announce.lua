@@ -64,9 +64,10 @@ local FIRE = {
     reaper = { size = 2.32, alpha = 1, embers = 14 },
     grudgebound = { size = 2.54, alpha = 1, embers = 22 },
 }
-local MAX_EMBERS = 22
+local MAX_EMBERS = 0
+for _, fire in pairs(FIRE) do MAX_EMBERS = math.max(MAX_EMBERS, fire.embers) end
 -- spree_flames.tga is a 4x4 sheet of a 16-frame loop, played at 12 frames a second
-local FLAME_FRAMES, FLAME_COLS, FLAME_FPS = 16, 4, 12
+local FLAME_FRAMES, FLAME_COLS, FLAME_ROWS, FLAME_FPS = 16, 4, 4, 12
 local SHINE_START, SHINE_TIME, SHINE_WIDTH = 0.35, 0.6, 60
 
 --- A dark outline on a line of text, so it reads over snow and sunlit sand as well as at night.
@@ -131,8 +132,7 @@ local function BuildSplash()
         if fire then
             local i = math.floor(age * FLAME_FPS) % FLAME_FRAMES
             local col, row = i % FLAME_COLS, math.floor(i / FLAME_COLS)
-            local rows = FLAME_FRAMES / FLAME_COLS
-            self.flames:SetTexCoord(col / FLAME_COLS, (col + 1) / FLAME_COLS, row / rows, (row + 1) / rows)
+            self.flames:SetTexCoord(col / FLAME_COLS, (col + 1) / FLAME_COLS, row / FLAME_ROWS, (row + 1) / FLAME_ROWS)
             self.flames:SetAlpha(fire.alpha * math.min(1, age / SPLASH_POP))
             local catching = math.min(1, age / 0.3)
             for n = 1, fire.embers do
