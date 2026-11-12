@@ -836,14 +836,16 @@ end
 -- ---------------------------------------------------------------------------
 -- A sound to pick, under its box: the game's own dropdown. Picking one plays it, so you hear what you chose,
 -- and picking the same one again plays it again. No dropdown in this client: no row. get() is the key in use,
--- set(key) keeps a new one; for a Shame player joining here, and for a target near (Options.lua).
-function GK.SoundRow(f, above, get, set)
+-- set(key) keeps a new one; for a Shame player joining here, and for a target near (Options.lua). `text`
+-- names the row ("Sound" when none): a row with a name gets a label of one width, so a list lines up.
+function GK.SoundRow(f, above, get, set, text)
     local row = CreateFrame("Frame", nil, f)
     row:SetSize(400, 28)
     row:SetPoint("TOPLEFT", above, "BOTTOMLEFT", 0, -2)
     local label = row:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
     label:SetPoint("LEFT", 30, 0)                 -- under the box's label, not its box
-    label:SetText("Sound")
+    label:SetText(text or "Sound")
+    if text then label:SetWidth(120) label:SetJustifyH("LEFT") end
     local ok, dd = pcall(CreateFrame, "DropdownButton", nil, row, "WowStyle1DropdownTemplate")
     if not (ok and type(dd) == "table" and dd.SetupMenu) then
         label:Hide()

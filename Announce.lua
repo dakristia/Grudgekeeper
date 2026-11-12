@@ -24,6 +24,7 @@ local DEFAULT_SOUNDS = {
     ended = "kit:UI_RAID_BOSS_DEFEATED",
     tormentor = "kit:UI_GARRISON_TOAST_INVASION_ALERT",
 }
+GK.SPREE_DEFAULT_SOUNDS = DEFAULT_SOUNDS     -- for the settings page, which shows these until one is picked
 
 --- Whether an announcement may come now, by its when-setting and where we are.
 function GK.AnnounceAllowed(when, inCombat, inInstance)

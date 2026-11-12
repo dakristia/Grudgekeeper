@@ -3128,5 +3128,110 @@ test("announce: toasts stack up to four, and /grudge spree shows a sample of bot
     eq(#A.played, before + 1, "one sound for the pair")
 end)
 
+-- ---------------------------------------------------------------------------
+-- The settings page (Options.lua): the kill spree rows write the right setting
+-- ---------------------------------------------------------------------------
+--- Options.lua built over recording frames: O.menus[key] is the dropdown for that setting (its menu entries once
+--- opened), O.sounds[key] the sound row for that sound key. Every other widget does nothing.
+local function bootOptions()
+    local GK = bootAnnounce()
+    GK.addonVersion = "test"
+    local O = { menus = {}, sounds = {}, texts = {} }
+    local object = {}
+    object.__index = function(self, method)
+        if method == "SetScript" then return function(_, name, fn) rawset(self, "on" .. name, fn) end end
+        if method == "SetupMenu" then return function(dd, fn) rawset(dd, "menu", fn) end end
+        if method == "SetText" then return function(_, text) table.insert(O.texts, text) end end
+        if method:find("^Create") then return function() return setmetatable({}, object) end end
+        return function() end
+    end
+    _G.CreateFrame = function(kind, _, parent)
+        local frame = setmetatable({}, object)
+        if kind == "DropdownButton" then table.insert(O.menus, { dd = frame, row = parent }) end
+        return frame
+    end
+    GK.SoundRow = function(_, _, get, set, text)
+        local row = { get = get, set = set, text = text }
+        table.insert(O.sounds, row)
+        return row
+    end
+    assert(loadfile("Options.lua"))("Grudgekeeper", GK)
+    local panel
+    local create = _G.CreateFrame
+    _G.CreateFrame = function(kind, ...) local f = create(kind, ...) panel = panel or f return f end
+    GK.RegisterOptions()
+    _G.CreateFrame = create
+    panel.onOnShow()
+    return GK, O
+end
+
+--- The entries of the dropdown for a setting: { { text, selected(), pick() }, ... }.
+local function menuOf(O, key)
+    for _, m in ipairs(O.menus) do
+        if rawget(m.row, "key") == key then
+            local entries, root = {}, {}
+            function root.CreateRadio(_, text, selected, pick) table.insert(entries, { text, selected, pick }) end
+            m.dd.menu(m.dd, root)
+            return entries
+        end
+    end
+    error("no dropdown for " .. key)
+end
+
+test("settings page: the kill sprees heading and its note", function()
+    local _, O = bootOptions()
+    local heading, note
+    for _, t in ipairs(O.texts) do
+        if t == "Kill sprees" then heading = true end
+        if t:find("^A splash in the middle of the screen") then note = t end
+    end
+    assert(heading, "no Kill sprees heading")
+    eq(note, "A splash in the middle of the screen, or a small toast by the letter icon. /grudge spree shows both.")
+end)
+
+test("settings page: each kind row writes off, toast or splash", function()
+    local GK, O = bootOptions()
+    for _, key in ipairs({ "spreeMine", "spreeGuild", "spreeEnded", "tormentor" }) do
+        local entries = menuOf(O, key)
+        eq(#entries, 3)
+        eq(entries[1][1], "Off")
+        for i, want in ipairs({ "off", "toast", "splash" }) do
+            entries[i][3]()
+            eq(GK.db[key], want, key)
+            eq(menuOf(O, key)[i][2](), true, key .. " selected")
+        end
+    end
+end)
+
+test("settings page: each when row writes its four choices", function()
+    local GK, O = bootOptions()
+    for _, key in ipairs({ "announceWhenMine", "announceWhenGuild" }) do
+        local entries = menuOf(O, key)
+        eq(#entries, 4)
+        eq(entries[3][1], "Not in combat in a dungeon or raid")
+        for i, want in ipairs({ "always", "noCombat", "noCombatInInstance", "noInstance" }) do
+            entries[i][3]()
+            eq(GK.db[key], want, key)
+        end
+    end
+end)
+
+test("settings page: a sound row for each tier, the end and the tormentor", function()
+    local GK, O = bootOptions()
+    local want = { "bloodied", "merciless", "butcher", "reaper", "grudgebound", "ended", "tormentor" }
+    local names = { "Bloodied", "Merciless", "Butcher", "Reaper", "Grudgebound", "Spree ended", "Tormentor" }
+    local sounds = {}                     -- the target-near row is the page's first, and is not one of these
+    for _, row in ipairs(O.sounds) do if row.text then table.insert(sounds, row) end end
+    eq(#sounds, #want)
+    for i, key in ipairs(want) do
+        local row = sounds[i]
+        eq(row.text, names[i])
+        eq(row.get(), GK.SPREE_DEFAULT_SOUNDS[key], key .. " shows the default")
+        row.set("kit:TEST")
+        eq(GK.db.spreeSounds[key], "kit:TEST", key)
+        eq(row.get(), "kit:TEST")
+    end
+end)
+
 say(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

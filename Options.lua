@@ -33,7 +33,7 @@ end
 -- The page is settings only: a short name for each, what it does in its "(i)", nothing else. The help
 -- text and the lists of commands that ran on under them were "ALT for mye text" (the owner, 2026-11-06);
 -- what the addon does is on its CurseForge page. Long enough for every row; Refresh measures the rest.
-local PAGE_HEIGHT = 1000
+local PAGE_HEIGHT = 1600
 
 local function PageHeight() return PAGE_HEIGHT end
 
@@ -150,7 +150,71 @@ local function Build(panel)
     local auto = Check(share, "Kill orders on enemies who keep killing us", "autoOrders",
         "Three of the guild in two hours, or you three times in half an hour: your death posts an order on them.")
 
-    local h4 = Section(auto, "Around the game")
+    local h3b = Section(auto, "Kill sprees")
+    local sprNote = Note(f, "A splash in the middle of the screen, or a small toast by the letter icon. /grudge spree "
+        .. "shows both.")
+    sprNote:SetPoint("TOPLEFT", h3b, "BOTTOMLEFT", 0, -8)
+    -- A choice of a few, under a label: the game's own dropdown, as the sound rows use. No dropdown in this
+    -- client: no row. The menu reads the setting each time it opens, so Refresh has nothing to do for it.
+    local function Choice(above, text, key, default, choices, info)
+        local row = CreateFrame("Frame", nil, f)
+        row:SetSize(400, 28)
+        row:SetPoint("TOPLEFT", above, "BOTTOMLEFT", 0, above == sprNote and -8 or -2)
+        local l = row:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+        l:SetPoint("LEFT", 4, 0)
+        l:SetWidth(170)
+        l:SetJustifyH("LEFT")
+        l:SetText(text)
+        local ok, dd = pcall(CreateFrame, "DropdownButton", nil, row, "WowStyle1DropdownTemplate")
+        if not (ok and type(dd) == "table" and dd.SetupMenu) then
+            l:Hide()
+            row:SetHeight(1)
+            return row
+        end
+        dd:SetWidth(240)
+        dd:SetPoint("LEFT", l, "RIGHT", 6, 0)
+        dd:SetupMenu(function(_, root)
+            for _, c in ipairs(choices) do
+                local value = c[1]
+                root:CreateRadio(c[2], function() return (GK.db[key] or default) == value end, function()
+                    GK.db[key] = value
+                    GK.Changed()
+                end)
+            end
+        end)
+        row.dropdown = dd
+        row.key = key
+        return row
+    end
+    local KINDS = { { "off", "Off" }, { "toast", "Toast" }, { "splash", "Splash" } }
+    local WHEN = { { "always", "Always" }, { "noCombat", "Not in combat" },
+        { "noCombatInInstance", "Not in combat in a dungeon or raid" },
+        { "noInstance", "Never in a dungeon or raid" } }
+    local sMine = Choice(sprNote, "My sprees", "spreeMine", "splash", KINDS)
+    local sGuild = Choice(sMine, "Guildies' sprees", "spreeGuild", "toast", KINDS)
+    local sEnded = Choice(sGuild, "A spree ended", "spreeEnded", "toast", KINDS)
+    local sTorm = Choice(sEnded, "A tormentor put down", "tormentor", "toast", KINDS)
+    local wMine = Choice(sTorm, "Show mine", "announceWhenMine", "always", WHEN)
+    local wGuild = Choice(wMine, "Show guildies'", "announceWhenGuild", "noCombat", WHEN)
+    -- One sound for each kind, the tiers rising; the play button is picking (or picking again).
+    local soundAbove = wGuild
+    local soundKeys = {}
+    for _, t in ipairs(GK.SPREE_TIERS) do soundKeys[#soundKeys + 1] = { t.key, t.name } end
+    soundKeys[#soundKeys + 1] = { "ended", "Spree ended" }
+    soundKeys[#soundKeys + 1] = { "tormentor", "Tormentor" }
+    for _, k in ipairs(soundKeys) do
+        local key = k[1]
+        local row = GK.SoundRow(f, soundAbove, function()
+            return (GK.db.spreeSounds or {})[key] or GK.SPREE_DEFAULT_SOUNDS[key]
+        end, function(picked)
+            GK.db.spreeSounds = GK.db.spreeSounds or {}
+            GK.db.spreeSounds[key] = picked
+        end, k[2])
+        row.which = key
+        soundAbove = row
+    end
+
+    local h4 = Section(soundAbove, "Around the game")
     local tip = Check(h4, "A line on enemy tooltips", "tooltip", "Only for enemies you have a history with.")
     local menu = Check(tip, "In the right-click menu", "unitMenu", "A player's poster, record, notes or a kill order.")
     local inspect = Check(menu, "A tab on the Inspect window", "inspectTab", "A guildie's record, right there.")
