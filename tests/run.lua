@@ -2592,5 +2592,314 @@ test("the settings page and the help say the release, not how many changes there
     assert((W.printed[1] or ""):find("v0.0.0-test commands", 1, true), tostring(W.printed[1]))
 end)
 
+-- ---------------------------------------------------------------------------
+-- Sprees: kills worth points in a row (Core.lua, Kills.lua, Guild.lua)
+-- ---------------------------------------------------------------------------
+test("spree tiers: Bloodied 3, Merciless 5, Butcher 7, Reaper 10, Grudgebound 15 and every 5 after", function()
+    local GK = boot()
+    local want = { [3] = "Bloodied", [5] = "Merciless", [7] = "Butcher", [10] = "Reaper", [15] = "Grudgebound",
+        [20] = "Grudgebound" }
+    for n = 25, 100, 5 do want[n] = "Grudgebound" end
+    for n = 0, 101 do eq(GK.SpreeTier(n), want[n], "milestone " .. n) end
+    eq(select(2, GK.SpreeTier(10)), "reaper", "the key for the art file names")
+    eq(GK.SPREE_TIERS[1].key, "bloodied")
+    eq(GK.SPREE_TIERS[5].key, "grudgebound")
+    eq(GK.SpreeTier(nil), nil)
+end)
+
+test("spree tier of a spree: the tier it is in now, nothing below 3", function()
+    local GK = boot()
+    eq(GK.SpreeTierOf(2), nil)
+    eq(GK.SpreeTierOf(3), "Bloodied")
+    eq(GK.SpreeTierOf(4), "Bloodied")
+    eq(GK.SpreeTierOf(6), "Merciless")
+    eq(GK.SpreeTierOf(9), "Butcher")
+    eq(GK.SpreeTierOf(14), "Reaper")
+    eq(GK.SpreeTierOf(16), "Grudgebound")
+    eq(GK.SpreeTierOf(99), "Grudgebound")
+    eq(select(2, GK.SpreeTierOf(6)), "merciless")
+end)
+
+--- Kills.lua with the guild's side stubbed, and what the addon fires collected in `heard`.
+local function bootSpree()
+    local GK, LIB = bootKills()
+    local heard = {}
+    for _, name in ipairs({ "GK_SPREE", "GK_SPREE_ENDED", "GK_TORMENTOR" }) do
+        LIB.Listen(name, function(...) heard[#heard + 1] = { name, ... } end)
+    end
+    GK.sentSprees = {}
+    function GK.SendKill(v, zone, points, avenged, times, spree) table.insert(GK.sentSprees, spree) end
+    function GK.SendDeath() end
+    function GK.AutoOrder() return nil end
+    function GK.SlainLetter() end
+    return GK, LIB, heard
+end
+
+--- A kill of ours on enemy number i: red (level 65 to our 60) by default, grey at level 20.
+local function killOf(GK, i, level)
+    GK.RecordKill({ key = "Foe" .. i .. "-Realm", guid = "Player-1-" .. i, c = "ROGUE", r = "Orc", l = level or 65,
+        rf = "Orc", sx = 2 })
+end
+
+test("spree: +1 for a kill worth points; a grey kill adds to the streak and not the spree", function()
+    local GK = bootSpree()
+    eq(GK.char.spree, 0)
+    killOf(GK, 1)
+    killOf(GK, 2, 20)
+    killOf(GK, 3)
+    eq(GK.char.streak, 3, "the streak counts every kill")
+    eq(GK.char.spree, 2, "the spree only the kills worth points")
+end)
+
+test("spree: a kill farmed today is worth nothing and doesn't count", function()
+    local GK = bootSpree()
+    for _ = 1, GK.REPEATS do GK.RecordKill({ key = GANK, guid = FOE_GUID, c = "ROGUE", r = "Orc", l = 65, rf = "Orc", sx = 2 }) end
+    local before = GK.char.spree
+    GK.RecordKill({ key = GANK, guid = FOE_GUID, c = "ROGUE", r = "Orc", l = 65, rf = "Orc", sx = 2 })
+    eq(GK.char.spree, before, "the farmed kill")
+    eq(GK.char.streak, GK.REPEATS + 1)
+end)
+
+test("spree: an assist never changes it", function()
+    local GK = bootSpree()
+    killOf(GK, 1)
+    GK.RecordAssist({ key = GANK, guid = FOE_GUID, c = "ROGUE", r = "Orc", l = 65, with = "Kari" })
+    eq(GK.char.spree, 1)
+    eq(GK.char.assists, 1)
+end)
+
+test("spree: the kill sends the spree it made, and the next one counts on", function()
+    local GK = bootSpree()
+    killOf(GK, 1)
+    killOf(GK, 2, 20)
+    killOf(GK, 3)
+    eq(GK.sentSprees[1], 1)
+    eq(GK.sentSprees[2], 1, "a kill worth nothing sends the spree as it stands")
+    eq(GK.sentSprees[3], 2)
+end)
+
+test("spree: a milestone of ours fires GK_SPREE once, at 3, 5, 7, 10, 15, then 20 and 25 as Grudgebound", function()
+    local GK, _, heard = bootSpree()
+    for i = 1, 25 do killOf(GK, i) end
+    local got = {}
+    for _, e in ipairs(heard) do
+        eq(e[1], "GK_SPREE")
+        eq(e[2], ME, "who")
+        eq(e[5], true, "mine")
+        got[#got + 1] = e[3] .. ":" .. e[4]
+    end
+    eq(table.concat(got, " "), "3:Bloodied 5:Merciless 7:Butcher 10:Reaper 15:Grudgebound 20:Grudgebound 25:Grudgebound")
+end)
+
+test("spree: a grey kill on a milestone number fires nothing", function()
+    local GK, _, heard = bootSpree()
+    killOf(GK, 1)
+    killOf(GK, 2)
+    killOf(GK, 3, 20)
+    eq(#heard, 0)
+    killOf(GK, 4)
+    eq(heard[1][3], 3)
+end)
+
+test("spree: our death to an enemy ends it, and says what it was", function()
+    local GK, _, heard = bootSpree()
+    for i = 1, 4 do killOf(GK, i) end
+    heard[1], heard[2] = nil, nil
+    eq(#heard, 0)
+    local had = GK.RecordDeath({ key = GANK, guid = FOE_GUID, c = "ROGUE", r = "Orc", l = 65 })
+    eq(had, 4, "the spree it had, for the caller")
+    eq(GK.char.spree, 0)
+    eq(GK.char.streak, 0)
+    eq(#heard, 1)
+    eq(heard[1][1], "GK_SPREE_ENDED")
+    eq(heard[1][2], ME)
+    eq(heard[1][3], 4)
+    eq(heard[1][4], GK.Show(GANK), "who ended it")
+    eq(heard[1][5], true)
+end)
+
+test("spree: dying with less than 3 ends nothing to announce, but still resets it", function()
+    local GK, _, heard = bootSpree()
+    killOf(GK, 1)
+    killOf(GK, 2)
+    eq(GK.RecordDeath({ key = GANK, guid = FOE_GUID, c = "ROGUE", r = "Orc", l = 65 }), 2)
+    eq(GK.char.spree, 0)
+    eq(#heard, 0)
+end)
+
+test("tormentor: three of the guild dead, then our kill ends them and the count goes to 0", function()
+    local GK, _, heard = bootSpree()
+    local G = GK.Store()
+    for _ = 1, 3 do GK.RecordDeath({ key = GANK, guid = FOE_GUID, c = "ROGUE", r = "Orc", l = 65 }) end
+    eq(G.tormentors[GANK], 3)
+    eq(#heard, 0)
+    GK.RecordKill({ key = GANK, guid = FOE_GUID, c = "ROGUE", r = "Orc", l = 65, rf = "Orc", sx = 2 })
+    eq(G.tormentors[GANK] or 0, 0)
+    eq(#heard, 1)
+    eq(heard[1][1], "GK_TORMENTOR")
+    eq(heard[1][2], ME)
+    eq(heard[1][3], GK.Show(GANK))
+    eq(heard[1][4], 3)
+    eq(heard[1][5], true)
+end)
+
+test("tormentor: fewer than 3 is no tormentor, and a kill still clears the count", function()
+    local GK, _, heard = bootSpree()
+    GK.RecordDeath({ key = GANK, guid = FOE_GUID, c = "ROGUE", r = "Orc", l = 65 })
+    GK.RecordKill({ key = GANK, guid = FOE_GUID, c = "ROGUE", r = "Orc", l = 65, rf = "Orc", sx = 2 })
+    eq(GK.Store().tormentors[GANK] or 0, 0)
+    eq(#heard, 0)
+end)
+
+test("tormentor: a grey kill on one still ends them", function()
+    local GK, _, heard = bootSpree()
+    for _ = 1, 3 do GK.RecordDeath({ key = GANK, guid = FOE_GUID, c = "ROGUE", r = "Orc", l = 65 }) end
+    GK.RecordKill({ key = GANK, guid = FOE_GUID, c = "ROGUE", r = "Orc", l = 20, rf = "Orc", sx = 2 })
+    eq(#heard, 1)
+    eq(heard[1][4], 3)
+end)
+
+test("tormentor: kept per guild, at most 200, the smallest count dropped first", function()
+    local GK = boot()
+    for i = 1, 200 do
+        GK.TormentorGrew("Foe" .. i .. "-Realm")
+        GK.TormentorGrew("Foe" .. i .. "-Realm")
+    end
+    GK.TormentorGrew("Low-Realm")      -- 1: the smallest, but the table is full, so it is let in and one goes
+    eq(count(GK.Store().tormentors), 200)
+    GK.TormentorGrew("Next-Realm")
+    eq(count(GK.Store().tormentors), 200)
+    eq(GK.Store().tormentors["Low-Realm"], nil, "the smallest went")
+    eq(GK.Store().tormentors["Next-Realm"], 1)
+end)
+
+test("K on the wire: field 13 is the spree after the kill, the fields before it are where they were", function()
+    local GK = bootGuild()
+    W.takeSent()
+    GK.SendKill({ key = GANK, c = "ROGUE", r = "Orc", l = 65, rf = "Orc", sx = 2 }, "Hillsbrad", 4, nil, 7, 5)
+    local text = W.takeSent()[1].text
+    local f = {}
+    for part in (text .. ";"):gmatch("([^;]*);") do f[#f + 1] = part end
+    eq(f[1], "K")
+    eq(f[10], "7", "times, where upstream reads it")
+    eq(f[12], "2", "sex")
+    eq(f[13], "5", "the spree")
+    eq(#f, 13)
+    assert(#text < 600)
+end)
+
+--- Guild.lua with the guild's messages, and what it fires collected in `heard`.
+local function bootHeard()
+    local GK = bootGuild()
+    function GK.KeepLooks() end
+    local heard = {}
+    for _, name in ipairs({ "GK_SPREE", "GK_SPREE_ENDED", "GK_TORMENTOR" }) do
+        W.LIB.Listen(name, function(...) heard[#heard + 1] = { name, ... } end)
+    end
+    local function K(sender, spree)
+        GK.ReceiveForTest("Grudgekeeper", msg("K", 1, GANK, "ROGUE", "Orc", 60, "Hillsbrad", 2, "", 5, "Orc", 2, spree),
+            "GUILD", sender)
+    end
+    local function D(sender, killer)
+        GK.ReceiveForTest("Grudgekeeper", msg("D", 1, killer or GANK, "ROGUE", "Orc", 60, "Hillsbrad", 1, "Orc", 2),
+            "GUILD", sender)
+    end
+    return GK, K, D, heard
+end
+
+test("a guildie's K with a spree at a tier fires GK_SPREE; between tiers, nothing", function()
+    local _, K, _, heard = bootHeard()
+    for _, n in ipairs({ 1, 2, 4, 6, 14 }) do K(KARI, n) end
+    eq(#heard, 0)
+    K(KARI, 3)
+    eq(#heard, 1)
+    eq(heard[1][1], "GK_SPREE")
+    eq(heard[1][2], KARI)
+    eq(heard[1][3], 3)
+    eq(heard[1][4], "Bloodied")
+    eq(heard[1][5], false, "not mine")
+    K(KARI, 15)
+    K(KARI, 20)
+    K(KARI, 25)
+    eq(heard[2][4], "Grudgebound")
+    eq(heard[3][4], "Grudgebound")
+    eq(heard[4][4], "Grudgebound")
+    eq(#heard, 4)
+end)
+
+test("a K from an older version has no field 13 and fires nothing; a bad one reads as none", function()
+    local GK, K, _, heard = bootHeard()
+    GK.ReceiveForTest("Grudgekeeper", msg("K", 1, GANK, "ROGUE", "Orc", 60, "Hillsbrad", 2, "", 5, "Orc", 2), "GUILD", KARI)
+    K(KARI, "")
+    K(KARI, "three")
+    K(KARI, 3.5)
+    K(KARI, -3)
+    eq(#heard, 0)
+    eq(GK.Store().slain[GANK].by[KARI], 5, "the kill itself is still taken in")
+end)
+
+test("a guildie's D after a spree of 3 or more ends it, once", function()
+    local _, K, D, heard = bootHeard()
+    K(KARI, 6)
+    eq(#heard, 0)
+    D(KARI)
+    eq(#heard, 1)
+    eq(heard[1][1], "GK_SPREE_ENDED")
+    eq(heard[1][2], KARI)
+    eq(heard[1][3], 6)
+    assert(heard[1][4], "who killed them")
+    eq(heard[1][5], false)
+    D(KARI)
+    eq(#heard, 1, "no spree left to end")
+end)
+
+test("a guildie's D after a spree under 3, or one we never heard of, ends nothing", function()
+    local _, K, D, heard = bootHeard()
+    K(KARI, 2)
+    D(KARI)
+    D(EDVARD)
+    eq(#heard, 0)
+end)
+
+test("a guildie's spree is kept per guildie, and the next K takes it on from where it was", function()
+    local _, K, D, heard = bootHeard()
+    K(KARI, 4)
+    K(EDVARD, 8)
+    D(EDVARD)
+    eq(#heard, 1)
+    eq(heard[1][2], EDVARD)
+    K(KARI, 9)
+    D(KARI)
+    eq(heard[#heard][3], 9, "the last one heard")
+end)
+
+test("tormentor: three guildie deaths to one enemy, then a guildie's K on them ends it", function()
+    local GK, K, D, heard = bootHeard()
+    D(KARI)
+    D(EDVARD)
+    D(KARI)
+    eq(GK.Store().tormentors[GANK], 3)
+    eq(#heard, 0)
+    K(EDVARD, 1)
+    eq(GK.Store().tormentors[GANK] or 0, 0)
+    eq(#heard, 1)
+    eq(heard[1][1], "GK_TORMENTOR")
+    eq(heard[1][2], EDVARD)
+    eq(heard[1][3], GK.Show(GANK))
+    eq(heard[1][4], 3)
+    eq(heard[1][5], false)
+end)
+
+test("tormentor: our own death counts with the guild's, and a K from an older client still clears it", function()
+    local GK, _, D, heard = bootHeard()
+    D(KARI)
+    D(EDVARD)
+    GK.TormentorGrew(GANK)
+    eq(GK.Store().tormentors[GANK], 3)
+    GK.ReceiveForTest("Grudgekeeper", msg("K", 1, GANK, "ROGUE", "Orc", 60, "Hillsbrad", 2, "", 5, "Orc", 2), "GUILD", KARI)
+    eq(#heard, 1)
+    eq(heard[1][1], "GK_TORMENTOR")
+end)
+
 say(("\n%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

@@ -57,6 +57,7 @@ local defaults = {
 local charDefaults = {
     points = 0, kills = 0, deaths = 0, assists = 0,
     streak = 0, bestStreak = 0,  -- kills since you last died to an enemy player, and the most ever
+    spree = 0,               -- the same, counting only the kills worth points (GK.SpreeTier)
     done = 0, won = 0,           -- kill orders you fulfilled, and the bounties on them (copper)
     -- week = { id, p, k, d, a }: this week's score, made by GK.Week and started over at the weekly reset
     log = {},                -- newest first: { k = "K", "A" or "D", t, n, c, r, l, z, p, o, w (an assist's killer) }
@@ -448,6 +449,38 @@ function GK.InWorld()
     return worldNow
 end
 
+-- Spree tiers: the kill that makes a spree one of these numbers is a milestone. Grudgebound comes again at
+-- every 5 after the last number. The key is the tier's art file name (Media/spree_<key>.tga).
+GK.SPREE_TIERS = {
+    { n = 3, key = "bloodied", name = "Bloodied" },
+    { n = 5, key = "merciless", name = "Merciless" },
+    { n = 7, key = "butcher", name = "Butcher" },
+    { n = 10, key = "reaper", name = "Reaper" },
+    { n = 15, key = "grudgebound", name = "Grudgebound" },
+}
+
+--- The tier a spree of n is in now: its name and key, nil below the first tier.
+function GK.SpreeTierOf(n)
+    if type(n) ~= "number" then return nil end
+    local tier
+    for _, t in ipairs(GK.SPREE_TIERS) do
+        if n >= t.n then tier = t end
+    end
+    if not tier then return nil end
+    return tier.name, tier.key
+end
+
+--- The tier a spree of n begins, when n is a milestone: its name and key. nil for any other number.
+function GK.SpreeTier(n)
+    if type(n) ~= "number" then return nil end
+    local last = GK.SPREE_TIERS[#GK.SPREE_TIERS]
+    for _, t in ipairs(GK.SPREE_TIERS) do
+        if n == t.n then return t.name, t.key end
+    end
+    if n > last.n and n % 5 == 0 then return last.name, last.key end
+    return nil
+end
+
 --- "20s", "1g 50s" - for chat and the wire. Letters draw coins with GK.Coins.
 function GK.MoneyText(copper)
     copper = math.floor(tonumber(copper) or 0)
@@ -652,14 +685,46 @@ function GK.Store()
     key = key or "-"
     local g = GK.db.guilds[key]
     if not g then
-        g = { board = {}, orders = {}, wanted = {}, slain = {}, feed = {}, people = {}, nextId = 1 }
+        g = { board = {}, orders = {}, wanted = {}, slain = {}, tormentors = {}, feed = {}, people = {}, nextId = 1 }
         GK.db.guilds[key] = g
     end
     if not g.slain then g.slain = {} end      -- a store from before the guild kept its tally
+    if not g.tormentors then g.tormentors = {} end   -- and from before it counted who kills us
     -- the notes (Notes.lua), here from the start: made by the first read instead, an empty one turned up
     -- after the test panel had put the store back (smoke_grudgekeeper, 2026-11-05)
     if not g.people then g.people = {} end
     return g
+end
+
+-- Tormentors: an enemy who has killed 3 or more of the guild since any of us last killed them. Each client
+-- counts from what it hears (our deaths, a guildie's D) and clears the count at any kill of theirs (ours, or
+-- a guildie's K), so two clients that were offline at different times differ a little. That is fine.
+local MAX_TORMENTORS = 200
+local TORMENTOR_AT = 3
+
+--- One more of the guild killed by this enemy. Their count after it. At most MAX_TORMENTORS enemies are
+--- kept: when a new one comes to a full table, the one with the smallest count goes.
+function GK.TormentorGrew(key)
+    local t = GK.Store().tormentors
+    if not t[key] then
+        local n, least, leastKey = 0, nil, nil
+        for k, v in pairs(t) do
+            n = n + 1
+            if not least or v < least then least, leastKey = v, k end
+        end
+        if n >= MAX_TORMENTORS and leastKey then t[leastKey] = nil end
+    end
+    t[key] = (t[key] or 0) + 1
+    return t[key]
+end
+
+--- The guild killed this enemy: their count goes back to 0. What it was when it was 3 or more - they were
+--- a tormentor, and are no more - else nil. A count of 0 is no entry, which keeps the table small.
+function GK.TormentorEnded(key)
+    local t = GK.Store().tormentors
+    local n = t[key]
+    t[key] = nil
+    return n and n >= TORMENTOR_AT and n or nil
 end
 
 --- Our record of one enemy player, made when first needed. At most MAX_FOES: the one met longest ago

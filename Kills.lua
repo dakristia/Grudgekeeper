@@ -97,13 +97,23 @@ function GK.RecordKill(v)
     c.points = c.points + points
     c.streak = (c.streak or 0) + 1
     c.bestStreak = math.max(c.bestStreak or 0, c.streak)
+    -- The spree counts the kills worth points only: a grey kill or a farmed one is in the streak, not here.
+    if points > 0 then c.spree = (c.spree or 0) + 1 end
     local week = GK.Week()
     week.p, week.k = week.p + points, week.k + 1
     local zone = GK.Zone()
     GK.AddLog({ k = "K", t = now, n = v.key, c = v.c, r = v.r, l = v.l, z = zone, p = points,
         o = orders[1] and orders[1].key or nil, rv = revenge or nil, av = avenged })
     for _, o in ipairs(orders) do GK.Fulfil(o, zone) end
-    GK.SendKill(v, zone, points, avenged, f.k)
+    GK.SendKill(v, zone, points, avenged, f.k, c.spree)
+    -- What the kill made of it, for whatever shows it (GK_SPREE, GK_TORMENTOR). Only after the send: the
+    -- guild hears the kill first.
+    if points > 0 then
+        local tier = GK.SpreeTier(c.spree)
+        if tier then LIB.Fire("GK_SPREE", LIB.Me(), c.spree, tier, true) end
+    end
+    local tormented = GK.TormentorEnded(v.key)
+    if tormented then LIB.Fire("GK_TORMENTOR", LIB.Me(), GK.Show(v.key), tormented, true) end
     GK.SendBoard()
     if (#orders > 0 and GK.db.shotFulfil) or GK.db.shotEveryKill then GK.Shot(0.3) end
     -- A letter only for the kill that earns a new title. One for every kill was one after every fight ("den
@@ -409,6 +419,7 @@ function GK.MeterProbe()
 end
 
 --- One death of ours to an enemy player. v = { key, guid, c, r, l, spell }
+--- Returns the spree we had before it ended, which is 0 for none.
 function GK.RecordDeath(v)
     local f = GK.Foe(v.key, { n = GK.Show(v.key), c = v.c, r = v.r, l = v.l })
     GK.KeepLooks(v.key, GK.Seen(v.key, v.guid) or v)     -- a grudge now: their race's face is kept
@@ -416,6 +427,10 @@ function GK.RecordDeath(v)
     f.lastDeath = time()
     GK.char.deaths = GK.char.deaths + 1
     GK.char.streak = 0
+    local spree = GK.char.spree or 0
+    GK.char.spree = 0
+    GK.TormentorGrew(v.key)
+    if spree >= 3 then LIB.Fire("GK_SPREE_ENDED", LIB.Me(), spree, GK.Show(v.key), true) end
     local week = GK.Week()
     week.d = week.d + 1
     local zone = GK.Zone()
@@ -429,6 +444,7 @@ function GK.RecordDeath(v)
     -- 2026-11-06); it still counts, and the ledger's Grudges and News have it.
     if GK.db.myLetters and auto then GK.SlainLetter(v, f.d, zone, true) end
     GK.Changed()
+    return spree
 end
 
 function GK.ResolveDeath()

@@ -12,10 +12,12 @@
 --                                                              what each of my PCs made of the score
 --                                                              ("One character, more than one PC")
 --   Q;1                                                        tell me everything (at login)
---   K;1;name;class;race;level;zone;points;avenged;times;raceFile;sex
+--   K;1;name;class;race;level;zone;points;avenged;times;raceFile;sex;spree
 --                                                              I killed someone (avenging a guildie;
 --                                                              times: how often I have, in all; raceFile
---                                                              and sex: the target's, for their race's face)
+--                                                              and sex: the target's, for their race's face;
+--                                                              spree: my kills worth points in a row, with
+--                                                              this one, so a guildie sees a milestone)
 --   D;1;name;class;race;level;zone;times;raceFile;sex          someone killed me (times in all; raceFile
 --                                                              and sex: the killer's, for their race's face)
 --   H;1;name;class;race;level;zone;points                      I helped a groupmate kill someone
@@ -49,7 +51,8 @@
 -- owes it to whoever fulfils the order, and says when they paid it (Y); the poster's own part is
 -- paid with the order's state (p), as before the pot existed.
 -- Worst case a guild can make us keep: 150 orders (10 open per poster), 500 board rows (6 parts each), 200 wanted,
--- 200 wanted (50 guildies each), 200 slain (enemies the guild has killed, 20 killers each), 40 feed
+-- 200 wanted (50 guildies each), 200 slain (enemies the guild has killed, 20 killers each), 200 tormentors
+-- (enemies and their count of us killed, Core.lua), 500 guildies' last sprees (in memory only), 40 feed
 -- lines and 20 backers per order (a share passed on, P, counts against the same 20). Every sender is
 -- also held to LibForever's 30 messages / 10 s.
 local ADDON, GK = ...
@@ -875,13 +878,13 @@ function GK.NoteSlain(killer, key, c, r, l, times)
     if e.by[killer] or Count(e.by) < MAX_SLAYERS then e.by[killer] = times end
 end
 
-function GK.SendKill(v, zone, points, avenged, times)
+function GK.SendKill(v, zone, points, avenged, times, spree)
     local me = LIB.Me()
     AddFeed({ t = time(), who = me, kind = "K", n = v.key, c = v.c, l = v.l, p = points, z = zone, av = avenged })
     GK.NoteSlain(me, v.key, v.c, v.r, v.l, times)
     if not GK.db.share then return end
     local rf, sx = LookOf(v.key, v.rf, v.sx)
-    Send(Msg("K", PROTO, v.key, v.c, v.r, v.l, zone, points, avenged, times, rf, sx))
+    Send(Msg("K", PROTO, v.key, v.c, v.r, v.l, zone, points, avenged, times, rf, sx, spree))
 end
 
 --- Our assist: the news only. The guild's tally of who killed whom stays with the killer's K.
@@ -1221,6 +1224,13 @@ local function OnRelayedBoard(sender, f)
     if r.parts then Total(r) else r.via = (f[24] == nil or f[24] == "~") or nil end
 end
 
+-- The spree each guildie last told us in a K, in memory only: their D ends it. Not kept in saved data, so
+-- a guildie's spree from before our login is unknown to us, and its end is not announced.
+local lastSpree = {}
+
+--- A kill of the guild's, and so an end to that enemy's count of us. K carries the spree as its field 13; an
+--- older client sends none, and then there is no milestone to tell. K is never passed on (no R or O for
+--- it, and the answer to a Q holds none), so every K is a live one: a login's replay can't announce twice.
 local function OnKill(sender, f)
     local name = GK.PlayerKey(GK.Clean(f[3], 64))
     if not name then return end
@@ -1229,6 +1239,14 @@ local function OnKill(sender, f)
         z = GK.Clean(f[7], 40), p = Int(f[8], 0, 100), av = GK.LocalKey(GK.Clean(f[9], 64)) })
     GK.NoteSlain(sender, name, c, r, l, Int(f[10], 1, 1e6))
     KeepLook(name, f[11], f[12])
+    local spree = Int(f[13], 0, 1e5)
+    if spree and (lastSpree[sender] or Count(lastSpree) < MAX_BOARD) then
+        lastSpree[sender] = spree
+        local tier = GK.SpreeTier(spree)
+        if tier then LIB.Fire("GK_SPREE", sender, spree, tier, false) end
+    end
+    local tormented = GK.TormentorEnded(name)
+    if tormented then LIB.Fire("GK_TORMENTOR", sender, GK.Show(name), tormented, false) end
 end
 
 local function OnAssist(sender, f)
@@ -1246,6 +1264,12 @@ local function OnDeath(sender, f)
     GK.NoteWanted(sender, name, c, GK.Clean(f[5], 20), l, times)
     AddFeed({ t = time(), who = sender, kind = "D", n = name, c = c, l = l, z = GK.Clean(f[7], 40) })
     KeepLook(name, f[9], f[10])
+    GK.TormentorGrew(name)
+    local spree = lastSpree[sender]
+    if spree then
+        if spree >= 3 then LIB.Fire("GK_SPREE_ENDED", sender, spree, GK.Show(name), false) end
+        lastSpree[sender] = 0
+    end
 end
 
 --- An order as its poster sends it (C, base 0), or as another guildie passes it on while the poster is
