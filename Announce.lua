@@ -69,6 +69,12 @@ local MAX_EMBERS = 22
 local FLAME_FRAMES, FLAME_COLS, FLAME_FPS = 16, 4, 12
 local SHINE_START, SHINE_TIME, SHINE_WIDTH = 0.35, 0.6, 60
 
+--- A dark outline on a line of text, so it reads over snow and sunlit sand as well as at night.
+local function Outline(fs)
+    local file, size = fs:GetFont()
+    if file then fs:SetFont(file, size, "OUTLINE") end
+end
+
 local function BuildSplash()
     splash = CreateFrame("Frame", "GrudgekeeperSplash", UIParent)
     splash:SetFrameStrata("HIGH")
@@ -109,6 +115,7 @@ local function BuildSplash()
         splash.embers[i] = e
     end
     splash.line = splash:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+    Outline(splash.line)
     splash.line:SetPoint("TOP", splash, "TOP", 0, -SEAL - SEAL / 2 + 4)
     splash.age = 0
     -- The punch (the seal scales in), the glow's pulse, the flames, embers and shine, and the fade, by hand:
@@ -237,7 +244,9 @@ local function BuildToast()
     t.ribbon = t:CreateTexture(nil, "ARTWORK")
     t.ribbon:SetSize(256, 64)
     t.ribbon:SetPoint("TOPLEFT", t.seal, "TOPRIGHT", 4, 0)
-    t.line = t:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    -- a size up from the first try, which was hard to read by the letter icon (the owner, 2026-11-12)
+    t.line = t:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    Outline(t.line)
     t.line:SetJustifyH("LEFT")
     t.age = 0
     t:SetScript("OnUpdate", function(self, dt)
