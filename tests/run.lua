@@ -2974,7 +2974,7 @@ local function bootAnnounce()
     _G.IsInInstance = function() return A.instance end
     _G.SOUNDKIT = { IG_PVP_UPDATE = 1, RAID_WARNING = 2, PVP_THROUGH_QUEUE = 3, HARDCORE_DUEL = 4,
         UI_PVP_HONOR_PRESTIGE_RANK_UP = 5, UI_RAID_BOSS_DEFEATED = 6, UI_GARRISON_TOAST_INVASION_ALERT = 7,
-        RAID_WARNING_2 = 8 }
+        RAID_WARNING_2 = 8, RAID_BOSS_EMOTE_WARNING = 9 }
     _G.PlaySound = function(id) table.insert(A.played, id) end
     LIB.fire("PLAYER_ENTERING_WORLD")
     assert(loadfile("Notice.lua"))("Grudgekeeper", GK)     -- the toasts ask it where the letter icon is
