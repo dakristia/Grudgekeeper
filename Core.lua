@@ -534,6 +534,12 @@ end
 -- the game's own sounds below say "warning" well enough.
 local SOUND_FILES = {
     { "makke", "Måkke ta med han", "Interface\\AddOns\\Grudgekeeper\\Media\\makke.mp3", guild = "YippYapp" },
+    -- the Grudgekeeper calling out each spree tier (ElevenLabs, 2026-11-12)
+    { "voice_bloodied", "Voice: Bloodied", "Interface\\AddOns\\Grudgekeeper\\Media\\voice_bloodied.mp3" },
+    { "voice_merciless", "Voice: Merciless", "Interface\\AddOns\\Grudgekeeper\\Media\\voice_merciless.mp3" },
+    { "voice_butcher", "Voice: Butcher", "Interface\\AddOns\\Grudgekeeper\\Media\\voice_butcher.mp3" },
+    { "voice_reaper", "Voice: Reaper", "Interface\\AddOns\\Grudgekeeper\\Media\\voice_reaper.mp3" },
+    { "voice_grudgebound", "Voice: Grudgebound", "Interface\\AddOns\\Grudgekeeper\\Media\\voice_grudgebound.mp3" },
 }
 local CHIME = "kit:UI_RAID_BOSS_WHISPER_WARNING"
 

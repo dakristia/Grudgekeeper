@@ -2976,6 +2976,8 @@ local function bootAnnounce()
         UI_PVP_HONOR_PRESTIGE_RANK_UP = 5, UI_RAID_BOSS_DEFEATED = 6, UI_GARRISON_TOAST_INVASION_ALERT = 7,
         RAID_WARNING_2 = 8, RAID_BOSS_EMOTE_WARNING = 9 }
     _G.PlaySound = function(id) table.insert(A.played, id) end
+    -- a file is remembered by its name, voice_butcher for ...\\Media\\voice_butcher.mp3
+    _G.PlaySoundFile = function(path) table.insert(A.played, path:match("([%w_]+)%.mp3$") or path) return true end
     LIB.fire("PLAYER_ENTERING_WORLD")
     assert(loadfile("Notice.lua"))("Grudgekeeper", GK)     -- the toasts ask it where the letter icon is
     assert(loadfile("Announce.lua"))("Grudgekeeper", GK)
@@ -3021,8 +3023,8 @@ test("announce: a guildie's spree in a fight is held, and shown with the next on
     eq(#A.txt, 2)
     eq(A.txt[1], "Kari: 5 kills in a row")
     eq(A.txt[2], "Edvard: 3 kills in a row")
-    eq(A.played[1], 2, "Merciless: the raid warning")
-    eq(A.played[2], 1)
+    eq(A.played[1], "voice_merciless", "Merciless: the Grudgekeeper calls it")
+    eq(A.played[2], "voice_bloodied")
     LIB.fire("PLAYER_REGEN_ENABLED")
     eq(#A.txt, 2, "nothing twice")
 end)
@@ -3101,7 +3103,7 @@ end)
 test("announce: the sound is the one picked, else the tier's own, and none when sounds are off", function()
     local GK, LIB, A = bootAnnounce()
     LIB.Fire("GK_SPREE", ME, 7, "Butcher", true, "butcher") W.advance(4)
-    eq(A.played[1], 3, "Butcher's own: PVP_THROUGH_QUEUE")
+    eq(A.played[1], "voice_butcher", "Butcher's own: the Grudgekeeper's call")
     GK.db.spreeSounds.butcher = "kit:RAID_WARNING_2"
     LIB.Fire("GK_SPREE", ME, 7, "Butcher", true, "butcher") W.advance(4)
     eq(A.played[2], 8, "the pick")

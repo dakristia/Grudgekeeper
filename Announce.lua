@@ -16,13 +16,13 @@ local TOAST_HOLD, TOAST_FADE, MAX_TOASTS = 5, 0.6, 4
 -- replay at once, long after it mattered. The oldest goes.
 local MAX_HELD = 30
 
--- The sound of each kind until one is picked (GK.db.spreeSounds), rising with the tier.
+-- The sound of each kind until one is picked (GK.db.spreeSounds): the Grudgekeeper calling out each tier.
 local DEFAULT_SOUNDS = {
-    bloodied = "kit:IG_PVP_UPDATE",
-    merciless = "kit:RAID_WARNING",
-    butcher = "kit:PVP_THROUGH_QUEUE",
-    reaper = "kit:RAID_BOSS_EMOTE_WARNING",      -- not HARDCORE_DUEL: it plays nothing on Forever (2026-11-12)
-    grudgebound = "kit:UI_PVP_HONOR_PRESTIGE_RANK_UP",
+    bloodied = "file:voice_bloodied",
+    merciless = "file:voice_merciless",
+    butcher = "file:voice_butcher",
+    reaper = "file:voice_reaper",
+    grudgebound = "file:voice_grudgebound",
     ended = "kit:UI_RAID_BOSS_DEFEATED",
     tormentor = "kit:UI_GARRISON_TOAST_INVASION_ALERT",
 }
