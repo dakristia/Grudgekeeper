@@ -55,6 +55,20 @@ local splash
 local splashBusyUntil = 0
 local SEAL = 170                  -- the splash seal's size; the ribbon is twice as wide, half as high
 
+-- The fire behind a spree's seal, growing with the tier: the flames' size (times the seal's) and strength,
+-- and how many embers rise. Spree ended and tormentor splashes don't burn.
+local FIRE = {
+    bloodied = { size = 1.83, alpha = 0.55, embers = 4 },
+    merciless = { size = 1.98, alpha = 0.7, embers = 7 },
+    butcher = { size = 2.15, alpha = 0.85, embers = 10 },
+    reaper = { size = 2.32, alpha = 1, embers = 14 },
+    grudgebound = { size = 2.54, alpha = 1, embers = 22 },
+}
+local MAX_EMBERS = 22
+-- spree_flames.tga is a 4x4 sheet of a 16-frame loop, played at 12 frames a second
+local FLAME_FRAMES, FLAME_COLS, FLAME_FPS = 16, 4, 12
+local SHINE_START, SHINE_TIME, SHINE_WIDTH = 0.35, 0.6, 60
+
 local function BuildSplash()
     splash = CreateFrame("Frame", "GrudgekeeperSplash", UIParent)
     splash:SetFrameStrata("HIGH")
@@ -69,16 +83,36 @@ local function BuildSplash()
     splash.glow:SetBlendMode("ADD")
     splash.glow:SetSize(SEAL * 1.8, SEAL * 1.8)
     splash.glow:SetPoint("CENTER", splash, "TOP", 0, -SEAL / 2)
+    -- Flames lick up from behind the seal: their middle sits a little above the seal's, as the tops are taller.
+    splash.flames = splash:CreateTexture(nil, "BACKGROUND", nil, 1)
+    splash.flames:SetTexture(MEDIA .. "spree_flames")
+    splash.flames:SetPoint("CENTER", splash, "TOP", 0, -SEAL / 2 + SEAL * 0.04)
     splash.seal = splash:CreateTexture(nil, "ARTWORK")
     splash.seal:SetSize(SEAL, SEAL)
     splash.seal:SetPoint("CENTER", splash, "TOP", 0, -SEAL / 2)
     splash.ribbon = splash:CreateTexture(nil, "ARTWORK")
     splash.ribbon:SetSize(2 * SEAL, SEAL / 2)
     splash.ribbon:SetPoint("TOP", splash, "TOP", 0, -SEAL + 4)
+    -- A light sweeps across the ribbon as it lands, kept to the ribbon's shape by a mask of the ribbon itself.
+    splash.shine = splash:CreateTexture(nil, "OVERLAY")
+    splash.shine:SetTexture(MEDIA .. "spree_shine")
+    splash.shine:SetBlendMode("ADD")
+    splash.shine:SetSize(SHINE_WIDTH, SEAL / 2)
+    splash.shineMask = splash:CreateMaskTexture()
+    splash.shineMask:SetAllPoints(splash.ribbon)
+    splash.shine:AddMaskTexture(splash.shineMask)
+    splash.embers = {}
+    for i = 1, MAX_EMBERS do
+        local e = splash:CreateTexture(nil, "OVERLAY")
+        e:SetTexture(MEDIA .. "spree_spark")
+        e:SetBlendMode("ADD")
+        splash.embers[i] = e
+    end
     splash.line = splash:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
     splash.line:SetPoint("TOP", splash, "TOP", 0, -SEAL - SEAL / 2 + 4)
     splash.age = 0
-    -- The punch (the seal scales in), the glow's pulse and the fade, by hand: one frame's OnUpdate.
+    -- The punch (the seal scales in), the glow's pulse, the flames, embers and shine, and the fade, by hand:
+    -- one frame's OnUpdate.
     splash:SetScript("OnUpdate", function(self, dt)
         local age = self.age + dt
         self.age = age
@@ -86,6 +120,29 @@ local function BuildSplash()
         if age < SPLASH_POP then s = 1.6 - 0.6 * (age / SPLASH_POP) end
         self.seal:SetSize(SEAL * s, SEAL * s)
         self.glow:SetAlpha(0.45 + 0.2 * math.sin(age * 6))
+        local fire = self.fire
+        if fire then
+            local i = math.floor(age * FLAME_FPS) % FLAME_FRAMES
+            local col, row = i % FLAME_COLS, math.floor(i / FLAME_COLS)
+            local rows = FLAME_FRAMES / FLAME_COLS
+            self.flames:SetTexCoord(col / FLAME_COLS, (col + 1) / FLAME_COLS, row / rows, (row + 1) / rows)
+            self.flames:SetAlpha(fire.alpha * math.min(1, age / SPLASH_POP))
+            local catching = math.min(1, age / 0.3)
+            for n = 1, fire.embers do
+                local e, m = self.embers[n], self.motes[n]
+                local t = (age - m.born) % m.life
+                local f = t / m.life
+                e:SetPoint("CENTER", self.seal, "CENTER", m.x + m.vx * t, m.y + m.rise * t)
+                e:SetAlpha((1 - f) * math.min(1, f * 5) * catching)
+            end
+        end
+        local p = (age - SHINE_START) / SHINE_TIME
+        if self.ribbon:IsShown() and p >= 0 and p <= 1 then
+            self.shine:SetPoint("CENTER", self.ribbon, "LEFT", -SHINE_WIDTH + p * (2 * SEAL + 2 * SHINE_WIDTH), 0)
+            self.shine:Show()
+        else
+            self.shine:Hide()
+        end
         if age >= SPLASH_HOLD + SPLASH_FADE then
             self:Hide()
         elseif age > SPLASH_HOLD then
@@ -95,11 +152,41 @@ local function BuildSplash()
     splash:Hide()
 end
 
+--- Light the splash's fire for a tier (nil: no fire), with fresh embers each time.
+local function Kindle(key)
+    local fire = key and FIRE[key]
+    splash.fire = fire
+    splash.flames:SetShown(fire ~= nil)
+    splash.motes = {}
+    for n, e in ipairs(splash.embers) do
+        e:ClearAllPoints()
+        e:SetShown(fire ~= nil and n <= fire.embers)
+        if fire and n <= fire.embers then
+            local size = 10 + math.random() * 8
+            e:SetSize(size, size)
+            e:SetAlpha(0)
+            -- each mote loops on its own clock: it rises from about the seal's upper half, drifting sideways
+            splash.motes[n] = { x = math.random(-60, 60), y = SEAL * 0.3 - math.random(-10, 40),
+                vx = math.random(-12, 12), rise = 35 + math.random() * 35,
+                life = 0.9 + math.random() * 0.9, born = math.random() * 1.8 }
+        end
+    end
+    if fire then
+        splash.flames:SetSize(SEAL * fire.size, SEAL * fire.size)
+        splash.flames:SetAlpha(0)
+    end
+end
+
 local function ShowSplash(item)
     if not splash then BuildSplash() end
     splash.seal:SetTexture(item.seal)
     splash.ribbon:SetTexture(item.ribbon)
     splash.ribbon:SetShown(item.ribbon ~= nil)
+    if item.ribbon then
+        splash.shineMask:SetTexture(item.ribbon, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    end
+    splash.shine:Hide()
+    Kindle(item.fire)
     splash.line:SetText(item.line)
     splash.age = 0
     splash:SetAlpha(1)
@@ -279,7 +366,7 @@ LIB.Listen("GK_SPREE", function(who, spree, tierName, mine, key)
     local line = ("%d kills in a row"):format(spree)
     if not mine then line = Name(who) .. ": " .. line end
     Add(mine and "spreeMine" or "spreeGuild", mine, { seal = MEDIA .. "spree_" .. key,
-        ribbon = MEDIA .. "spree_" .. key .. "_name", line = line, sound = key })
+        ribbon = MEDIA .. "spree_" .. key .. "_name", line = line, sound = key, fire = key })
 end)
 
 LIB.Listen("GK_SPREE_ENDED", function(who, spree, killerName, mine)
@@ -300,7 +387,7 @@ end)
 --- /grudge spree: a sample splash and a sample toast, whatever the settings and the when-rules say.
 function GK.AnnounceSample()
     Show({ style = "splash", seal = MEDIA .. "spree_butcher", ribbon = MEDIA .. "spree_butcher_name",
-        line = "7 kills in a row", sound = "butcher" })
+        line = "7 kills in a row", sound = "butcher", fire = "butcher" })
     Show({ style = "toast", seal = MEDIA .. "spree_butcher", ribbon = MEDIA .. "spree_butcher_name",
         line = "Glue Enjoyer: 7 kills in a row", silent = true })
 end

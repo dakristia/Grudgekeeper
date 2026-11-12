@@ -2935,6 +2935,7 @@ local function bootAnnounce()
     local A = { tex = {}, txt = {}, played = {}, frames = {}, combat = false, instance = false, lockdown = false }
     local object = {}
     object.__index = function(self, method)
+        if method:find("^%l") then return nil end    -- a field of our own, never set: nil, as on a real frame
         -- where each frame was put and how big it is, for the placement and size tests
         if method == "ClearAllPoints" then return function(f) rawset(f, "pts", {}) end end
         if method == "SetPoint" then
@@ -2944,13 +2945,21 @@ local function bootAnnounce()
             end
         end
         if method == "SetSize" then return function(f, w, h) rawset(f, "size", { w, h }) end end
-        if method == "SetTexture" then    -- the glow is set once, when the splash is built: not an announcement's
-            return function(_, path)
-                if tostring(path):find("glow$") then return end
+        if method == "SetScript" then return function(f, name, fn) rawset(f, name, fn) end end
+        if method == "SetShown" then return function(f, on) rawset(f, "shown", on and true or false) end end
+        -- the glow, flames, shine and sparks are set once, when the splash is built, and the shine's mask is
+        -- the ribbon again: none of them is an announcement's own
+        if method == "SetTexture" then
+            return function(f, path)
+                if rawget(f, "mask") then return end
+                for _, built in ipairs({ "glow$", "flames$", "shine$", "spark$" }) do
+                    if tostring(path):find(built) then return end
+                end
                 table.insert(A.tex, tostring(path))
             end
         end
         if method == "SetText" then return function(_, text) table.insert(A.txt, text) end end
+        if method == "CreateMaskTexture" then return function() return setmetatable({ mask = true }, object) end end
         if method:find("^Create") then return function() return setmetatable({}, object) end end
         return function() end
     end
@@ -3164,6 +3173,22 @@ test("announce: toasts stack up to four, and /grudge spree shows a sample of bot
     GK.AnnounceSample()
     eq(#A.txt, 10, "the sample ignores the when-rules")
     eq(#A.played, before + 1, "one sound for the pair")
+end)
+
+test("announce: a burning splash and a cold one both play through to the end", function()
+    local GK, LIB, A = bootAnnounce()
+    GK.db.spreeMine, GK.db.spreeEnded = "splash", "splash"
+    LIB.Fire("GK_SPREE", ME, 15, "Grudgebound", true, "grudgebound")
+    local splash = A.frames[1]
+    for _ = 1, 200 do splash.OnUpdate(splash, 1 / 60) end
+    eq(splash.flames.shown, true, "a spree burns")
+    eq(splash.embers[22].shown, true, "Grudgebound has every ember")
+    GK.db.announceWhenMine = "always"
+    _G.GetTime = function() return 1e6 end
+    LIB.Fire("GK_SPREE_ENDED", ME, 15, "Gankalot", true)
+    for _ = 1, 200 do splash.OnUpdate(splash, 1 / 60) end
+    eq(splash.flames.shown, false, "an ended spree doesn't burn")
+    eq(splash.embers[1].shown, false)
 end)
 
 test("announce: a new splash waits for the one on screen, even when nothing is queued", function()
