@@ -53,26 +53,30 @@ end
 -- ---------------------------------------------------------------------------
 local splash
 local splashBusyUntil = 0
+local SEAL = 170                  -- the splash seal's size; the ribbon is twice as wide, half as high
 
 local function BuildSplash()
     splash = CreateFrame("Frame", "GrudgekeeperSplash", UIParent)
     splash:SetFrameStrata("HIGH")
     splash:EnableMouse(false)
-    splash:SetSize(512, 424)
-    splash:SetPoint("TOP", UIParent, "CENTER", 0, 300)
+    -- Two thirds of the first try, which took too much of the screen (the owner, 2026-11-12).
+    splash:SetSize(2 * SEAL, SEAL + SEAL / 2 + 40)
+    splash:SetPoint("TOP", UIParent, "CENTER", 0, 260)
+    -- A soft ember glow of its own: the letter icon's glow.tga is a ring, and grown this big it read as a
+    -- white halo around the seal.
     splash.glow = splash:CreateTexture(nil, "BACKGROUND")
-    splash.glow:SetTexture(MEDIA .. "glow")
+    splash.glow:SetTexture(MEDIA .. "spree_glow")
     splash.glow:SetBlendMode("ADD")
-    splash.glow:SetSize(512, 512)
-    splash.glow:SetPoint("CENTER", splash, "TOP", 0, -128)
+    splash.glow:SetSize(SEAL * 1.8, SEAL * 1.8)
+    splash.glow:SetPoint("CENTER", splash, "TOP", 0, -SEAL / 2)
     splash.seal = splash:CreateTexture(nil, "ARTWORK")
-    splash.seal:SetSize(256, 256)
-    splash.seal:SetPoint("CENTER", splash, "TOP", 0, -128)
+    splash.seal:SetSize(SEAL, SEAL)
+    splash.seal:SetPoint("CENTER", splash, "TOP", 0, -SEAL / 2)
     splash.ribbon = splash:CreateTexture(nil, "ARTWORK")
-    splash.ribbon:SetSize(512, 128)
-    splash.ribbon:SetPoint("TOP", splash, "TOP", 0, -252)
+    splash.ribbon:SetSize(2 * SEAL, SEAL / 2)
+    splash.ribbon:SetPoint("TOP", splash, "TOP", 0, -SEAL + 4)
     splash.line = splash:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-    splash.line:SetPoint("TOP", splash, "TOP", 0, -384)
+    splash.line:SetPoint("TOP", splash, "TOP", 0, -SEAL - SEAL / 2 + 4)
     splash.age = 0
     -- The punch (the seal scales in), the glow's pulse and the fade, by hand: one frame's OnUpdate.
     splash:SetScript("OnUpdate", function(self, dt)
@@ -80,8 +84,8 @@ local function BuildSplash()
         self.age = age
         local s = 1
         if age < SPLASH_POP then s = 1.6 - 0.6 * (age / SPLASH_POP) end
-        self.seal:SetSize(256 * s, 256 * s)
-        self.glow:SetAlpha(0.55 + 0.35 * math.sin(age * 6))
+        self.seal:SetSize(SEAL * s, SEAL * s)
+        self.glow:SetAlpha(0.45 + 0.2 * math.sin(age * 6))
         if age >= SPLASH_HOLD + SPLASH_FADE then
             self:Hide()
         elseif age > SPLASH_HOLD then
